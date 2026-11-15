@@ -145,6 +145,13 @@ def test_interactive_call_waits_for_agent_call_on_same_handle(tmp_path):
             spans.append(start)
             return self
 
+        def acquire(self, blocking=True, timeout=-1):  # handle_dispatch は acquire(timeout=…) で取る
+            self.__enter__()
+            return True
+
+        def release(self):
+            self.__exit__(None, None, None)
+
         def __exit__(self, *exc):
             spans.append(time.perf_counter())
             real_lock.release()
@@ -198,6 +205,13 @@ def test_interactive_call_keeps_the_handle_it_locked(tmp_path):
             entered.set()
             assert release.wait(5)
             return self
+
+        def acquire(self, blocking=True, timeout=-1):  # handle_dispatch は acquire(timeout=…) で取る
+            self.__enter__()
+            return True
+
+        def release(self):
+            self.__exit__(None, None, None)
 
         def __exit__(self, *exc):
             real_lock.release()
@@ -342,6 +356,13 @@ def test_library_load_does_not_close_the_store_under_curation_review(tmp_path, m
                 review_waiting.set()
                 real_lock.acquire()
             return self
+
+        def acquire(self, blocking=True, timeout=-1):  # handle_dispatch は acquire(timeout=…) で取る
+            self.__enter__()
+            return True
+
+        def release(self):
+            self.__exit__(None, None, None)
 
         def __exit__(self, *exc):
             exits.append(1)

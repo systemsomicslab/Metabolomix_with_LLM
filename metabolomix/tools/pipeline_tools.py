@@ -61,9 +61,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir`
         （`dataset_root` 相対）は必須で、重ならない。単位の `sample_manifest` の既定は
         `<raw_dir>/sample-manifest.tsv`）。`units` とトップの単位の項目は混ぜられない。
-        下流の項目（`target` / `preprocess` / `comparisons`）は `PIPELINE_DOWNSTREAM_REMOVED`
-        （`details.replacements`: `load_dataset` → `dataset_preprocess` / `dataset_compare` /
-        `dataset_pca`）。相対パスは `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
+        知らない項目は `PIPELINE_REQUEST_INVALID`（`details.unknown_keys`）。消えた下流の項目
+        （`target` / `preprocess` / `comparisons`）なら文面と `details.replacements`
+        （`load_dataset` → `dataset_preprocess` / `dataset_compare` / `dataset_pca`）で案内する。
+        相対パスは `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
         ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
         `library_mode="msp_then_lbm"`（脂質の run 用）は研究室 MSP（priority 2 の注釈器設定表）を
@@ -103,6 +104,11 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
     spec §9.2「既知の不正入力はConsole起動前に拒否する」）。条件だけ確認したい
     利用者はこちらを使い、実際に進めたいときは `pipeline_run` を使う。
+
+    開いた形式（mzML・imzML・mzXML）の計測ファイルの末尾が閉じタグで終わらない・32 KiB 未満
+    （imzML は閉じタグだけ。スペクトルは隣の .ibd にある）なら、run を作る前に
+    `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）で名指しして断る
+    （Console は切れた mzML を読むところで落ち、どのファイルかを言わない）。
     """
     from metabolomix.pipeline.service import plan_pipeline
     try:
@@ -135,7 +141,22 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
     （活動中／completed／失敗・取消・部分完了済み）を再利用した場合は
     `launched=false` のみを返し、`launch` キー自体を持たない（起動していない
     以上、handshake結果も存在しない）。既存runを本当に進めたい場合は
-    `pipeline_resume` を使う。
+    `pipeline_resume` を使う。`launch.worker_in_job` が true なら worker が Windows の Job に
+    残っている（何段目の Job でも）。その Job が閉じたら止める設定か分からないとき（中継が自分の
+    直近の Job を抜けさせたのに worker がまだ Job にいる）は、Job が閉じると worker と Console も
+    止まりうるので警告 `WORKER_IN_JOB`（`details.breakaway` / `relay_breakaway`）を `warnings` に
+    返す（止まったら `pipeline_status` → `pipeline_resume`）。中継の直近の Job が閉じても止めない
+    もの（`launch.relay_breakaway: "inherited_job"`。Windows 11 のシェルの配下で普通にある）なら警告しないが、
+    Windows の問い合わせは直近の Job しか見られず、その外側に閉じたら止める Job があるかは確かめていない。
+    そのことを `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note` に添える（run の記録の `worker` にも
+    worker 自身が同じ注記を残す）。
+
+    Console は同じ設定ファイルを読むサーバ・worker の間で同時に 1 本だけ回す（run を跨いで。待つ間は
+    `pipeline_status` の `waiting`）。起こす前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を
+    下回れば警告 `LOW_COMMIT_MEMORY` を残す（止めない）。Console が完了しなければ工程の誤り
+    `MSDIAL_EXECUTION_FAILED` に `details.cause`（`system_resources`: 終了コード 1450 などの
+    資源不足 / `broken_input` / `input_suspected`）と `details.diagnosis`（疑わしいファイル・
+    ログのエラーの行）が付く。原因と疑わしいファイルは `pipeline_status` の `errors` で読める。
     """
     from metabolomix.pipeline.service import start_pipeline
     try:
@@ -155,7 +176,7 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
         そのもの、またはその親ディレクトリのどちらでもよい）。
     include_details:
         True なら永続レコード全体（`record`）も返す（既定False。通常は
-        `status` / `units` / `stage_statuses` / `needs_input` / `warnings` で足りる）。
+        `status` / `units` / `stage_statuses` / `errors` / `needs_input` / `warnings` で足りる）。
 
     `units` は極性ごとの状態（`pending` / `running` / `validated` / `failed`）。受領を
     書いた後は `receipt`（検証を通った極性の解析フォルダの場所・照合した `.arf`・
@@ -166,6 +187,19 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
     を追加で行う。workerが消えていれば `observed_health="worker_missing"` と
     `recovery_hint`（`pipeline_resume` を促す）を返すが、statusフィールド自体は
     書き換えない——監視・成果物確定をポーリング呼出しに依存させない（spec）。
+    工程がこの機械のほかの run の Console を待っていれば `waiting`（工程ごとの
+    `reason: "console_slot"`・`since`・待っている相手の `holder`）を返す。待っていた worker が
+    居なければ（`observed_health="worker_missing"`）もう何も待っていないので、`waiting` ではなく
+    `interrupted_while_waiting`（中断の時点の待ちの記録）に出し、Console をまだ起こしていない極性を
+    `recovery_hint.console_not_started_units` に挙げる（`pipeline_resume` は `rerun_upstream` なしでその極性の
+    最初の Console から続ける。やり直しではなく 1 回目）。worker が
+    閉じたら止めるか分からない Windows の Job に残っていれば `warnings` に `WORKER_IN_JOB`。
+
+    失敗・取消で終わった工程があれば `errors`（`{<stage_id>: {"code", "message", "cause"?,
+    "suspect_files"?}}`）を返す。Console が完了しなかったときの原因の分類（`cause`:
+    `system_resources` / `broken_input` / `input_suspected`）と疑わしいファイル（`suspect_files`:
+    `[{"name", "reason"}]`、配置の工程で断った切れたファイルも）はここで読める。ログの行
+    （`details.diagnosis.log_lines`）は `include_details=True` の `record` の工程の `error` にある。
     """
     from metabolomix.pipeline.recovery import read_status
     try:
@@ -186,9 +220,9 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         そのもの、またはその親ディレクトリ＝pipeline_rootのどちらでもよい）。
     updates:
         `sample_manifest`（1 極性の run）か `units: {<極性>: {"sample_manifest": …}}` だけ。
-        変えると受領だけを書き直す。下流の項目（`target` / `preprocess` / `comparisons`）は
-        `PIPELINE_DOWNSTREAM_REMOVED`、上流の条件（メソッド・ライブラリ・極性…）は
-        `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`
+        変えると受領だけを書き直す。知らない項目（消えた下流の項目 `target` / `preprocess` /
+        `comparisons` を含む）は `PIPELINE_REQUEST_INVALID`（下流の項目なら `details.replacements`）、
+        上流の条件（メソッド・ライブラリ・極性…）は `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`
         （読むなら `load_dataset(pipeline_path=…)`、Console をやり直すなら新しい `pipeline_run`）。
     request_id:
         冪等性キー。同一内容の再送は新しいrevisionを作らず直前の結果を返す。
@@ -196,9 +230,22 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         True を明示しない限り、Console実行はやり直さない（自動再試行はしない）。
         True は upstream が成功していない極性だけをやり直す（新しい attempt）。生きている
         worker が回している極性の Console は捨てず、戻り値の `held_units` に並べる。
-        省くと、失敗した極性はそのままにして他の極性を進める（`not_retried_units`）。
+        省くと、失敗した極性はそのままにして他の極性を進める（`not_retried_units`）。まだ回して
+        いない極性の Console は省いても起こす（やり直しではなく 1 回目）。
+        worker が居なくなった run で `running` のままの極性は Console の状態が分からないので
+        `UPSTREAM_RERUN_REQUIRED`（`rerun_upstream=True` を求める）。ただし Console の順番待ちの間に
+        worker が消え、Console をまだ起こしていない極性（今の attempt の `analysis-job.json` が無い。
+        `pipeline_status` の `recovery_hint.console_not_started_units`）は、省いてもその極性の最初の
+        Console から続け、戻り値の `console_not_started_units` に並べる——再開で Console が起きるので、
+        利用者にはそう伝える。
         監視を失ったまま稼働中のConsoleがある場合は `EXECUTION_UNRESOLVED` で
         待つ（終了を確認できないものを勝手に完了扱いしない）。
+
+    起動した worker が閉じたら止めるか分からない Windows の Job に残っていれば `pipeline_run` と同じく
+    警告 `WORKER_IN_JOB`、中継の直近の Job が閉じても止めないもの（`inherited_job`）なら警告の代わりに
+    `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`（その外側の段は確かめていない）。
+    同じ `request_id` の再送は、1 回目と同じ内訳（`console_not_started_units` / `not_retried_units` /
+    `held_units`）を `reused: true` で返す。
     """
     from metabolomix.pipeline.service import resume_pipeline
     try:

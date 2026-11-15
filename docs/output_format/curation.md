@@ -87,7 +87,8 @@ mirror 5.5 MB）になったため導入した上限。
   `theoretical` は `{"relative": [M, M+1, M+2 の %], "basis": ...}` で、組成式（`Formula`）に
   アダクトの原子を足して整数質量の分解能で畳み込んだもの（`curation/isotope.py`）。
   `basis` は `formula+adduct`、アダクトが読めなければ中性の組成式だけの `formula`。
-  組成式が無い・読めなければ `null`。
+  組成式が無い・読めない、または同位体の表に無い元素（Se・Fe など）を含めば `null`（単一同位体の I・As・Co は
+  同位体のピークを作らない元素として数える）。
 
 ビューアは、記録済みのフラグが無く `flag_cleared` でもない次のスポットを、開いた時点で
 Wrong の未送信の変更にする: `likely_wrong`、理由に `low_score`（MS-DIAL の名前の
@@ -147,7 +148,7 @@ Correct（無印か confirmed）/ Confirmed / Suspect / Wrong / Flagged（Suspec
 
 | 区分 | コード | 意味 |
 |---|---|---|
-| 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。脂質クラスとの典型性（`class_typical`）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
+| 強い | `polarity_mismatch` | アダクトの電荷符号と実測イオン化極性（`IonMode`）が不一致（`adduct_consistency` の `band` が `FAIL`）。符号はアダクトの表記を組成で読んで決める（`msdial.adducts.parse_adduct`。MS-DIAL の `[M+H-H2O]+`・`[M+K]+`・`[M-H2O-H]-`・`[M+CHO2]-`、mzTab-M の `[M+H]1+` も読む。読めない表記だけ `UNKNOWN`）。脂質クラスとの典型性（`class_typical`。典型のアダクトとは綴りでなく組成で比べる）は advisory のみで `band` には効かない——非典型アダクトだけでは立たない |
 | 強い | `precursor_unmatched` | MS-DIAL 自身の `is_precursor_mz_match` が `False` |
 | 強い | `dmz_out` | \|Δm/z\|（`dmz_mda`）が `dmz_fail_mda`（既定 10 mDa）**以上**。ppm は m/z に比例して緩むので絶対差で見る（ユーザー決定 2026-09-29）。Δppm の `ppm_out` は弱いまま |
 | 強い | `class_rule_rejected` | MS/MS ありで、MS-DIAL の脂質クラス規則（診断イオン）を評価して棄却した（`is_lipid_class_match=False` かつ `is_other_lipid_match=False`）。実測では全件 `low score:` なので `low_score` も同時に立つ。**脂質規則が走ったデータに限る**（下記） |
@@ -163,14 +164,14 @@ Correct（無印か confirmed）/ Confirmed / Suspect / Wrong / Flagged（Suspec
 | 帯のみ | `rt_scatter` | 検出サンプル間で EIC 頂点 RT のばらつき（母標準偏差 `statistics.pstdev`。検出 2 件以上のときだけ計算）が `eic_rt_scatter_sd`（既定 0.1 分）を超えた。EIC 帯が `PASS` ならこの 1 件だけで `BORDERLINE` に格下げする |
 | 帯のみ | `trend_outlier` | 所属クラスの RT–m/z 傾向で頑健 z が `trend_outlier_z`（既定 3.0）を超え、かつそのクラスの傾向フィット自体が信頼できる（`r2 >= trend_min_r2`、既定 0.7） |
 | 情報 | `msms_absent` | MS/MS 未取得、または名前接頭辞が `no MS2`/`w/o MS2`（`msms` 系統は `UNKNOWN`） |
-| 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった。**`rt` 系統だけが `UNKNOWN`** になる。`mz` 系統は Formula/AdductType からの理論値（`mass_error_ppm`、`ppm_basis="formula"`）にフォールバックして計算を続け、それも失敗したときだけ `UNKNOWN` になる（`rt` と違って自動的に `UNKNOWN` にはならない） |
+| 情報 | `reference_not_found` | ライブラリから参照レコードを引けなかった。**`rt` 系統だけが `UNKNOWN`** になる。`mz` 系統は Formula/AdductType からの理論値（`mass_error_ppm`、`ppm_basis="formula"`。アダクトは表記を組成で読む——`[M+H-H2O]+` は `[M-H2O+H]+` と同じ理論値）にフォールバックして計算を続け、組成式かアダクトが読めないときだけ `UNKNOWN` になる（`rt` と違って自動的に `UNKNOWN` にはならない） |
 | 情報 | `reference_rt_absent` | 参照は引けたが RT を持たない（`rt` 系統は `UNKNOWN`） |
 | 情報 | `rt_not_used_by_annotation` | MS-DIAL がこの照合で RT を絞り込みにも採点にも使っていない（`.dbs` に保存された注釈器の `use_time_for_annotation_filtering` / `use_time_for_annotation_scoring` がどちらも False）。参照 RT は別のクロマトグラフィーを前提にした予測値でありうる（例: LBM は約 18 分系の予測 RT を持つ）ので、`rt` 系統は `UNKNOWN` にして `drt_out` / `drt_borderline` を立てない。`drt` の値は表示用に残る。`.msp`/`.lbm2` を直接読んだ store のようにスイッチが分からないときは、従来どおり RT で判定する |
 | 情報 | `no_match_result` | ARF2 に MS-DIAL の照合結果（`representative`）自体が無い（`msms` 系統は `UNKNOWN`） |
 | 情報 | `class_rules_not_run` | 脂質クラス規則が評価されていない（`is_lipid_class_match=False` かつ `is_other_lipid_match=True`。CompoundClass が Unknown/Others・SPLASH・名前解析失敗など）。参照一致でも規則の裏付けは無い＝**誤りの意味ではない**（未検証）。脂質規則が走ったデータに限る |
 | 情報 | `chains_unsupported` | 名前が鎖レベル（`16:0_18:1` や `18:1;O2/16:0` のように鎖を `_`/`/` で区切る。`PC 34:1\|PC 16:0_18:1` の `\|` 以降も含む。単鎖は数えない）なのに `is_lipid_chains_match=False`。MS-DIAL は照合に失敗しても参照名から `\|` 付きの名前を作るので、鎖組成の裏付けは `is_lipid_chains_match=True` だけ。MS/MS ありのときだけ。脂質規則が走ったデータに限る |
 | 情報 | `rescore_discrepancy` | `curation_review` が対向照合で出した `weighted_dot_product` が MS-DIAL 自身の値（平方根換算）と `rescore_tolerance`（既定 0.1）を超えてずれた |
-| 情報 | `adduct_differs_from_reference` | 参照レコードのアダクトと注釈のアダクトが食い違う |
+| 情報 | `adduct_differs_from_reference` | 参照レコードのアダクトと注釈のアダクトが別のイオン。綴りでなく組成で比べる（`msdial.adducts.same_adduct`）ので、同じイオンの書き方の違い（`[M+HCOO]-`・`[M+FA-H]-`・`[M+CHO2]-`、`[M+CH3COO]-`・`[M+Hac-H]-`、`[M+H]1+` と `[M+H]+`）では立たない |
 | 情報 | `manually_modified` | MS-DIAL 側で `is_manually_modified` が立っている（GUI で人手修正済み） |
 | 情報 | `manually_unsettled` | 名前接頭辞が `unsettled`（MS-DIAL Alignment Viewer で未確定のまま） |
 | 情報 | `trend_outlier_unreliable` | 頑健 z はしきい値を超えたが、そのクラスの傾向フィット自体が信頼できない（`trend_outlier` には数えない） |
@@ -193,7 +194,9 @@ precursor の許容幅をすでに課している——許容幅の外の候補�
 - **条件**: Y が X と同じ極性で |ΔRT| ≤ `adduct_isomer_drt`（既定 0.05 分）。X と Y は別物質
   （組成式とクラス（`Ontology`）が両方同じなら同じ分子種の別アダクト＝正しい注釈なので対象外）。
   Y の m/z と注釈アダクトから中性質量を出し、仮定アダクト A（X の極性の既定アダクト一覧
-  `msdial.analysis_params.DEFAULT_ADDUCTS` と X 自身のアダクト。Y 自身のアダクトは除く）での
+  `msdial.analysis_params.DEFAULT_ADDUCTS` と X 自身のアダクト。Y 自身のアダクトは綴りでなく組成で見分けて除き
+  （`[M+CHO2]-` は `[M+HCOO]-`、`[M-H-H2O]-` は `[M-H2O-H]-` と同じ）、Y と同じ m/z になるアダクトも除く——どちらも
+  X が Y と同じ m/z にいるだけで、重複スポットの話）での
   m/z が X の m/z と `adduct_isomer_ppm`（既定 5 ppm）以内。m/z・RT はどちらもスポットの
   `MassCenter` / `RT`。
 - **証拠の段階**: 3 = MS2 で鎖組成まで裏付け（鎖レベルの名前 ∧ `is_lipid_chains_match`）、
@@ -232,7 +235,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 | `table` | 1 スポット 1 行の TSV（列は下表）。強い説明のあるスポットが先、次に対象の種類（`flagged` → `likely_wrong` → `unannotated`）、同順位は `spot_id` 昇順の**先頭 `max_rows` 行だけ**（引数、既定 100）。載せた行数は `n_table_rows_shown`。全件は `html_path` |
 | `html_path` | 候補付けビューア HTML のパス。ユーザーがブラウザで開いて選び、「送信」で直接送る（受け口が無いときは「送信用テキストをコピー」でチャットへ貼る） |
 | `submit` | ビューアから直接送れるか。`{"via": "viewer", "idle_timeout_min": 30}` ならビューアの Submit(候補付けは「送信」)が記録と `_tags.xml` の反映を行う。`{"via": "copy", "reason"}` なら受け口を立てられず、送信用テキストを貼る経路だけ |
-| `library` | 使った参照ライブラリの `path` と `sha256` |
+| `library` | 使った参照ライブラリの `file`（ファイル名だけ。置き場所は出さない）と `sha256` |
 | `analysis_params` | 検索アダクトと RT 窓の出所。`source`（param ファイルか既定か）・`path`・`rt_window`（分） |
 | `options` / `thresholds` | 実際に使った引数（`rt_window` は解決後の値）としきい値 |
 
@@ -244,7 +247,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 | `name` | 今の名前（未注釈は `Unknown` 系） |
 | `target` | 対象の種類。`flagged`＝有効な `wrong` フラグのあるスポット、`likely_wrong`＝元レビューの判定が `likely_wrong`（フラグ無し）、`unannotated`＝`.arf2` に代表が無いスポット。`include_decided=True` のときは、判断済み（assign / redundant）の注釈付きスポットも `flagged` で戻る |
 | `top_candidate` | 候補（①②）の先頭の名前（和組成があれば和組成）。候補が無ければ空 |
-| `source` | 先頭の候補の出所。`msdial`（MS-DIAL 自身の下位候補）・`research`（閾値を緩めた再検索だけで出たもの）・`msdial+research`（両方） |
+| `source` | 先頭の候補の出所。`msdial`（MS-DIAL 自身の下位候補）・`research`（閾値を緩めた再検索だけで出たもの。前駆体の窓は `library_match_feature` と同じ `ms1_tolerance`（既定 0.01 Da）を m/z 500 を超えたら同じ ppm に広げた幅で、窓に入っても下の `dmz_out` はハードで落とす）・`msdial+research`（両方） |
 | `total_score` | 先頭の候補の総合スコア（`library` トピックの `total_score` と同じ物差し。RT・precursor の一致度を足した**非正規化の和**で 1 を超える）。比較できなければ `-1` |
 | `reasons` | 先頭の候補のソフト理由・情報の理由コードをカンマ区切り |
 | `relation` | 先頭のイオン関係（④）を `<関係コード>(#<相手スポット>)` で。無ければ空 |
@@ -281,7 +284,7 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 |---|---|---|
 | ハード | `polarity_mismatch` | 候補のアダクトの電荷符号とスポットのイオン化極性が矛盾 |
 | ハード | `dmz_out` | \|Δm/z\|（代表試料の m/z と参照 precursor m/z の差）が `dmz_fail_mda`（既定 10 mDa）**以上** |
-| ソフト | `adduct_atypical` | そのクラスに典型的でないアダクト |
+| ソフト | `adduct_atypical` | そのクラスに典型的でないアダクト（典型のアダクトとは綴りでなく組成で比べる: PC の `[M+FA-H]-`・`[M+CHO2]-` は典型の `[M+HCOO]-` と同じ） |
 | ソフト | `trend_outlier` | 候補のクラス×和組成から予測した RT との残差の \|z\| が `trend_outlier_z`（既定 3.0）を超えた |
 | ソフト | `no_matched_peaks` | MS/MS はあるが、比べた結果の一致ピークが 0（参照が引けず比べていない候補には付けない。それは `reference_unresolved`） |
 | ソフト | `msms_absent` | スポットに MS/MS が無い（①の候補にだけ付く。②は MS/MS が無いと働かない） |
@@ -308,8 +311,11 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 
 | 関係コード | 意味 |
 |---|---|
-| `adduct:<X のアダクト>/<Y のアダクト>` | 同じ中性分子の別アダクト。Y の中性質量に、解析で検索したアダクト（param ファイルの `Searched adduct ions`。二量体・多価を含む。無ければ極性ごとの既定）を付けた m/z が X に一致 |
-| `isotope_M+1` / `isotope_M+2` | Y の 13C 同位体（+1.003355 / +2.006710 を電荷で割る） |
+| `adduct:<X のアダクト>/<Y のアダクト>` | 同じ中性分子の別アダクト。Y の中性質量に、解析で検索したアダクト（param ファイルの `Searched adduct ions`。二量体・多価を含む。無ければ極性ごとの既定）を付けた m/z が X に一致。**Y 自身のアダクトは綴りでなく組成で見分けて除く**（n_mol・価数・極性・付加と脱離の原子が同じなら同じ: `[M+HCOO]-`・`[M+FA-H]-`・`[M+CHO2]-`、`[M+CH3COO]-`・`[M+Hac-H]-`、mzTab-M の `[M+H]1+` と `[M+H]+`）。Y と同じ m/z になるアダクト（`[M+H]+` に対する `[2M+2H]2+`）も、Δm/z が何も区別しないので除く |
+| `isotope_M+1` / `isotope_M+2` | Y の M+1（+1.003355）/ M+2 の 13C2（+2.006710）。どちらも電荷で割る。`relation_mz_tol` が 13C2 と 18O の差（2.46 mDa を電荷で割った値）以上なら、窓では分けられない 18O も、X が 13C2 の窓に入るかぎり `isotope_M+2` に含む。同じく 13C2 と 41K の差（8.59 mDa を電荷で割った値）以上なら（既定の 10 mDa）、K を持つイオン（`[M+K]+`）の 41K も、X が 13C2 の窓に入るかぎり `isotope_M+2` に含む（`dmz_mda` は 13C2 の位置からの差なので、41K のピークなら約 −8.6 mDa）。X が 13C2 の窓の外なら下の 18O・41K の行が立つ |
+| `isotope_M+2_18O` | Y の 18O 同位体（+2.004245 を電荷で割る）。`relation_mz_tol` が 13C2 との差より狭い（分離された 18O を見る）ときに見る。差以上の窓（既定の 10 mDa）では、X が 13C2 の窓に入れば `isotope_M+2` が含み、窓の外なら X が当たった M+2 の位置のうち 18O がいちばん近いときだけ出す（分離された 34S のように、より近い位置で説明される X には出さない）。Y のイオンが O を持たなければ出さない |
+| `isotope_M+2_41K` | Y の 41K 同位体（+1.998119 を電荷で割る）。`relation_mz_tol` が 13C2 との差（8.59 mDa を電荷で割った値）より狭いときに見る。差以上の窓（既定の 10 mDa）では、X が 13C2 の窓に入れば `isotope_M+2` が含み、窓の外（41K の位置から 13C2 と逆の側へ「窓 − 8.59 mDa」より離れた X。既定の窓では 1.41 mDa）なら X が当たった M+2 の位置のうち 41K がいちばん近いときだけ出す——窓を広げて 41K のピークが説明を失うことはない。Y のイオンが K を持たなければ出さない（`[M+K]+` は K を持つ） |
+| `isotope_M+2_34S` / `isotope_M+2_37Cl` / `isotope_M+2_81Br` | Y の 34S / 37Cl / 81Br 同位体（+1.995796 / +1.997050 / +1.997952 を電荷で割る）。Y の**イオン**の組成（組成式の n_mol 倍にアダクトの原子を足したもの。`[M+Cl]-` は Cl を持つ）が分かっていてその元素を持たなければ出さない（組成式が無い・読めないなら出す。同位体の表に無い元素（Se など）を含んでも、組成式が読めればこの門には使う） |
 | `insource:-H2O` `-2H2O` `-NH3` `-HCOOCH3` `-CH3COOCH3` `-C3H5NO2` `-C2H8NO4P` `-C3H8NO6P` `-C6H10O5` | Y からの中性損失によるインソース断片（`metabolomix/curation/relations.py` の表。質量はそれぞれの組成式から計算） |
 | `found_in_upper_msms` | 質量差が上のどれでも説明できないが、MS-DIAL が「Y の MS/MS に X が見える」とリンクしている |
 
@@ -321,16 +327,42 @@ neg 154 件中 9 件・pos 469 件中 27 件に立った。
 log1p で求めた Pearson の `r` ≥ `relation_min_r`（既定 0.8。両方の高さが正の試料が 5 以上のときだけ計算、足りなければ `r` は空）。
 どちらも無い関係は載せるが `no_support`（ソフト）を付けて順位を下げる。`msdial_links` は X–Y 間の MS-DIAL のリンク種別。
 
-**強い説明**（`strong = true`）: 裏付けがあり、情報でなく、かつ (a) `found_in_upper_msms` の関係、(b) Y が前駆体側（上の m/z の規則）の
-`found_in_upper_msms` リンクを持つ関係、または (c) 同位体で `isotope_consistent` のもの。強い説明のあるスポットでは、それがカードの先頭で
-初期選択（`preset`）になる。**アダクトの組・インソース断片は、Y が前駆体側のリンクを伴わない限り強い説明にならない**（Δm/z が合うだけでは
-断定しない）。
+**強い説明**（`strong = true`）: 情報でなく、かつ次のどれか。(a) 裏付けがあり、`found_in_upper_msms` の関係か、Y が前駆体側（上の m/z の
+規則）の `found_in_upper_msms` リンクを持つ関係。(b) 同位体で、裏付けがあり、`isotope_consistent = true` で、`ambiguous` でないもの。
+(c) アダクトの組・インソース断片で、Δm/z と同時溶出（`rt_window`）に加えて試料間の相関 `r` ≥ `relation_min_r` がそろうもの（MS-DIAL の
+`correl_similar` / `chrom_similar` リンクだけでは足りない。r を測れないときは (a) によるしかない）。強い説明のあるスポットでは、それが
+カードの先頭で初期選択（`preset`）になる。**Δm/z が合うだけでは断定しない**——r と RT がそろって初めて強い。
 
-**同位体の強度比の規則**: `isotope_ratio` は試料ごとの X の高さ / Y の高さの中央値（両方が正の試料だけ）。`expected_ratio` は Y の組成式の
-炭素数 n から二項分布で求めた期待比 `C(n,k)·q^k`（k = 1 または 2、q = 0.0107 / (1 − 0.0107)）。`isotope_ratio` が `expected_ratio` の
-**1.5 倍以下**なら `isotope_consistent = true`（Y の同位体として矛盾しない）。**1.5 倍を超えれば X は実在の別物質**（同位体の重なり）と
-みなし、`informational = true`（情報として添えるだけで、`redundant` には選べない）。比が求められない（炭素数不明・共通試料なし）ときは
-`isotope_consistent` は `null` で、強い説明にはならない。
+**M+2 の取り違え（`ambiguous`）**: M+2 の位置（13C2・18O・34S・37Cl・81Br・41K）は互いに 11 mDa 以内なので（13C2 と 37Cl は 9.66 mDa、
+34S と 37Cl は 1.25 mDa、13C2 と 34S は 10.91 mDa、41K と 37Cl は 1.07 mDa、41K と 81Br は 0.17 mDa）、`relation_mz_tol` の窓に同じ Y の
+M+2 が 2 つ以上入ることがある。分離できない M+2 の束（13C2・34S・18O が重なった重心。タウロコール酸 [M-H]- で約 +2.0015）は、
+窓が重心から 13C2 と 34S の両方までの差（重心が真ん中なら 10.91 mDa の半分の約 5.5 mDa を電荷で割った値。既定の 10 mDa は覆う）
+以上なら両方の窓に入る。そのときは一方に決めず、どの行にも `ambiguous = true` を付けて並べ、強い説明にしない。それより狭い窓では
+近い方の位置の行だけに当たり（下の期待比を参照）、重心から近い方の位置までの差（タウロコール酸で約 5.2 mDa）より狭ければ 13C2 と 34S の
+行は出ない（窓が重心から 18O の位置までの差（約 2.7 mDa）以上なら 18O の行だけが立ち、期待比が 13C2 と 34S を欠くので `informational`
+になる）。脂質など Y のイオンが S・Cl・Br・K を持たなければその行は出ないので、13C2 だけになり `ambiguous` にはならない（18O と 41K は、
+13C2 と分けられない窓では X が 13C2 の窓に入るかぎり 13C2 の行に含むので、並べて曖昧にはしない。X が 13C2 の窓の外なら、当たった
+M+2 の位置のうちいちばん近いときだけ 18O・41K の行を出す）。`curation_suggest` のビューアは `ambiguous` の行の
+見出しに「（M+2 の候補が重なる）」と添える（どれを `redundant` に選んでも、どの同位体かは決まっていない）。
+
+**同位体の強度比の規則**: `isotope_ratio` は試料ごとの X の高さ / Y の高さの中央値（両方が正の試料だけ）。`expected_ratio` は Y の**イオン**の
+組成（中性の組成式の n_mol 倍にアダクトの原子を足したもの。`[2M+H]+` は炭素も 2 倍、`[M+Cl]-` は Cl を 1 個、`[M+HCOO]-` はギ酸の原子を
+持つ。アダクトが読めない・差し引いて負になるなら中性の組成式のまま）から、元素ごとの天然存在比（IUPAC の代表値。H・C・N・O・P・S・
+Na・K・Cl・F・Br と単一同位体の I・As・Co）から求めた、M+k の**同位体の組み合わせ**（M+1 は 13C・15N・2H・17O・33S・40K、M+2 は
+13C2・18O・34S・37Cl・81Br・41K と 13C+15N などの交差項。それぞれ NIST の原子質量から求めた正確な質量差を持つ）のうち、**m/z（Y + 質量差 /
+電荷）が X から `relation_mz_tol` 以内に来るものの M に対する比の和**。X のピークに入りうるのはその窓の中の同位体だけ: 分離された
+1 つの位置（Cl を持つイオンの 13C2 だけ、スルファチドの 34S だけ）はその近くの同位体だけと比べる——窓の外の同位体（37Cl・13C2）まで
+足した和と比べると、その位置の同位体の何倍もの別物質を「同位体で説明できる」と言ってしまうため。**分離できない M+2 の束（重心が
+13C2 と 34S の間に来る）が束全体の和と比べられるのは、X から束のどの同位体までの差も `relation_mz_tol` 以内のときだけ**——重心が
+真ん中なら約 5.5 mDa / 電荷以上の窓（既定の 10 mDa は覆う）。それより狭い窓では、重心は近い方の位置の行（`ambiguous` でない 1 行）だけに
+当たり、期待比は遠い方の同位体を欠く（タウロコール酸 [M-H]- の束で、窓 5.5 mDa では期待比 0.056 に対し束の強度比 0.103）ので、Y 自身の
+束が `informational`（別物質）になりうる。束を分離しない装置のデータでは `relation_mz_tol` を約 6 mDa / 電荷以上にする。窓が M+k の位置を全部覆えば（既定の 10 mDa で X が 13C の位置にいる M+1 など）期待比は M+k の和に
+なる。同じ X と Y の M+2 の行は窓が同じ（X の Δm/z で決まる）なので同じ期待比を持つ。
+`isotope_ratio` が `expected_ratio` の **1.5 倍以下**なら `isotope_consistent = true`（Y の同位体として矛盾しない）。**1.5 倍を超えれば
+X は実在の別物質**（同位体の重なり）とみなし、`informational = true`（情報として添えるだけで、`redundant` には選べない）。重なった M+2 の
+行は期待比が同じなので、そろって `informational` になるかならないか。比が求められない（組成式が無い・読めない・同位体の表に無い元素
+（Se・Fe など、最も多い同位体の下に軽い同位体がある元素）を含む・共通試料なし）ときは `isotope_consistent` は `null` で、強い説明には
+ならない。表に無い元素を含んでも組成式が読めれば、元素の門（Cl・Br・S・O を持たなければその行を出さない）には使う。
 
 関係の並び順は（強い説明 → 情報でないもの → 裏付けありのもの、`|Δm/z|` 昇順）。ビューアのために、上位 3 件の関係は相手 Y の代表試料の
 EIC（`partner_eic`）を持つ。
@@ -356,10 +388,22 @@ EIC（`partner_eic`）を持つ。
 - 候補付けビューアの「元の注釈に戻す」は `clear` を送る。`clear` はそのスポットの**有効な判断を丸ごと**（`wrong` でも `assign` でも）消し、
   `_tags.xml` の Misannotation も外す。
 - `curation_flags` の TSV は 7 列: `spot_id`・`flag`・`name`（`assign` の記録名）・`of`（`redundant` の相手）・`note`・`source`・`ts`。
-- `dataset_feature_search` の `curation_flag` 列は有効な判断: `wrong` / `suspect` / `assign:<記録名>` / `redundant`（無ければ空）。
+  `source` は判断の出どころ: `user`（ユーザーが出した判断。ビューアの送信はいつもこれ）/ `llm`（LLM が出した判断）。
+  `curation_submit` の呼び出し側が申告し、1 回の送信の全行に同じ値が付く。
+- `dataset_feature_search` は判断を反映しない（判断の列も無い。SME / SML の生の同定だけを見る）。判断の記録があれば、その件数と「反映していない」を `notes` に 1 行書く（`dataset_export_differential` の同定とは食い違いうる）。
 - `curation_review` のスポットの `flag` / `flag_note` は `wrong` / `suspect` / `confirmed` だけ。`assign` / `redundant` は別項目 `decision`
   （`{flag, name}` または `{flag, of}`）に出る。
 - エクスポートでの扱い（下の「エクスポートのメタ行」以降）: `assign` は同定を置き換え、`redundant` は除外する。
+
+### `curation_submit` の `review_id` を省いたとき
+
+送信用テキストも `review_id` も無い送信（`flags` を直接渡す）は、データセット（`dataset_handle`、省けば直近）の
+`.arf2` に対する最新のレビュー（`cr-…`。`curation_suggest` の既定と同じ規則で、同じ秒の ID は `created_at` の
+新しいほう）に記録し、戻り値の `review_id` と `review_id_source: "latest"` で示す。レビューが無ければ
+`missing_state("curation_review")`。候補付け（`assign` / `redundant`）の送信は `review_id`（`cs-…`）を省けない。
+選ばれるのは対象のスポットを問わず最新のレビューなので、`name_contains` や `ontology` で絞ったレビューが最新だと、
+その外のスポットは「このレビューの対象外」で断られる。そのエラー（`status: "error"`）にも `review_id`（使ったレビュー）と
+`review_id_source: "latest"` が付く。別のレビューに送るなら `review_id` を渡して呼び直す。
 
 ### `curation_submit` の戻り値の `open_handles`（開いているデータセットへの反映）
 
@@ -492,7 +536,7 @@ MS-DIAL はアラインメントを保存するたびにメモリ上のタグで
 | `curation_review` / `curation_submit` / `curation_flags` | `{"status": "error", "message", "flags_file", "line"}`。`curation_submit` は壊れた記録に追記しない |
 | `dataset_export_differential` | 同上の形でエラー。ファイルは書かない |
 | `dataset_export_differential` | `{"error": {"code": "CURATION_FLAGS_INVALID", "message", "details": {"flags_file", "line"}}}`。ファイルは書かない |
-| `dataset_feature_search` | 一覧は返す。`curation_flag` 列を空にし、ヘッダに壊れた記録を名指しする注記を 1 行足す |
+| `dataset_feature_search` | 一覧は返す（判断はもともと反映せず、判断の列も無い）。読めなかった記録とその理由を名指しし、「キュレーションを反映していない」と書いた注記を `notes` に 1 行足す |
 
 `line` は 1 始まりの行番号。その行を直すか消してから、もう一度実行する。
 

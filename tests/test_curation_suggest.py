@@ -76,6 +76,31 @@ def test_insource_link_is_strong(built):
     assert spot3["relations"][0]["relation"] == "insource:-HCOOCH3" and spot3["relations"][0]["strong"]
 
 
+def test_correlated_adduct_pair_without_links_is_strong(tmp_path, monkeypatch):
+    """付加体の組は、MS-DIAL のリンクが無くても Δm/z・同時溶出・試料間の相関 r ≥ relation_min_r で強い説明
+    （A4-T15）。強い説明は初期選択（preset）になる。"""
+    paths, s, base = _setup(tmp_path, monkeypatch, with_adduct_partner=True)
+    result = suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH, options=OPTIONS)
+    spot5 = next(sp for sp in result["spots"] if sp["spot_id"] == 5)
+    [rel] = spot5["relations"]
+    assert rel["relation"] == "adduct:[M+CH3COO]-/[M+HCOO]-" and rel["of"] == 0
+    assert rel["msdial_links"] == [] and rel["r"] >= 0.8
+    assert rel["strong"] is True and spot5["strong"] is True and spot5["preset"] == rel["candidate_id"]
+    assert result["counts"]["with_strong_relation"] == 3
+    s.close()
+
+
+def test_adduct_pair_without_correlation_is_not_strong(tmp_path, monkeypatch):
+    """相関が計算できない（.arf が無い）ときは、Δm/z と同時溶出だけでは強い説明にしない。"""
+    paths, s, base = _setup(tmp_path, monkeypatch, with_adduct_partner=True, with_arf=False)
+    result = suggest.run_suggestion(paths["arf2"], base_review=base, store=s, th=TH, options=OPTIONS)
+    spot5 = next(sp for sp in result["spots"] if sp["spot_id"] == 5)
+    [rel] = spot5["relations"]
+    assert rel["r"] is None and rel["strong"] is False and rel["soft"] == ["no_support"]
+    assert spot5["preset"] is None
+    s.close()
+
+
 def test_spot_without_msms_and_relation_has_nothing(built):
     _, _, _, result = built
     spot4 = next(sp for sp in result["spots"] if sp["spot_id"] == 4)
@@ -252,6 +277,20 @@ def test_latest_review_skips_an_unreadable_review_file(built):
     (directory / "review-cr-99999999-999999-ffff.json").write_text("{not json", encoding="utf-8")   # 最も新しい ID
     found = suggest.latest_review(paths["arf2"], base["alignment"]["alignment_sha256"])
     assert found["review_id"] == base["review_id"]
+
+
+def test_latest_review_breaks_a_same_second_tie_by_created_at(built):
+    """ID の時刻は秒まで。同じ秒の 2 件は末尾の乱数ではなく created_at の新しいほうを採る。"""
+    paths, _, base, _ = built
+    directory = flags.curation_dir(paths["arf2"])
+    sha = base["alignment"]["alignment_sha256"]
+    older = {**base, "review_id": "cr-29990101-000000-ffff", "created_at": "2999-01-01T00:00:00.100000+00:00"}
+    newer = {**base, "review_id": "cr-29990101-000000-0000", "created_at": "2999-01-01T00:00:00.900000+00:00"}
+    other = {**base, "review_id": "cr-29990101-000000-8888", "created_at": "2999-01-01T00:00:00.950000+00:00",
+             "alignment": {**base["alignment"], "alignment_sha256": "x" * 64}}   # 別のアラインメント
+    for saved in (older, newer, other):
+        (directory / f"review-{saved['review_id']}.json").write_text(json.dumps(saved), encoding="utf-8")
+    assert suggest.latest_review(paths["arf2"], sha)["review_id"] == newer["review_id"]
 
 
 def test_confirmed_spots_are_not_likely_wrong_targets():

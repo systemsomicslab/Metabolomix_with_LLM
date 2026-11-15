@@ -72,14 +72,28 @@ ADDUCT_SHIFTS: dict[str, tuple[str, float, int, int]] = {
 }
 
 
-def adduct_mz(neutral_mass: float, adduct: str) -> float | None:
-    """中性質量とアダクトから観測 m/z を返す。未知アダクトは ``None``。
+def _parsed_adduct(adduct):
+    """表に無い綴りを `msdial.adducts.parse_adduct` で読む（MS-DIAL の `[M+H-H2O]+`・`[M+K]+`・`[M+CHO2]-`、
+    mzTab-M の `[M+H]1+` など）。読めなければ None。adducts は本モジュールの元素質量を使うので、ここで遅れて読む。"""
+    from metabolomix.msdial.adducts import parse_adduct
 
-    m/z = (n_mol * neutral + shift) / charge。多量体（[2M-H]-）・多価（[M-2H]2-）に対応。
+    return parse_adduct(adduct) if isinstance(adduct, str) else None
+
+
+def adduct_mz(neutral_mass: float, adduct: str) -> float | None:
+    """中性質量とアダクトから観測 m/z を返す。読めないアダクトは ``None``。
+
+    m/z = (n_mol * neutral + shift) / charge。多量体（[2M-H]-）・多価（[M-2H]2-）に対応。表（``ADDUCT_SHIFTS``）に
+    無い綴りは組成で読む（``msdial.adducts.parse_adduct``。`[M+H-H2O]+` は `[M-H2O+H]+` と同じ m/z）。
     """
     entry = ADDUCT_SHIFTS.get(adduct)
     if entry is None:
-        return None
+        parsed = _parsed_adduct(adduct)
+        if parsed is None:
+            return None
+        from metabolomix.msdial.adducts import mz_from_neutral
+
+        return mz_from_neutral(neutral_mass, parsed)
     sign, shift, charge, n_mol = entry
     return (n_mol * neutral_mass + shift) / charge
 
@@ -157,9 +171,18 @@ def adduct_consistency(adduct, ion_mode, ontology=None) -> dict:
     """アダクトの電荷符号と実測極性の整合を判定し、クラス典型性を助言する。
 
     極性一致は決定的に PASS/FAIL。クラス典型性は助言のみで band には影響しない。
+    符号は表（``ADDUCT_SHIFTS``）に無い綴りでも組成で読む（``msdial.adducts.parse_adduct``）。クラスの典型の
+    アダクトとは綴りでなく組成で比べる（``same_adduct``。`[M+FA-H]-`・`[M+CHO2]-` は `[M+HCOO]-` と同じ）。
     """
+    from metabolomix.msdial.adducts import same_adduct
+
     entry = ADDUCT_SHIFTS.get(adduct) if adduct else None
-    if entry is None:
+    if entry is not None:
+        sign = entry[0]
+    else:
+        parsed = _parsed_adduct(adduct)
+        sign = parsed.polarity if parsed is not None else None
+    if sign is None:
         return {
             "polarity_ok": None,
             "band": "UNKNOWN",
@@ -167,7 +190,6 @@ def adduct_consistency(adduct, ion_mode, ontology=None) -> dict:
             "advisory": "アダクトが不明または未対応のため整合判定不可。",
         }
 
-    sign = entry[0]
     mode = str(ion_mode).strip().lower()
     is_positive = mode.startswith("pos")
     is_negative = mode.startswith("neg")
@@ -179,7 +201,7 @@ def adduct_consistency(adduct, ion_mode, ontology=None) -> dict:
         advisory = "クラス未知のため典型アダクト助言なし。"
     else:
         typical = CLASS_TYPICAL_ADDUCTS[key]
-        class_typical = adduct in typical
+        class_typical = any(same_adduct(adduct, t) for t in typical)
         if class_typical:
             advisory = f"{key.upper()} で {adduct} は典型的。"
         else:

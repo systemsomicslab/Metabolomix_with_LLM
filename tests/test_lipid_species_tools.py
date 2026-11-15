@@ -130,6 +130,17 @@ def test_feature_search_species_target_without_formula_is_invalid(mztab):
     assert out["error"]["details"]["field"] == "lipid_species"
 
 
+def test_isotope_labelled_species_targets_are_refused_by_the_tools(mztab):
+    """内部標準の名前の種の目標は、目標照合・証拠の束とも FEATURE_TARGET_INVALID（天然の種として読まない。レビュー V3）。"""
+    handle = _open(mztab)
+    target = {"lipid_species": "PC 15:0_18:1(d7)", "formula": "C41H73D7NO8P", "rt_min": 8.4}
+    out = json.loads(T.dataset_feature_search(targets=[{"target_id": "IS", **target}], dataset_handle=handle))
+    assert out["error"]["code"] == "FEATURE_TARGET_INVALID"
+    assert out["error"]["details"]["field"] == "lipid_species"
+    out = json.loads(R.dataset_claim_evidence({"claim_id": "IS", "target": target}, dataset_handle=handle))
+    assert out["error"]["code"] == "FEATURE_TARGET_INVALID", out
+
+
 def test_claim_evidence_for_a_species_claim(mztab):
     handle = _open(mztab)
     out = json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))
@@ -168,3 +179,6 @@ def test_msms_qualify_tool_takes_a_species_target(mztab, library):
         spot_id=30, dataset_handle=handle))
     assert out["verdict"] == "qualified", out
     assert out["rules"]["target"] == {"lipid_species": "PC 34:4", "formula": None}
+    labelled = json.loads(R.library_msms_qualify(
+        {"target": {"lipid_species": "PC 15:0_18:1(d7)"}}, spot_id=30, dataset_handle=handle))
+    assert labelled["error"]["code"] == "MSMS_RULES_INVALID", labelled

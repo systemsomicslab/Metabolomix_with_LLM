@@ -55,11 +55,16 @@ def test_quant_state_shape_and_extra():
 
 def test_derive_resets_results_and_ids():
     ds = _ds()
+    ds.figures = {"group_intensity": {"kind": "group_intensity", "payload": {}}}
+    ds.discarded_figures = {"volcano": ["exclusion"]}
     new = qd.derive(ds, matrix=ds.feature_matrix * 2, detected=ds.detected_mask.copy(),
                     state=_state())
     assert new is not ds and new.dataset_id != ds.dataset_id
     assert new.dataset_id.startswith("ds_")
     assert new.results == {} and new.stat_matrices == {}
+    # 親の行列から描いた図と、親の除外・試料の表の更新が捨てた図の印は持ち越さない（親は変えない）
+    assert new.figures == {} and new.discarded_figures == {}
+    assert set(ds.figures) == {"group_intensity"} and ds.discarded_figures == {"volcano": ["exclusion"]}
     assert new.last_pca is None and new.last_differential is None
     assert new.source_format == "msdial_folder"
     assert new.quant_state["normalized"] is True
@@ -174,6 +179,21 @@ def test_derive_narrowing_prunes_feature_side_data():
     assert set(ds.feature_candidates) == {"f1", "f2"}
 
 
+def test_derive_carries_exclusions_to_the_new_names_and_ids():
+    """除外も名前・ID で引く欄: 改名した試料の除外は新しい名前へ写し、選ばなかった試料・特徴の除外は落とす
+    （親に無い ID の除外を残すと、統計が「存在しない特徴 ID」で止まる）。"""
+    ds = _ds()
+    ds.excluded_samples = {"s1": "bad", "s2": "qc fail"}
+    ds.excluded_features = {"f1": "contaminant", "f2": "noise"}
+    new = qd.derive(ds, matrix=np.ones((1, 2)), detected=np.ones((1, 2), dtype=bool), feature_ids=["f2"],
+                    sample_names=["M1", "M2"], sample_index=[2, 0], state=_state())
+    assert new.excluded_samples == {"M2": "bad"}
+    assert new.excluded_features == {"f2": "noise"}
+    assert ds.excluded_samples == {"s1": "bad", "s2": "qc fail"}            # 元は触らない
+    same = qd.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert same.excluded_samples == ds.excluded_samples and same.excluded_features == ds.excluded_features
+
+
 def test_derive_does_not_alias_inputs():
     ds = _ds()
     m = np.ones((2, 3))
@@ -190,3 +210,32 @@ def test_set_current_sets_handle_id():
     session_state.session.set_current("dh_x")
     assert session_state.session.current_handle_id == "dh_x"
     session_state.session.set_current(None)
+
+
+# ---- 探索専用の印（F4） ----
+
+def test_derive_carries_exploratory_mark():
+    ds = _ds()
+    ds.exploratory_only, ds.exploratory_reason = True, "解析ジョブが完了していない（status failed）"
+    new = qd.derive(ds, matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert new.exploratory_only is True and new.exploratory_reason == ds.exploratory_reason
+    clean = qd.derive(_ds(), matrix=ds.feature_matrix, detected=ds.detected_mask, state=_state())
+    assert clean.exploratory_only is False and clean.exploratory_reason is None
+    assert qd.exploratory_info(clean) == {}
+    assert qd.exploratory_info(new) == {"exploratory": {"exploratory_only": True,
+                                                        "reason": ds.exploratory_reason}}
+
+
+def test_carry_exploratory_combines_labelled_parents():
+    a, b, new = _ds(), _ds(), _ds()
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_only is False and new.exploratory_reason is None
+    b.exploratory_only, b.exploratory_reason = True, "r-b"
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_only is True and new.exploratory_reason == "negative: r-b"
+    a.exploratory_only = True  # 理由の無い印も、どちらの親かが分かるように既定の文面で数える
+    qd.carry_exploratory(new, [a, b], labels=["positive", "negative"])
+    assert new.exploratory_reason == ("positive: incomplete analysis run (exploratory only); "
+                                      "negative: r-b")
+    qd.carry_exploratory(new, [a])  # ラベル無しで理由も無ければ理由は None（書き出しが既定を使う）
+    assert new.exploratory_only is True and new.exploratory_reason is None

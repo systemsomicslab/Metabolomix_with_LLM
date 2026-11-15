@@ -495,7 +495,8 @@ def test_pick_tol_keeps_an_explicit_zero():
 
 
 # --------------------------------------------------------------------------
-# 候補ごとの質量誤差（A6・A8）。既定の窓（0.01 Da）は MS-DIAL に合わせて変えない。
+# 候補ごとの質量誤差（A6・A8）。前駆体の窓は MS-DIAL と同じ（m/z 500 以下は 0.01 Da、
+# それを超えたら同じ ppm に広がる。2026-11-13 の事実確認 A3）。
 # --------------------------------------------------------------------------
 _OFF_44_PPM = 104.0752  # 参照 104.0706 より約 +44 ppm（0.0046 Da）高い
 
@@ -542,7 +543,115 @@ def test_mz_tol_ppm_narrows_window(fresh_session, monkeypatch):
 def test_default_window_unchanged(fresh_session, monkeypatch):
     payload = _match_off_by_44_ppm(monkeypatch)
     assert payload["query"]["mz_tol"] == pytest.approx(0.01)
+    assert payload["query"]["mz_window"] == pytest.approx(0.01)     # m/z 500 以下は Da のまま
     assert payload["query"]["mz_tol_ppm"] is None
+
+
+_HIGH_MSP = textwrap.dedent("""\
+    NAME: PC 34:1
+    PRECURSORMZ: 760.5851
+    IONMODE: Positive
+    INCHIKEY: JLPULHDHAOZNQI-ZTIMHPMXSA-N
+    Num Peaks: 2
+    184.0733 999
+    760.5851 300
+""")
+
+
+def test_window_widens_above_mz_500_like_msdial(fresh_session, monkeypatch):
+    # 760.5851 に対し +0.013 Da（約 17 ppm）。0.01 Da の窓なら落ちるが、MS-DIAL の窓
+    # （m/z × 20 ppm ≒ 0.0152 Da）には入る
+    (fresh_session / "lib.msp").write_text(_HIGH_MSP, encoding="utf-8")
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[184.0733, 999.0], [760.598, 300.0]])
+    payload = json.loads(tools.library_match_feature(760.5981, dcl_file=_DCL, ion_mode="positive"))
+    assert payload["status"] == "success"
+    assert payload["query"]["mz_tol"] == pytest.approx(0.01)
+    assert payload["query"]["mz_window"] == pytest.approx(760.5981 * 20e-6, abs=1e-5)
+    assert _table_rows(payload)[0]["name"] == "PC 34:1"
+    far = json.loads(tools.library_match_feature(760.6031, dcl_file=_DCL, ion_mode="positive"))
+    assert far["status"] == "no_candidates"                     # +0.018 Da は窓の外
+    assert "760.6031±0.01521" in far["message"]
+
+
+def test_fix_mass_tolerance_matches_msdial():
+    from metabolomix.analysis.spectral_match import fix_mass_tolerance
+
+    assert fix_mass_tolerance(0.01, 400.0) == pytest.approx(0.01)
+    assert fix_mass_tolerance(0.01, 500.0) == pytest.approx(0.01)
+    assert fix_mass_tolerance(0.01, 1000.0) == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize("given, kept", [("pos", True), ("Positive", True), ("+", True),
+                                         ("neg", False), ("-", False)])
+def test_short_ion_mode_names_are_read(fresh_session, monkeypatch, given, kept):
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    payload = json.loads(tools.library_match_feature(104.0706, dcl_file=_DCL, ion_mode=given))
+    assert (payload["status"] == "success") is kept
+    if kept:
+        assert payload["query"]["ion_mode"] == "positive"
+
+
+@pytest.mark.parametrize("bad", ["sideways", "both", ""])
+def test_unreadable_ion_mode_is_rejected_not_silently_filtered(fresh_session, monkeypatch, bad):
+    tools.library_load(**_LIB)
+    payload = json.loads(tools.library_match_feature(104.0706, dcl_file=_DCL, ion_mode=bad))
+    assert payload["status"] == "invalid_arguments" and "ion_mode" in payload["message"]
+    search = json.loads(tools.library_search(name="GABA", ion_mode=bad))
+    assert search["status"] == "invalid_arguments"
+
+
+def test_library_search_reads_short_ion_mode(fresh_session):
+    tools.library_load(**_LIB)
+    assert json.loads(tools.library_search(name="GABA", ion_mode="pos"))["n_hits"] == 1
+    assert json.loads(tools.library_search(name="GABA", ion_mode="neg"))["n_hits"] == 0
+
+
+def test_arf2_polarity_both_or_unknown_does_not_filter():
+    assert tools._arf2_polarity("Positive") == "positive"
+    assert tools._arf2_polarity("Negative") == "negative"
+    assert tools._arf2_polarity("Both") is None
+    assert tools._arf2_polarity("Unknown") is None
+    assert tools._arf2_polarity(None) is None
+
+
+def test_a_failed_match_drops_the_previous_match(fresh_session, monkeypatch):
+    # 照合に失敗したら直前の照合を捨てる（mirror が古い照合を黙って描かない。事実確認 C16）
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    tools.library_match_feature(104.0706, dcl_file=_DCL, ion_mode="positive")
+    assert session_state.session.library.last_match is not None
+    miss = json.loads(tools.library_match_feature(300.0, dcl_file=_DCL, ion_mode="positive"))
+    assert miss["status"] == "no_candidates"
+    assert session_state.session.library.last_match is None
+    mirror = json.loads(tools.library_plot_mirror(output="payload"))
+    assert mirror["error"]["code"] == "missing_state"
+    tools.library_match_feature(104.0706, dcl_file=_DCL, ion_mode="positive")
+    monkeypatch.setattr(tools, "_measured_spectrum", lambda *a, **k: [])
+    assert json.loads(tools.library_match_feature(
+        104.0706, dcl_file=_DCL, ion_mode="positive"))["status"] == "not_found"
+    assert session_state.session.library.last_match is None
+
+
+def test_mirror_payload_names_what_was_matched(fresh_session, monkeypatch):
+    tools.library_load(**_LIB)
+    monkeypatch.setattr(tools, "_measured_spectrum",
+                        lambda *a, **k: [[87.0441, 999.0], [69.0335, 500.0]])
+    tools.library_match_feature(104.0706, dcl_file=_DCL, ion_mode="positive")
+    payload = json.loads(tools.library_plot_mirror(output="payload"))
+    assert payload["match"] == {"spot_id": None, "precursor_mz": 104.0706, "rank": 1,
+                                "name": "GABA", "inchikey": None,
+                                "reference_precursor_mz": 104.0706, "picked_by": "rank"}
+    caption = tools.library_plot_mirror()[0]
+    assert "precursor m/z=104.0706" in caption and "GABA" in caption and "InChIKey=-" in caption
+    picked = json.loads(tools.library_plot_mirror(output="payload", candidate="gaba"))
+    assert picked["match"]["rank"] == 1 and picked["match"]["picked_by"] == "name"
+    absent = json.loads(tools.library_plot_mirror(output="payload", candidate="Glutamine"))
+    assert absent["status"] == "error" and "Glutamine" in absent["message"]
 
 
 @pytest.mark.parametrize("bad", [0, -5, float("nan"), float("inf"), True, "10"])

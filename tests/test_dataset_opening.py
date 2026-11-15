@@ -178,17 +178,129 @@ def test_job_folder_sme_takes_theoretical_mz_from_canonical_mztab(tmp_path):
     via_run = open_dataset(pipeline_path=str(run)).dataset
     assert via_run.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(theo)
 
+    # mzTab-M の値が勝つ（組成式と付加体から計算した値 760.58508 では上書きしない）。
+    assert folder.theoretical_mz_source == via_run.theoretical_mz_source == "mztab"
+    assert not any("組成式と付加体から計算" in note for note in folder.load_notes)
+
     session_state.session.dataset = folder
     out = json.loads(R.dataset_mass_accuracy(band_edges=[], subset="rank1"))
     assert out["overall"]["n"] == 1
     assert out["bands"][0]["n"] == 1
+    assert out["theoretical_mz_source"] == "mztab"
 
 
-def test_directory_folder_sme_has_no_theoretical_mz(tmp_path):
-    """directory の入口には正準 mzTab-M が無いので理論 m/z は空のまま（推測で埋めない）。"""
+#: PC 34:1（C42H82NO8P）の [M+H]+ のモノアイソトピックの m/z（元素の質量から手で足した値）。
+_PC_34_1_MH = 760.585081
+
+
+def test_directory_folder_sme_theoretical_mz_from_formula_and_adduct(tmp_path):
+    """directory の入口は正準 mzTab-M と照合しないので、SME（rank 1）の理論 m/z を注釈の組成式（`.arf2` の
+    Formula）と付加体（AdductType）から計算する（空のままだと質量精度と新しい知見の候補が 0 件になる）。
+    出所は候補ではなくデータセット（`theoretical_mz_source`）と読み込みの注記に残す。"""
+    from metabolomix.tools import reanalysis_tools as R
+
     folder = _folder(tmp_path / "gui")
     ds = open_dataset(directory=str(folder)).dataset
+    assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(
+        _PC_34_1_MH, abs=1e-5)
+    assert ds.theoretical_mz_source == "formula_adduct"
+    note = next(n for n in ds.load_notes if "組成式と付加体から計算" in n)
+    assert "1 件" in note and "0 件" in note
+
+    session_state.session.dataset = ds
+    out = json.loads(R.dataset_mass_accuracy(band_edges=[], subset="rank1"))
+    assert out["overall"]["n"] == 1
+    assert out["theoretical_mz_source"] == "formula_adduct"
+    # 新しい知見の候補も同じ理論 m/z で質量の窓を通る（以前は SME の ppm が無く 0 件）。
+    from metabolomix.analysis import mass_accuracy
+
+    spec = mass_accuracy.normalize_novel_spec({"statistics": {"result_id": "r"}, "q_max": 0.05})
+    rows = mass_accuracy.novel_candidates(
+        ds, spec, {"0": {"q": 0.01, "p": 0.001, "log2fc_test_over_ref": 1.0}},
+        group_ref="A", group_test="B")
+    assert [r["feature_id"] for r in rows] == ["0"]
+    assert rows[0]["ppm"] == pytest.approx((760.5851 - _PC_34_1_MH) / _PC_34_1_MH * 1e6, abs=0.01)
+    # 読み込みの注記は dataset_status の load_notes にも出る（load_dataset の要約を見ていなくても気づける）。
+    from metabolomix.tools.mztab_tools import dataset_status
+
+    status = json.loads(dataset_status())
+    assert any("組成式と付加体から計算" in n for n in status["load_notes"]["first"])
+
+
+@pytest.mark.parametrize("formula,adduct", [
+    ("", "[M+H]+"),              # 組成式が無い
+    ("null", "[M+H]+"),          # MS-DIAL が書く空の組成式
+    ("C6H12O6Se", "[M+H]+"),     # 未知の元素（質量表に無い）
+    ("Ca(OH)2", "[M+H]+"),       # 組成式として読めない
+    ("C42H82NO8P", "[M+?]+"),    # 付加体として読めない
+])
+def test_directory_folder_leaves_theoretical_mz_empty_when_not_computable(tmp_path, formula,
+                                                                          adduct):
+    spec = _spec()
+    spec["spots"][0].update(formula=formula, adduct=adduct)
+    write_msdial_folder(tmp_path / "gui", **spec)
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
     assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] is None
+    note = next(n for n in ds.load_notes if "組成式と付加体から計算" in n)
+    assert "（0 件" in note and "読めない 1 件" in note
+
+
+def test_directory_folder_theoretical_mz_for_other_adducts(tmp_path):
+    """付加体は MS-DIAL の表記をそのまま読む（陰イオン・多量体も特徴検索と同じ計算）。"""
+    from metabolomix.analysis.feature_search import theoretical_mz
+
+    spec = _spec()
+    spec["spots"][0].update(formula="C4H9NO2", adduct="[M+CH3COO]-", mz=162.0772)
+    write_msdial_folder(tmp_path / "gui", **spec)
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
+    theo = ds.feature_candidates["0"][0]["theoretical_mass_to_charge"]
+    assert theo == pytest.approx(theoretical_mz("C4H9NO2", "[M+CH3COO]-"))
+    assert theo == pytest.approx(162.077181, abs=1e-5)
+
+
+def _bundle_sme_provenance(ds, out_dir: Path) -> dict:
+    """`ds` を前半・後半の 2 群で比べて根拠バンドルを書き、`msdial_sme` 行の来歴（特徴 ID → 候補）を返す。"""
+    import csv
+
+    from metabolomix.analysis.evidence_export import export_dataset_evidence
+    from tests.engine_chain import compare_halves
+
+    export_dataset_evidence(ds, compare_halves(ds), out_dir)
+    with (out_dir / "annotations.tsv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream, delimiter="	"))
+    return {r["feature_id"]: json.loads(r["provenance_json"])
+            for r in rows if r["source"] == "msdial_sme"}
+
+
+#: PC 34:1（POPC）の InChIKey（根拠バンドルは形の正しい InChIKey だけを受ける）。
+_POPC_INCHIKEY = "WTJKGGKOPKCXLL-VYOBOKEXSA-N"
+
+
+def _with_inchikey(spec: dict) -> dict:
+    spec["spots"][0]["matches"] = [match_result({0: "PC 34:1", 1: _POPC_INCHIKEY})]
+    return spec
+
+
+def test_evidence_bundle_does_not_carry_the_computed_theoretical_mz(tmp_path):
+    """根拠バンドルの `msdial_sme` 行の来歴の theoretical_mass_to_charge はライブラリの記録のプリカーサー m/z
+    （mzTab-M の値）の意味のまま。directory で組成式と付加体から計算した値は写さず null（計算を入れる前と同じ。
+    欄は足さない）。job は照合した mzTab-M の値をそのまま写す。"""
+    write_msdial_folder(tmp_path / "gui", **_with_inchikey(_spec()))
+    ds = open_dataset(directory=str(tmp_path / "gui")).dataset
+    assert ds.theoretical_mz_computed == {"0"}
+    provenance = _bundle_sme_provenance(ds, tmp_path / "bundle_dir")
+    assert "theoretical_mass_to_charge" in provenance["0"]
+    assert provenance["0"]["theoretical_mass_to_charge"] is None
+    # データセットの候補は変えない（質量精度と新しい知見の候補は計算した値を使い続ける）。
+    assert ds.feature_candidates["0"][0]["theoretical_mass_to_charge"] == pytest.approx(
+        _PC_34_1_MH, abs=1e-5)
+
+    job_ds = open_dataset(job_path=str(_job(tmp_path, spec=_with_inchikey(_theo_spec())))).dataset
+    assert job_ds.theoretical_mz_computed == set()
+    theo = job_ds.feature_candidates["0"][0]["theoretical_mass_to_charge"]
+    provenance = _bundle_sme_provenance(job_ds, tmp_path / "bundle_job")
+    assert theo is not None
+    assert provenance["0"]["theoretical_mass_to_charge"] == pytest.approx(theo)
 
 
 def test_incomplete_job_gate_shared(tmp_path):
@@ -199,6 +311,9 @@ def test_incomplete_job_gate_shared(tmp_path):
     for source in ("auto", "mztab"):
         opened = open_dataset(job_path=str(job), source=source, allow_incomplete=True)
         assert opened.dataset.exploratory_only is True, source
+        # 理由は書き出しのメタ行に載る 1 行（「=」を含まない）
+        reason = opened.dataset.exploratory_reason
+        assert "partial" in reason and "=" not in reason, source
 
 
 def test_job_without_arf_does_not_fall_back_to_mztab(tmp_path):
@@ -305,9 +420,16 @@ def test_pipeline_folder_without_mddata_binds_manifest_by_mztab_raw_paths(tmp_pa
         f"C:/data/s{i}.wiff" for i in range(4)]
     assert [r["group"] for r in ds.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
     assert [r["sample_id"] for r in ds.sample_metadata_rows] == ds.sample_names
-    # directory= で開くときは変わらない（job の mzTab-M が無いので raw のパスは None のまま）。
-    direct = open_dataset(directory=str(run / "input")).dataset
-    assert direct.sample_raw_paths is None
+    # directory= で run の中の解析フォルダを開いても、run の試料の表（manifest）を当てる（B9-T06）。
+    direct_opened = open_dataset(directory=str(run / "input"))
+    direct = direct_opened.dataset
+    assert [p.replace("\\", "/") for p in direct.sample_raw_paths] == [
+        f"C:/data/s{i}.wiff" for i in range(4)]
+    assert [r["group"] for r in direct.sample_metadata_rows] == ["ctrl", "ctrl", "case", "case"]
+    assert any("run の試料の対応表" in note and "当てた" in note
+               for note in direct_opened.notes), direct_opened.notes
+    # 基の指紋が run の記録を数える（run の試料の対応表が変われば基も変わる）。
+    assert direct_opened.run_root is not None
 
 
 def _shifted_spec() -> dict:
@@ -994,6 +1116,42 @@ def test_unit_not_validated_is_refused(tmp_path):
     assert [o["value"] for o in ask.details["options"]] == ["positive"]
 
 
+def test_unvalidated_unit_opened_for_exploration_is_marked_exploratory(tmp_path):
+    """ジョブが completed でも、検証を通っていない単位の出力は探索専用（印は単位の状態も見る）。"""
+    run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
+    for source in ("auto", "mztab"):
+        ds = open_dataset(pipeline_path=str(run), polarity="negative", source=source,
+                          allow_incomplete=True).dataset
+        assert ds.exploratory_only is True, source
+        assert "negative" in ds.exploratory_reason and "failed" in ds.exploratory_reason, source
+        assert "=" not in ds.exploratory_reason
+        validated = open_dataset(pipeline_path=str(run), polarity="positive", source=source).dataset
+        assert validated.exploratory_only is False and validated.exploratory_reason is None, source
+
+
+def test_directory_inside_an_unvalidated_unit_is_marked_exploratory(tmp_path):
+    """`directory=` が run の中の解析フォルダを開くときも、その単位の試料の対応表とライブラリを当てるので、
+    検証を通っていない単位なら `pipeline_path` で開いたときと同じ探索専用の印を付ける（断らない。理由に run の名前）。
+    検証を通った単位は印を付けない。"""
+    from metabolomix.analysis import dataset_export
+
+    run = _v3_run(tmp_path, ("negative", "positive"), failed=("negative",))
+    opened = open_dataset(directory=str(run / "negative" / "input"))
+    assert opened.run_root is not None
+    ds = opened.dataset
+    assert ds.exploratory_only is True
+    assert ds.exploratory_reason == f"pipeline の run {run.name} の単位 negative が検証を通っていない（failed）"
+    assert "=" not in ds.exploratory_reason
+    # 書き出しのメタ行と根拠バンドルの manifest が読む理由（`pipeline_path` で開いたときと同じ扱い）
+    assert dataset_export.exploratory_reason(ds) == ds.exploratory_reason
+    via_run = open_dataset(pipeline_path=str(run), polarity="negative", allow_incomplete=True).dataset
+    assert via_run.exploratory_only is True
+    validated = open_dataset(directory=str(run / "positive" / "input"))
+    assert validated.run_root is not None
+    assert validated.dataset.exploratory_only is False
+    assert validated.dataset.exploratory_reason is None
+
+
 def test_unknown_polarity_is_refused(tmp_path):
     run = _v3_run(tmp_path)
     err = _code(lambda: open_dataset(pipeline_path=str(run), polarity="positive"))
@@ -1091,6 +1249,180 @@ def test_unmatched_analysis_folder_opens_only_through_the_mztab(tmp_path):
         == ["ctrl", "ctrl", "case", "case"]
 
 
+def _shuffled_rows(source_dir: str = "C:/data") -> list[dict]:
+    """受領の行をシートの順（取得順）で: s3（未割り当て・include=false）, s2 case, s1 ctrl, s0 ctrl。
+    `ds.sample_names`（mzTab-M の assay の順）は s0..s3 なので、位置で当てると群も除外もずれる。"""
+    rows = []
+    for name, group in (("s3", "unassigned"), ("s2", "case"), ("s1", "ctrl"), ("s0", "ctrl")):
+        row = _manifest_row(name, group)
+        row["source_file"] = f"{source_dir}/{name}.wiff"
+        if group == "unassigned":
+            row["include"] = False
+            row["provenance"]["include"] = {**row["provenance"]["include"], "value": False}
+        rows.append(row)
+    return rows
+
+
+def _group_and_include(ds) -> dict:
+    from metabolomix.analysis.stats.data import from_dataset
+
+    return {s.sample_id: (s.group, s.include) for s in from_dataset(ds).samples}
+
+
+@pytest.mark.parametrize("source_dir", ["C:/data", "D:/moved"])
+def test_mztab_source_binds_receipt_rows_to_samples_not_by_position(tmp_path, source_dir):
+    """`source="mztab"` でも受領の行は試料へ結んでから当てる（シートの順は mzTab-M の assay の順と違う）。
+
+    raw のパス（mzTab-M の `ms_run[N]-location`）で結べればそれで、パスが違えば raw の名前で結ぶ。群・include は
+    解析フォルダの経路と同じ試料に付き、統計エンジンの試料の表と `included_sample_indices` も同じ試料を外す。"""
+    from metabolomix.analysis.dataset_analysis import included_sample_indices
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows(source_dir))
+    mztab = open_dataset(pipeline_path=str(run), polarity="negative", source="mztab").dataset
+    expected = {"s0": ("ctrl", True), "s1": ("ctrl", True), "s2": ("case", True),
+                "s3": ("unassigned", False)}
+    assert mztab.sample_names == ["s0", "s1", "s2", "s3"]
+    assert _group_and_include(mztab) == expected
+    assert included_sample_indices(mztab) == [0, 1, 2]
+    # 解析フォルダのアダプタも同じ結び方（raw のパスが違えば raw の名前で結び、読み込みを断らない）。
+    folder = open_dataset(pipeline_path=str(run), polarity="negative").dataset
+    assert _group_and_include(folder) == expected
+    assert included_sample_indices(folder) == [0, 1, 2]
+    assert not [n for n in folder.load_notes if "試料の対応表" in n]
+    if source_dir == "D:/moved":  # raw のパスが違えば raw の名前で結んだ（パスは行のものを覚える）
+        for ds in (mztab, folder):
+            assert [p.replace("\\", "/") for p in ds.sample_raw_paths] == [
+                f"D:/moved/s{i}.wiff" for i in range(4)]
+    assert [r["sample_id"] for r in mztab.sample_metadata_rows] == mztab.sample_names
+    assert mztab.sample_ids == ["s0", "s1", "s2", "s3"]
+    # 前処理の入力（役割と試料の付帯情報）も組み直す。読み込みの一部なので版は進めない。
+    assert set(mztab.roles) == set(mztab.sample_names)
+    assert mztab.metadata_revision == 0
+
+
+@pytest.mark.parametrize("source", ["mztab", "auto"])
+@pytest.mark.parametrize("absolute", [False, True])
+def test_sheet_applies_after_receipt_rows_were_bound_by_name(tmp_path, source, absolute):
+    """raw を動かした run（受領の行は今の run の場所、mzTab-M の `ms_run` は Console が走ったときの場所）を
+    開いて名前で結んだあとも、`dataset_set_sample_metadata` でシートを当てられる。
+
+    シートの検証の置き場所（`_raw_manifest_layout`）と試料への結び方（`resolve_metadata`）が同じ raw の
+    パスを見る。シートの `source_file` は今の場所の相対名でも絶対パスでもよく、行は位置ではなく raw で試料に付く
+    （シートの行の順は assay の順と逆）。"""
+    from metabolomix.tools.dataset_analysis_tools import dataset_set_sample_metadata
+    from metabolomix.tools.handle_tools import load_dataset
+
+    moved = (tmp_path / "moved").as_posix()
+    run = _v3_run(tmp_path, rows=_shuffled_rows(moved))
+    out = json.loads(load_dataset(pipeline_path=str(run), polarity="negative", source=source,
+                                  overview=False))
+    assert out["status"] == "success", out
+    ds = session_state.session.dataset
+    assert [p.replace("\\", "/") for p in ds.sample_raw_paths] == [f"{moved}/s{i}.wiff" for i in range(4)]
+    if source == "mztab":   # 置き場所の食い違いが起きる経路（assay_sources は Console が走ったときの場所）
+        assert all(p.replace("\\", "/").startswith("C:/data/") for p in ds.assay_sources.values())
+
+    groups = {"s0": "case", "s1": "case", "s2": "ctrl", "s3": "ctrl"}   # 受領の群と違う訂正
+    lines = ["# schema = sample-manifest.v1",
+             "sample_id\tsource_file\trole\tgroup\tbatch\tinjection_order\tqc_pool\tinclude"]
+    for name in ("s3", "s2", "s1", "s0"):
+        source_file = f"{moved}/{name}.wiff" if absolute else f"{name}.wiff"
+        lines.append(f"{name}\t{source_file}\tsample\t{groups[name]}\t1\t\t\ttrue")
+    sheet = tmp_path / "sheet.tsv"
+    sheet.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    applied = json.loads(dataset_set_sample_metadata(str(sheet)))
+    assert applied.get("status") == "success", applied
+    assert _group_and_include(ds) == {name: (group, True) for name, group in groups.items()}
+    assert [r["group"] for r in ds.sample_metadata_rows] == ["case", "case", "ctrl", "ctrl"]
+
+
+@pytest.mark.parametrize("source", ["auto", "mztab"])
+def test_sample_counts_keep_sheet_excluded_samples_out_of_groups(tmp_path, source):
+    """`sample_counts` と `dataset_status` の要約の群は統計に入る試料だけ。include=false の試料（群
+    `unassigned`）は `excluded_by_sheet` に分ける（`dataset_compare` の群の水準と同じ集合）。"""
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows())
+    out = json.loads(load_dataset(pipeline_path=str(run), source=source, overview=False))
+    counts = out["sample_counts"]
+    assert counts["groups"] == {"ctrl": 2, "case": 1}
+    assert counts["excluded_by_sheet"] == {"unassigned": 1}
+    assert counts["n_ungrouped"] == 0 and counts["roles"] == {"sample": 4}
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2, "case": 1}
+    assert status["excluded_by_sheet"] == {"unassigned": 1}
+
+
+def test_sample_counts_omit_excluded_by_sheet_when_every_sample_is_included(tmp_path):
+    from metabolomix.tools.handle_tools import load_dataset
+
+    rows = [_manifest_row(f"s{i}", "ctrl" if i < 2 else "case") for i in range(4)]
+    out = json.loads(load_dataset(pipeline_path=str(_v3_run(tmp_path, rows=rows)), overview=False))
+    assert out["sample_counts"] == {"groups": {"ctrl": 2, "case": 2}, "roles": {"sample": 4},
+                                    "n_ungrouped": 0}
+
+
+@pytest.mark.parametrize("source", ["auto", "mztab"])
+def test_unbindable_receipt_rows_are_left_unapplied_with_a_note_the_load_returns(tmp_path, source):
+    """raw のパスでも名前でも全試料を結べない受領の行は、位置では当てず、読み込みを止めずに当てない。
+
+    注記は `load_dataset` の戻り値（`summary` の「読み込みの注記」の行）と `dataset_status` の
+    `load_notes` に出る（どちらのアダプタでも。群が空の理由を、呼び出し側が戻り値だけで知れる）。"""
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+
+    rows = [_manifest_row(f"x{i}", "ctrl") for i in range(4)]
+    run = _v3_run(tmp_path, rows=rows)
+    ds = open_dataset(pipeline_path=str(run), polarity="negative", source=source).dataset
+    assert not any(row.get("group") for row in ds.sample_metadata_rows or [])
+    note = next(n for n in ds.load_notes if "試料の対応表" in n)
+    assert "当てていない" in note and "dataset_set_sample_metadata" in note
+    assert "（受領）" not in note   # 旧 v1 の run は記録の対応表なので、受領とは書かない
+
+    out = json.loads(load_dataset(pipeline_path=str(run), source=source, overview=False))
+    assert out["status"] == "success", out
+    assert out["sample_counts"]["groups"] == {} and out["sample_counts"]["n_ungrouped"] == 4
+    line = next(line for line in out["summary"] if line.startswith("- 読み込みの注記"))
+    assert note in line
+    assert note in json.loads(dataset_status())["load_notes"]["first"]
+
+
+def test_status_counts_leave_dataset_exclude_samples_out_of_groups(tmp_path):
+    """`dataset_status` の `groups` / `n_ungrouped` は統計に入る試料（`included_sample_indices`）だけ。
+
+    `dataset_exclude` で外した試料は `excluded_by_dataset_exclude`、シートの include=false は
+    `excluded_by_sheet` に分ける（両方で外した試料はシートの側だけ）。群ごとの数は、統計に残る試料の位置と
+    試料の表の群から別に数えたものと一致する。"""
+    from collections import Counter
+
+    from metabolomix.analysis.dataset_analysis import included_sample_indices
+    from metabolomix.tools.handle_tools import load_dataset
+    from metabolomix.tools.mztab_tools import dataset_status
+    from metabolomix.tools.sample_tools import dataset_exclude
+
+    run = _v3_run(tmp_path, rows=_shuffled_rows())   # s0, s1 ctrl / s2 case / s3 unassigned（include=false）
+    load_dataset(pipeline_path=str(run), overview=False)
+    out = json.loads(dataset_exclude(samples=["s2", "s3"], reason="outlier"))
+    assert "error" not in out, out
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2}
+    assert status["n_ungrouped"] == 0
+    assert status["excluded_by_sheet"] == {"unassigned": 1}
+    assert status["excluded_by_dataset_exclude"] == {"case": 1}
+    assert status["roles"] == {"sample": 4} and status["excluded"]["samples"] == 2
+    ds = session_state.session.dataset
+    kept = included_sample_indices(ds)
+    assert kept == [0, 1]
+    assert Counter(ds.sample_metadata_rows[i]["group"] for i in kept) == status["groups"]
+
+    json.loads(dataset_exclude(mode="clear", samples=[]))
+    status = json.loads(dataset_status())
+    assert status["groups"] == {"ctrl": 2, "case": 1}
+    assert "excluded_by_dataset_exclude" not in status
+
+
 def test_mztab_source_matches_spots_on_the_batch_the_receipt_verified(tmp_path):
     """`source="mztab"` のスポットの照合は、受領が照合したバッチ（`alignment.arf2`）を使う。
     `rerun_upstream` の後は前のバッチも同じフォルダに残り、名前の順では決まらない。"""
@@ -1114,3 +1446,38 @@ def test_mztab_source_without_a_verified_batch_falls_back_to_the_newest_name(tmp
     write_msdial_folder(run / "negative" / "input", **_other_spec(), stem="AlignResult-2",
                         with_mddata=False)
     assert opening.pipeline_arf2(run, "negative").name == "AlignResult-2.arf2"
+
+
+# ---------- MS-DIAL Console の既定の .mddata（棚卸し B9-T06） ----------
+
+
+def _console_folder(path: Path, class_ids) -> Path:
+    names = ["QC_01", "S_01", "S_02", "QC_02"]
+    samples = [{"file_id": i, "name": n, "class_id": c(i, n) if callable(c) else c}
+               for (i, n), c in zip(enumerate(names), class_ids)]
+    spots = [{"name": "PC 34:1", "mz": 760.5851, "heights": [1.0, 2.0, 3.0, 4.0]}]
+    write_msdial_folder(path, spots=spots, samples=samples)
+    return path
+
+
+@pytest.mark.parametrize("default", [lambda i, n: str(i), lambda i, n: n])
+def test_console_default_mddata_is_not_a_group_declaration(tmp_path, default):
+    """Class ID が FileID（かファイル名）のまま・種類がすべて sample の .mddata は宣言とみなさない。"""
+    from metabolomix.tools.mztab_tools import _metadata_rows
+
+    opened = open_dataset(directory=str(_console_folder(tmp_path / "f", [default] * 4)))
+    rows = _metadata_rows(opened.dataset)
+    assert [r["group"] for r in rows] == [None] * 4
+    assert [r["role"] for r in rows] == ["qc", "sample", "sample", "qc"]
+    assert rows[0]["provenance"]["role"]["source"] == "filename_token"
+    assert rows[0]["provenance"]["role"]["confidence"] == "inferred"
+    assert any("Console の既定" in note for note in opened.dataset.load_notes), opened.dataset.load_notes
+
+
+def test_declared_classes_are_kept(tmp_path):
+    from metabolomix.tools.mztab_tools import _metadata_rows
+
+    opened = open_dataset(directory=str(_console_folder(tmp_path / "f", ["QC", "A", "B", "QC"])))
+    rows = _metadata_rows(opened.dataset)
+    assert [r["group"] for r in rows] == ["QC", "A", "B", "QC"]
+    assert not any("Console の既定" in note for note in opened.dataset.load_notes)

@@ -62,16 +62,17 @@ def test_build_dataset_pp_inputs_uses_mztab_injection_order():
     assert sample_meta["s1"]["run_order_source"] == "mztab_injection_sequence"
 
 
-def test_build_dataset_pp_inputs_prefers_filename_date_when_batch_is_constant():
-    """既定の定数バッチを採ると日付由来の交絡を見落とす。"""
+def test_build_dataset_pp_inputs_keeps_filename_date_only_as_candidate_when_batch_is_constant():
+    """A7: 定数のバッチ（MS-DIAL の既定 1）は採らず、試料名の 8 桁もバッチに当てない（候補として添えるだけ）。"""
     from metabolomix.analysis.dataset_analysis import build_dataset_pp_inputs
     ds = _ds_with_assay_meta(["20220901_a", "20220902_b"], {
         "assay[1]": {"run_order": 1, "batch": "1"},
         "assay[2]": {"run_order": 2, "batch": "1"},
     })
     _, _, _, _, sample_meta = build_dataset_pp_inputs(ds)
-    assert sample_meta["20220901_a"]["batch"] == "20220901"
-    assert sample_meta["20220901_a"]["batch_source"] == "filename_date"
+    assert sample_meta["20220901_a"]["batch"] is None
+    assert sample_meta["20220901_a"]["batch_source"] is None
+    assert sample_meta["20220901_a"]["batch_candidate"] == {"value": "20220901", "source": "filename_date"}
 
 
 def test_build_dataset_pp_inputs_uses_mztab_batch_when_it_varies():
@@ -85,6 +86,7 @@ def test_build_dataset_pp_inputs_uses_mztab_batch_when_it_varies():
     assert sample_meta["20220901_a"]["batch"] == "B1"
     assert sample_meta["20220901_b"]["batch"] == "B2"
     assert sample_meta["20220901_a"]["batch_source"] == "mztab_batch_label"
+    assert "batch_candidate" not in sample_meta["20220901_a"]      # バッチが分かれば候補は添えない
 
 
 def test_build_dataset_pp_inputs_rejects_empty_matrix():

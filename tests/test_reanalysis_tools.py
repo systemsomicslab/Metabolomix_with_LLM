@@ -167,8 +167,8 @@ def test_analysis_run_rows_have_detection_columns(data):
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     analysis = out["analyses"][0]
     header = analysis["rows"].splitlines()[0].split("	")
-    assert header[-4:] == ["detected_reference", "detected_test", "detection_fisher_p",
-                           "detection_driven"]
+    assert header[-5:] == ["detected_reference", "detected_test", "detection_fisher_p",
+                           "detection_driven", "constant_in_group"]
     assert analysis["detection_available"] is False       # 合成の mzTab は .arf が無い
     assert analysis["n_detection_driven"] == 0
 
@@ -196,7 +196,7 @@ def test_analysis_run_output_path_is_deterministic(data, tmp_path):
     assert saved["rule_hash"] == first["rule_hash"] and saved["schema"] == "analysis-result.v1"
 
 
-def test_analysis_run_requires_output_path_for_many_rows(tmp_path):
+def test_analysis_run_many_rows_are_truncated_not_refused(tmp_path):
     matrix = tmp_path / "m.tsv"
     lines = ["feature_id\t" + "\t".join(SAMPLES)]
     lines += [f"F{i}\t" + "\t".join(str(v + i) for v in BASE) for i in range(51)]
@@ -209,9 +209,20 @@ def test_analysis_run_requires_output_path_for_many_rows(tmp_path):
             "comparison": {"reference": "HC", "test": "RA"},
             "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}}]}
     out = json.loads(R.dataset_analysis_run(spec))
-    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
+    item = out["analyses"][0]
+    assert "error" not in out and item["n_rows"] == 51 and item["truncated"] is True
+    assert item["rows_order"] == "p_ascending" and any("output_path" in n for n in out["notes"])
+    table = item["rows"].splitlines()
+    header = table[0].split("\t")
+    shown = [dict(zip(header, line.split("\t"))) for line in table[1:]]
+    assert len(shown) == R.MAX_INLINE_ROWS
+    ps = [float(r["p"]) for r in shown]
+    assert ps == sorted(ps)                                   # p の小さい順の先頭 50 行
     ok = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "o.json")))
-    assert ok["analyses"][0]["n_rows"] == 51
+    assert ok["analyses"][0]["n_rows"] == 51 and "truncated" not in ok["analyses"][0]
+    assert "notes" not in ok
+    saved = json.loads((tmp_path / "o.json").read_text(encoding="utf-8"))
+    assert len(saved["analyses"][0]["rows"]) == 51
 
 
 def test_analysis_run_bad_spec_is_an_error_envelope(data):
@@ -229,6 +240,29 @@ def test_mass_accuracy_by_band(data):
     low, high = out["bands"]
     assert (low["min_mz"], low["max_mz"], low["n"]) == (None, 200.0, 1)
     assert high["n"] == 1
+    # 勧める許容幅は 10 件から。2 件では出さず、理由を添える（A3-T12）
+    assert low["recommended_mz_tol_ppm"] is None and high["recommended_mz_tol_ppm"] is None
+    assert out["recommended_tolerance"]["mz_tol_ppm"] is None
+    assert out["recommended_tolerance"]["reason"] == "too_few"
+
+
+def test_mass_accuracy_recommends_a_tolerance(tmp_path):
+    # ppm が -4.0 … +1.5（0.5 刻み）の 12 個の同定 → 中央値 -1.25、MAD 1.5 → ceil(1.25 + 4.5) = 6
+    features = tuple(
+        {"id": str(i + 1), "mz": 300.0 + i, "rt": 1.0 + i, "values": [10] * 8, "matched": True,
+         "sme": [{"name": f"N{i}", "inchikey": f"{chr(65 + i) * 14}-UHFFFAOYSA-N", "formula": "C1",
+                  "adduct": "[M+H]1+", "theo": 300.0 + i,
+                  "exp": (300.0 + i) * (1 + (-4.0 + 0.5 * i) * 1e-6)}]}
+        for i in range(12))
+    handle = _open({"mztab": write_mztab(tmp_path / "t" / "AlignResult-1.mzTab", features=features)})
+    out = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
+    rec = out["recommended_tolerance"]
+    assert rec["n"] == 12 and rec["mz_tol_ppm"] == 6.0
+    assert rec["median_ppm"] == pytest.approx(-1.25, abs=1e-3)
+    assert rec["mad_ppm"] == pytest.approx(1.5, abs=1e-3)
+    low, high = out["bands"]
+    assert low["n"] == 0 and low["recommended_mz_tol_ppm"] is None
+    assert high["n"] == 12 and high["recommended_mz_tol_ppm"] == 6.0
 
 
 #: SML の `opt_global_spectrum_matched` を持つ合成の特徴（ppm はそれぞれ +2 / +8 / -3、1 つは同定なし）。
@@ -273,6 +307,7 @@ def test_mass_accuracy_msms_matched_needs_the_sml_columns(data):
     # 既定の rank1 は今までどおり動く（旗の有無の注記は付かない）
     plain = json.loads(R.dataset_mass_accuracy(dataset_handle=handle))
     assert plain["subset"] == "rank1" and "subset_available" not in plain
+    assert plain["theoretical_mz_source"] == "mztab"
     bad = json.loads(R.dataset_mass_accuracy(subset="nope", dataset_handle=handle))
     assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
 
@@ -368,6 +403,7 @@ def test_novel_candidates_from_result_id_and_from_spec(data):
     out = json.loads(R.dataset_novel_candidates(spec, dataset_handle=handle))
     assert out["status"] == "success" and out["n_rows"] == 2
     assert out["group_ref"] == "HC"
+    assert out["theoretical_mz_source"] == "mztab"      # mzTab-M の SME の値
     excluded = json.loads(R.dataset_novel_candidates(
         {**spec, "exclude": {"inchikey_blocks": [GABA_KEY]}}, dataset_handle=handle))
     assert excluded["n_rows"] == 1
@@ -376,6 +412,49 @@ def test_novel_candidates_from_result_id_and_from_spec(data):
                         "analysis_id": "main"}, "q_max": 1.0}, dataset_handle=handle))
     assert from_spec["group_test"] == "RA" and from_spec["n_rows"] == 2
     assert out["rule_hash"] != from_spec["rule_hash"]
+
+
+def test_novel_candidates_from_an_uncorrected_analysis_say_why_the_list_is_empty(data):
+    """C7: 補正しない解析（correction=none）は q を持たないので、q_max で絞る候補は出ない。空の一覧が
+    「該当なし」に読まれないよう notes に理由を書く（同じ spec の bh なら候補は出る）。"""
+    handle = _open(data)
+    uncorrected = _spec(data, features={"all": True})
+    uncorrected["analyses"][0]["correction"] = "none"
+    out = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": uncorrected, "analysis_id": "main"}, "q_max": 1.0},
+        dataset_handle=handle))
+    assert out["status"] == "success" and out["n_rows"] == 0
+    assert any("correction=none" in n and "q_max" in n and "statistics.analysis_id=main" in n
+               for n in out["notes"])
+    corrected = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": _spec(data, features={"all": True}), "analysis_id": "main"},
+         "q_max": 1.0}, dataset_handle=handle))
+    assert corrected["n_rows"] == 2 and not any("correction=none" in n for n in corrected.get("notes", []))
+
+
+def test_analysis_run_v1_notes_ineffective_settings_kept_in_the_spec(data, tmp_path):
+    """C7: v1 の効かない設定（補正なしの q の閾値・drift_correct の無い注入順・ols の無い共変量）は断らず notes に書き、
+    spec と rule_hash には残す。使わない注入順の表は読まない（欠けた試料・無いファイルで断らない）。"""
+    handle = _open(data)
+    order = tmp_path / "order.tsv"
+    order.write_text("sample\torder\nHC1\t1\n", encoding="utf-8")      # ほかの試料は欠ける
+    spec = _spec(data, injection_order={"source": "tsv", "path": str(order)},
+                 covariates={"path": str(tmp_path / "missing.tsv"),
+                             "columns": [{"name": "age", "type": "numeric"}]})
+    spec["analyses"][0].update(correction="none", thresholds={"p": 0.05, "q": 0.05})
+    out = json.loads(R.dataset_analysis_run(spec, dataset_handle=handle))
+    assert out["status"] == "success", out
+    heads = [n.split(" ")[0] for n in out["notes"]]
+    assert heads == ["analyses[0].thresholds.q", "injection_order", "covariates"]
+    assert out["analyses"][0]["n_meets_thresholds"] == 0
+    assert "injection_order" not in out["input_fingerprint"]["files"]
+    # 書いた設定は spec に残る（捨てない）ので、書かない spec とは前と同じく別の rule_hash
+    bare = _spec(data)
+    bare["analyses"][0].update(correction="none", thresholds={"p": 0.05, "q": 0.05})
+    plain = json.loads(R.dataset_analysis_run(bare, dataset_handle=handle))
+    assert plain["status"] == "success" and "notes" in plain
+    assert out["rule_hash"] != plain["rule_hash"]
+    assert out["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
 
 
 # ---------- 関係 ----------
@@ -391,6 +470,52 @@ def test_feature_relations_name_adduct_isotope_and_insource(data):
     assert ions["23"] == "insource:-H2O"
     as_ion = json.loads(R.dataset_feature_relations("21", dataset_handle=handle))["as_ion_of"]
     assert "adduct:[M+Na]+/[M+H]1+" in as_ion          # 相手の付加体は MS-DIAL の表記のまま
+
+
+def _tsv(text):
+    header, *lines = text.splitlines()
+    names = header.split("\t")
+    return names, [dict(zip(names, line.split("\t"))) for line in lines]
+
+
+def test_feature_relations_columns_carry_strong_ambiguous_and_informational(data):
+    handle = _open(data)
+    names, ions = _tsv(json.loads(R.dataset_feature_relations("20", dataset_handle=handle))["ions_of_this"])
+    assert names == ["ion", "relation", "dmz_mda", "drt", "r", "isotope_consistent", "strong",
+                     "ambiguous", "informational"]
+    by_relation = {(row["ion"], row["relation"]): row for row in ions}
+    # MS-DIAL のリンクが無い mzTab でも、同時溶出・Δm/z・試料間の相関 r ≥ min_r がそろえば強い（B1-T17）
+    na = by_relation[("21", "adduct:[M+Na]+/[M+H]1+")]
+    assert (na["strong"], na["ambiguous"], na["informational"]) == ("true", "false", "false")
+    iso = by_relation[("22", "isotope_M+1")]
+    assert (iso["isotope_consistent"], iso["strong"], iso["ambiguous"]) == ("true", "true", "false")
+    assert by_relation[("23", "insource:-H2O")]["strong"] == "true"
+    names, as_ion = _tsv(json.loads(R.dataset_feature_relations("22", dataset_handle=handle))["as_ion_of"])
+    assert names == ["of", "of_name", "relation", "dmz_mda", "drt", "r", "isotope_ratio",
+                     "expected_ratio", "isotope_consistent", "strong", "ambiguous", "informational"]
+    [row] = as_ion
+    assert (row["of"], row["of_name"], row["relation"]) == ("20", "GABA", "isotope_M+1")
+    # イオン C4H10NO2+ の M+1 の和: 13C 4·q_C + 2H 10·q_H + 15N 1·q_N + 17O 2·q_O（q = a / (1 − a)）
+    # = 0.043263 + 0.001150 + 0.003653 + 0.000762 ≈ 0.0488。実測 5 / 100 = 0.05（1.5 倍以内）
+    hand = (4 * 0.0107 / 0.9893 + 10 * 0.000115 / 0.999885 + 0.00364 / 0.99636
+            + 2 * 0.00038 / 0.99757)
+    assert hand == pytest.approx(0.0488, abs=1e-4)
+    assert float(row["expected_ratio"]) == pytest.approx(hand, abs=1e-4)
+    assert float(row["isotope_ratio"]) == pytest.approx(0.05, abs=1e-3)
+
+
+def test_feature_relations_do_not_call_a_coeluting_isobar_an_adduct_of_itself(tmp_path):
+    """mzTab-M の付加体は `[M+H]1+` と書かれる。既定の付加体 `[M+H]+` と綴りが違っても Y 自身の付加体なので、
+    同時に溶出して強度が相関する同じ m/z の特徴を「Y の [M+H]+」（強い説明）と言わない。"""
+    isobar = {"id": "27", "mz": 104.0716, "rt": 2.00, "values": _scaled(40), "sme": []}
+    mztab = write_mztab(tmp_path / "iso" / "AlignResult-1.mzTab", features=(RELATION_FEATURES[0], isobar))
+    out = json.loads(handle_tools.load_dataset(mztab_path=str(mztab), library="none"))
+    assert out["status"] == "success", out
+    handle = out["dataset_handle"]
+    as_ion = json.loads(R.dataset_feature_relations("27", dataset_handle=handle))
+    assert as_ion["n_coeluting"] == 1 and as_ion["as_ion_of"] == ""
+    ions = json.loads(R.dataset_feature_relations("20", dataset_handle=handle))["ions_of_this"]
+    assert "adduct:" not in ions
 
 
 def test_feature_relations_unknown_feature(data):
@@ -536,7 +661,7 @@ def test_tool_writes_output_and_returns_summary(tmp_path):
     (merge,) = written["merge_groups"]
     assert merge["features"] == ["30", "31"] and merge["mergeable"] is True
     assert pair["merged"] is True and out["summary"]["n_merged_pairs"] == 1
-    # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの状態は変えない
+    # 同じ入力なら同じファイル・出力先なしなら要約だけ・ハンドルの解析の状態（結果・行列）は変えない
     again = tmp_path / "again.json"
     R.dataset_alignment_qc(output_path=str(again), dataset_handle=handle)
     assert again.read_bytes() == target.read_bytes()
@@ -865,8 +990,11 @@ def test_novel_candidates_labels_column_and_counts(data, tmp_path):
 
 # ---------- ppm_offset（質量の窓の中心のずれ） ----------
 
-#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash
-_CLAIM_RULE_HASH_V8 = "41f68e9459154e44cd3fe48101cdb088bc4969e917940bcfa3fb25b7410b524c"
+#: ppm_offset を足す前（v8）の実装で CLAIM を処理した rule_hash。陽イオンの既定の付加体の
+#: 第 2 段に [M+CH3OH+H]+ と [M+H-2H2O]+ を足したとき（A12）に段の並びが変わったので
+#: 書き直した（旧 41f68e94… は旧い段で再現することを確かめた）。ppm_offset を省いた
+#: ときに規則が変わらないことを縛るのは、この値と ppm_offset の有無の比較
+_CLAIM_RULE_HASH_V8 = "10003a763b0bc7c19f996242b458b66567e2a550fcbfde582ecd43e3b92d7292"
 
 
 def test_claim_evidence_ppm_offset_matches_feature_search(data):
@@ -894,6 +1022,113 @@ def test_claim_evidence_bad_offset_is_spec_invalid(data):
     out = json.loads(R.dataset_claim_evidence({**CLAIM, "ppm_offset": {"default": "x"}},
                                               dataset_handle=_open(data)))
     assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
+
+
+# ---------- rt_offset_min（RT の窓の中心のずれ） ----------
+
+#: rt_min を特徴 20（RT 2.00）から 0.5 分ずらした目標。rt_tol_min 0.3 では窓 [1.2, 1.8] に入らない。
+SHIFTED_TARGET = {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 1.5}
+
+
+def test_claim_evidence_rt_offset_matches_feature_search(data):
+    handle = _open(data)
+    claim = {"claim_id": "C1", "target": SHIFTED_TARGET, "scan": {"ppm": [10, 20], "rt_tol_min": [0.3]},
+             "rt_offset_min": 0.5}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    search = json.loads(T.dataset_feature_search(
+        targets=[{"target_id": "C1", **SHIFTED_TARGET}], rt_offset_min=0.5, dataset_handle=handle))
+    assert out["default_selection"]["status"] == search["targets"][0]["status"] == "resolved"
+    assert out["default_selection"]["selected_feature_id"] == search["targets"][0]["selected_feature_id"] == "20"
+    # 走査の全変種にも同じずれが効く
+    assert [s["selected_feature_id"] for s in out["scans"]] == ["20", "20"]
+    assert out["rule"]["rt_offset_min"] == 0.5 and out["rule"]["target"]["rt_offset_min"] == 0.5
+    assert "notes" not in out
+    # ずらさなければ RT の窓の外（判定が変わる）
+    plain = json.loads(R.dataset_claim_evidence({k: v for k, v in claim.items() if k != "rt_offset_min"},
+                                                dataset_handle=handle))
+    assert plain["default_selection"]["selected_feature_id"] != "20"
+    assert "rt_offset_min" not in plain["rule"] and "rt_offset_min" not in plain["rule"]["target"]
+
+
+def test_claim_evidence_rt_offset_enters_the_rule_hash_only_when_set(data):
+    handle = _open(data)
+    # 省けば従来と同じ hash（v8 の値）。渡せば（0 でも）規則の一部
+    assert json.loads(R.dataset_claim_evidence(CLAIM, dataset_handle=handle))["rule_hash"] == _CLAIM_RULE_HASH_V8
+    for value in (0, -0.2):
+        shifted = json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": value},
+                                                      dataset_handle=handle))
+        assert shifted["rule_hash"] != _CLAIM_RULE_HASH_V8
+    assert (json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": 0.1}, dataset_handle=handle))["rule_hash"]
+            != json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": 0.2}, dataset_handle=handle))["rule_hash"])
+
+
+def test_claim_evidence_rt_offset_without_rt_min_is_ignored_with_a_note(data, tmp_path):
+    handle = _open(data)
+    bare = {"claim_id": "C2", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2"}}
+    plain = json.loads(R.dataset_claim_evidence(bare, dataset_handle=handle))
+    out = json.loads(R.dataset_claim_evidence({**bare, "rt_offset_min": 0.5}, dataset_handle=handle))
+    assert "error" not in out
+    assert out["rule_hash"] == plain["rule_hash"] and "rt_offset_min" not in out["rule"]
+    assert any("rt_offset_min" in n and "rt_min" in n for n in out["notes"])
+    assert "notes" not in plain
+    # 理由は書いた JSON と要約にも残る
+    path = tmp_path / "c2.json"
+    summary = json.loads(R.dataset_claim_evidence({**bare, "rt_offset_min": 0.5}, dataset_handle=handle,
+                                                  output_path=str(path)))
+    assert summary["notes"] == out["notes"]
+    assert json.loads(path.read_text(encoding="utf-8"))["notes"] == out["notes"]
+
+
+@pytest.mark.parametrize("value", ["x", True, float("nan"), float("inf")])
+def test_claim_evidence_bad_rt_offset_is_spec_invalid(data, value):
+    out = json.loads(R.dataset_claim_evidence({**CLAIM, "rt_offset_min": value},
+                                              dataset_handle=_open(data)))
+    assert out["error"]["code"] == "CLAIM_SPEC_INVALID"
+    assert out["error"]["details"]["field"] == "rt_offset_min"
+
+
+# ---------- 候補が多いときの戻り値（断らず先頭だけ） ----------
+
+def test_claim_evidence_inline_truncates_with_the_selected_feature_first(data, tmp_path, monkeypatch):
+    handle = _open(data)
+    # [M+Na]+ だけの目標で、RT 5.0 の 25 を既定の特徴にする（特徴の並びでは 21 が先）
+    claim = {"claim_id": "C5", "target": {"inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": 5.0,
+                                          "adduct_tiers": [["[M+Na]+"]]}}
+    full = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert full["default_selection"]["selected_feature_id"] == "25"
+    assert [c["feature_id"] for c in full["candidates"]] == ["21", "25"]
+    assert full["truncated"] == 0 and "n_candidates_shown" not in full     # 上限内は束のまま
+
+    monkeypatch.setattr(R, "MAX_INLINE_CANDIDATES", 1)
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["status"] == "success" and "error" not in out
+    assert [c["feature_id"] for c in out["candidates"]] == ["25"]
+    assert out["truncated"] is True
+    assert out["n_candidates"] == 2 and out["n_candidates_shown"] == 1
+    assert out["candidates_order"] == "default_selection_first"
+    assert out["max_candidates_truncated"] == 0
+    assert any("output_path" in n for n in out["notes"])
+    # 判定・規則・走査は束と同じ（候補の一覧だけを切る）
+    for key in ("default_selection", "scans", "rule_hash", "rule", "input_fingerprint"):
+        assert out[key] == full[key]
+    # output_path は全件を書く（束の truncated は max_candidates の打ち切りの数のまま）
+    path = tmp_path / "c5.json"
+    summary = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle, output_path=str(path)))
+    assert summary["n_candidates"] == 2 and summary["truncated"] == 0
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert [c["feature_id"] for c in saved["candidates"]] == ["21", "25"] and saved["truncated"] == 0
+    assert "notes" not in saved
+
+
+def test_claim_evidence_inline_cut_reports_the_max_candidates_cut_too(data, monkeypatch):
+    handle = _open(data)
+    monkeypatch.setattr(R, "MAX_INLINE_CANDIDATES", 1)
+    claim = {**CLAIM, "max_candidates": 2}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["truncated"] is True and out["n_candidates"] == 2
+    assert out["max_candidates_truncated"] > 0
+    assert any("max_candidates=2" in n for n in out["notes"])
+    assert out["candidates"][0]["feature_id"] == out["default_selection"]["selected_feature_id"]
 
 
 def test_claim_evidence_on_an_lbm_only_dataset_is_not_evaluable_not_no_library(data, library):
@@ -981,7 +1216,9 @@ def test_analysis_run_v1_unchanged_golden(data, tmp_path):
     assert out["schema"] == "analysis-result.v1"
     assert list(out["analyses"][0]) == [
         "analysis_id", "n_features_in", "n_features_out", "bh_population_n", "n_rows", "n_tested",
-        "n_meets_thresholds", "detection_available", "n_detection_driven", "rows"]
+        "n_meets_thresholds", "detection_available", "n_detection_driven", "n_constant_in_group",
+        "rows", "truncated"]
+    assert out["analyses"][0]["truncated"] is False
     path = tmp_path / "v1.json"
     R.dataset_analysis_run(_spec(data), dataset_handle=handle, output_path=str(path))
     ds = handles.registry.get(handle).dataset
@@ -1003,6 +1240,38 @@ def test_analysis_run_v2_output_path_strict_json(tmp_path):
     assert again.read_bytes() == path.read_bytes()
 
 
+def test_analysis_run_v2_composition_summary_carries_the_inner_confounding(tmp_path):
+    """C4: 既定の allow_confounded=true は完全交絡でも組成を比べる。止める代わりの印（交絡）は要約に残る:
+    組成の要約に内側の比較の `confounding` と、その注意（完全交絡ほか）をコードで重ねずに載せる。"""
+    state = _v2_state(tmp_path)
+    for k, fid in enumerate(state.feature_ids):
+        state.feature_metadata[fid]["ontology"] = "PC" if k < 3 else ("PE" if k < 6 else "TG")
+    for row in state.sample_metadata_rows:
+        if row.get("group") == "T":
+            row["batch"] = "B2"          # C は全部 B1・T は全部 B2: どのバッチも 1 群だけ＝完全交絡
+    spec = _v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
+                              {"analysis_id": "comp", "kind": "composition"}], primary="comp")
+    path = tmp_path / "full.json"
+    full = json.loads(R.dataset_analysis_run(spec, output_path=str(path)))
+    out = json.loads(R.dataset_analysis_run(spec))
+    assert out["status"] == "success" and full["analyses"] == [
+        {k: v for k, v in a.items() if k not in ("rows", "truncated", "rows_order")} for a in out["analyses"]]
+    cmp_, comp = out["analyses"]
+    saved = _strict_loads(path.read_text(encoding="utf-8"))
+    inner = saved["analyses"][1]["result"]
+    assert inner["absolute"]["confounding"]["batch_status"] == "complete"
+    expected = {"batch_status": "complete", "by_contrast": {"T_vs_C": {"batch_status": "complete",
+                                                                       "confounded": True}}}
+    assert comp["confounding"] == expected and cmp_["confounding"] == expected
+    codes = [w["code"] for w in comp["warnings"]]
+    assert codes.count("batch_group_complete_confounding") == 1          # 2 つの表で重ねない
+    warn = next(w for w in comp["warnings"] if w["code"] == "batch_group_complete_confounding")
+    assert warn["tables"] == ["absolute", "clr"]
+    inner_codes = {w["code"] for name in ("absolute", "clr") for w in inner[name]["warnings"]}
+    assert inner_codes <= set(codes) and len(codes) == len(set(codes))
+    assert "batch_group_complete_confounding" in {w["code"] for w in cmp_["warnings"]}
+
+
 def test_analysis_run_v2_inline_row_limit(tmp_path):
     import numpy as np
     state = _v2_state(tmp_path)
@@ -1013,22 +1282,46 @@ def test_analysis_run_v2_inline_row_limit(tmp_path):
     state.feature_ids = [f"f{k}" for k in range(nf)]
     state.feature_metadata = {f"f{k}": {"name": f"F{k}"} for k in range(nf)}
     out = json.loads(R.dataset_analysis_run(_v2_spec()))
-    assert out["error"]["code"] == "ANALYSIS_OUTPUT_REQUIRED"
-    assert out["error"]["details"]["analyses"] == ["cmp"]
+    item = out["analyses"][0]
+    assert "error" not in out and item["n_rows"] == 60
+    assert item["truncated"] is True and item["rows_order"] == "p_ascending"
+    assert any("['cmp']" in n for n in out["notes"])
+    lines = item["rows"].splitlines()
+    header = lines[0].split("\t")
+    ps = [float(dict(zip(header, line.split("\t")))["p"]) for line in lines[1:]]
+    assert len(ps) == R.MAX_INLINE_ROWS and ps == sorted(ps)
     ok = json.loads(R.dataset_analysis_run(_v2_spec(), output_path=str(tmp_path / "o.json")))
-    assert ok["analyses"][0]["n_rows"] == 60
+    assert ok["analyses"][0]["n_rows"] == 60 and "truncated" not in ok["analyses"][0]
 
 
-def test_analysis_run_v2_needs_input_envelope_names_spec_field(tmp_path):
+def test_analysis_run_v2_notes_inert_settings_instead_of_refusing(tmp_path):
+    """dataset_compare と同じく、効かない設定は断らない: reported 以外の母集団の reported_feature_ids・
+    normalize=none の係数の特徴・drift=off の loess_degree は捨てて notes に書き、結果と rule_hash は書かない spec と同じ。"""
+    _v2_state(tmp_path)
+    plain = json.loads(R.dataset_analysis_run(_v2_spec()))
+    inert = _v2_spec(
+        preprocess={**_V2_OFF, "drift": {"mode": "off", "loess_degree": 2},
+                    "normalize": {"method": "none", "features": ["f0"]}},
+        analyses=[{"analysis_id": "cmp", "kind": "compare", "reported_feature_ids": ["f0", "f1"]}])
+    out = json.loads(R.dataset_analysis_run(inert))
+    assert "error" not in out and out["status"] == "success" and "notes" not in plain
+    assert (out["rule_hash"], out["matrix_id"]) == (plain["rule_hash"], plain["matrix_id"])
+    assert out["analyses"][0]["rows"] == plain["analyses"][0]["rows"]
+    assert len(out["notes"]) == 3
+    assert any("analyses[0].reported_feature_ids" in n for n in out["notes"])
+    assert any("loess_degree" in n for n in out["notes"])
+    assert any("normalization_features" in n for n in out["notes"])
+
+
+def test_analysis_run_v2_normalized_with_qc_does_not_ask(tmp_path):
+    """drift=auto は換算済み・QC ありでも尋ねない（needs_input を返さずに実行する。2026-11-14 の C3）。"""
     state = _v2_state(tmp_path)
     state.quant_state = {"normalized": True, "method": "is_ratio", "unit": "ratio",
                          "record_id": "q_test_1"}
     spec = _v2_spec(preprocess={"filters": _V2_OFF["filters"], "normalize": {"method": "none"}})
-    out = json.loads(R.dataset_analysis_run(spec))
-    body = out["needs_input"]
-    assert "error" not in out and body["field"] == "preprocess.drift.mode"
-    assert "argument" not in body and body["retry_tools"] == ["dataset_analysis_run"]
-    assert {o["value"] for o in body["options"]} == {"on", "off"}
+    out = json.loads(R.dataset_analysis_run(spec, output_path=str(tmp_path / "o.json")))
+    assert "needs_input" not in out and "error" not in out, out
+    assert out["analyses"]
 
 
 def test_analysis_run_v2_dataset_exclusions_not_in_spec_warn(tmp_path):
@@ -1075,3 +1368,240 @@ def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
     assert session_state.session.dataset is state
     assert session_state.session.current_handle_id == handle_before
     assert not (tmp_path / "analysis" / "reports").exists()
+
+
+# ---------- 2026-11-13 の事実確認（担当 1: MS/MS とライブラリ） ----------
+
+def _annotate_spot(monkeypatch, spot_id, name, inchikey=None):
+    """`.arf2` の代表の注釈（MS-DIAL の名前・InChIKey）を差し替える（library フィクスチャの後に呼ぶ）。"""
+    records = [{"AlignmentID": int(f["id"]), "MassCenter": f["mz"], "RT": f["rt"],
+                "IonMode": "Positive", "Name": "Unknown"} for f in RELATION_FEATURES]
+    records[[r["AlignmentID"] for r in records].index(spot_id)].update(Name=name, InChIKey=inchikey)
+    monkeypatch.setattr(alignment_spot, "load_catalog", lambda _path: records)
+
+
+def test_msms_qualify_reports_window_delta_ppm_and_msdial_agreement(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "GABA", GABA_KEY)
+    handle = _open(data, msp=library)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle, mz_tol_ppm=5))
+    assert out["verdict"] == "qualified"      # 既定でも断片 1 本（87・69 の 2 本）を求める
+    assert out["rules"]["min_fragments_excl_precursor"] == 1
+    assert out["target_rank"] == 1 and out["top1_is_target"] is True
+    assert out["query"]["mz_tol"] == pytest.approx(0.01)
+    assert out["query"]["mz_window"] == pytest.approx(0.01)   # m/z 500 以下は Da のまま
+    assert out["query"]["mz_tol_ppm"] == 5
+    assert out["msdial_name"] == "GABA" and out["msdial_rank"] == 1
+    assert out["top_differs_from_msdial"] is False
+    lines = out["candidates"].splitlines()
+    header = lines[0].split("\t")
+    row = dict(zip(header, lines[1].split("\t")))
+    assert {"inchikey", "delta_ppm"} <= set(header) and "ppm_error" not in header
+    assert row["inchikey"] == GABA_KEY and float(row["delta_ppm"]) == pytest.approx(0.0)
+    assert row["fragment_matches_excl_precursor"] == "2"
+    assert "passes_dbs_cutoffs" not in header             # .msp には注釈の足切りが無い
+
+
+def test_msms_qualify_flags_a_top_hit_that_differs_from_msdial(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "Glutamine")
+    handle = _open(data, msp=library)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle))
+    assert out["msdial_name"] == "Glutamine" and out["msdial_rank"] is None
+    assert out["top_differs_from_msdial"] is True
+    _annotate_spot(monkeypatch, 20, "Unknown")
+    plain = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                              dataset_handle=handle))
+    assert "msdial_name" not in plain and "top_differs_from_msdial" not in plain
+
+
+def test_msms_qualify_reads_short_ion_mode_and_rejects_unreadable(data, library):
+    handle = _open(data, msp=library)
+    rules = {"target": {"inchikey": GABA_KEY}}
+    ok = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, rt=2.0, ion_mode="pos",
+                                           dataset_handle=handle))
+    assert ok["query"]["ion_mode"] == "positive" and ok["target_rank"] == 1
+    neg = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, rt=2.0, ion_mode="-",
+                                            dataset_handle=handle))
+    assert neg["status"] == "no_candidates"               # 陽イオンの記録は陰イオンの照合に出ない
+    bad = json.loads(R.library_msms_qualify(rules, precursor_mz=104.0706, ion_mode="sideways",
+                                            dataset_handle=handle))
+    assert bad["error"]["code"] == "DATASET_BAD_REQUEST"
+    assert bad["error"]["details"]["field"] == "ion_mode"
+
+
+@pytest.mark.parametrize("bad", [0, -1, float("nan"), True, "5"])
+def test_msms_qualify_rejects_a_bad_mz_tol_ppm(data, library, bad):
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=_open(data, msp=library),
+                                            mz_tol_ppm=bad))
+    assert out["error"]["details"]["field"] == "mz_tol_ppm"
+
+
+def test_claim_evidence_msms_takes_mz_tol_ppm_and_shows_the_window(data, library, monkeypatch):
+    _annotate_spot(monkeypatch, 20, "GABA", GABA_KEY)
+    handle = _open(data, msp=library)
+    claim = {**CLAIM, "msms": {"top_n": 3, "rules": {}, "mz_tol_ppm": 5}}
+    out = json.loads(R.dataset_claim_evidence(claim, dataset_handle=handle))
+    assert out["rule"]["msms"]["mz_tol_ppm"] == 5
+    msms = {c["feature_id"]: c["msms"] for c in out["candidates"]}["20"]
+    assert msms["window"] == {"mz_tol": 0.01, "mz_window": 0.01, "mz_tol_ppm": 5.0}
+    assert msms["qualify"]["top1_is_target"] is True
+    assert msms["msdial_name"] == "GABA" and msms["top_differs_from_msdial"] is False
+    top = msms["top"][0]
+    assert top["inchikey"] == GABA_KEY and top["delta_ppm"] == pytest.approx(0.0)
+    # 省けば規則に載らない（rule_hash を変えない）
+    plain = json.loads(R.dataset_claim_evidence({**CLAIM, "msms": {"top_n": 3, "rules": {}}},
+                                                dataset_handle=handle))
+    assert "mz_tol_ppm" not in plain["rule"]["msms"]
+    assert {c["feature_id"]: c["msms"] for c in plain["candidates"]}["20"]["window"][
+        "mz_tol_ppm"] is None
+    bad = json.loads(R.dataset_claim_evidence(
+        {**CLAIM, "msms": {"rules": {}, "mz_tol_ppm": -1}}, dataset_handle=handle))
+    assert bad["error"]["code"] == "CLAIM_SPEC_INVALID"
+
+
+def test_diagnostic_ions_neutral_loss_floor_and_key_named_errors(data, library):
+    handle = _open(data, msp=library)
+    out = json.loads(dcl_tools.dcl_diagnostic_ions(
+        [20], [{"neutral_loss": 17.0265, "label": "-NH3", "min_relative_intensity": 0.5},
+               {"neutral_loss": 35.0371, "label": "-NH3-H2O", "min_relative_intensity": 0.5}],
+        dataset_handle=handle))
+    rows = {r.split("\t")[1]: r.split("\t") for r in out["ions"].splitlines()[1:]}
+    assert rows["-NH3"][4] == "true"                       # 87.0441 は基準ピーク
+    assert rows["-NH3-H2O"][4] == "false"                  # 69.0335 は 0.4 しかない
+    bad = json.loads(dcl_tools.dcl_diagnostic_ions(
+        [20], [{"neutral_loss": 17.0265, "min_intensity": 0.5}], dataset_handle=handle))
+    assert bad["error"]["code"] == "MSMS_RULES_INVALID"
+    assert "min_intensity" in bad["error"]["message"] and "[0][0]" not in bad["error"]["message"]
+    assert bad["error"]["details"]["field"] == "ions[0]"
+
+
+def test_msms_qualify_shows_whether_each_candidate_passes_the_dbs_cutoffs(data, library, tmp_path):
+    from tests.dbs_fixture import record, write_dbs
+
+    dbs = write_dbs(tmp_path / "lab" / "lib.msp2.dbs", [("lib", [
+        record(ion_mode=0), record(name="Decoy", inchikey="AAAAAAAAAAAAAA-UHFFFAOYSA-N",
+                                   ion_mode=0, peaks=((30.0, 999.0),))], ["k"])])
+    handle = _open(data, msp=dbs)
+    out = json.loads(R.library_msms_qualify({"target": {"inchikey": GABA_KEY}}, spot_id=20,
+                                            dataset_handle=handle))
+    assert out["dbs_cutoffs"]["total_score_cutoff"] == pytest.approx(0.8)
+    assert out["dbs_cutoffs"]["minimum_spectrum_match"] == pytest.approx(1.0)
+    lines = out["candidates"].splitlines()
+    header = lines[0].split("\t")
+    rows = {r.split("\t")[1]: dict(zip(header, r.split("\t"))) for r in lines[1:]}
+    assert header[-1] == "passes_dbs_cutoffs"
+    assert rows["GABA"]["passes_dbs_cutoffs"] == "true"
+    assert rows["Decoy"]["passes_dbs_cutoffs"] == "false"
+    assert out["verdict"] == "qualified"                  # 足切りは材料。合否には当てない
+
+
+def test_dbs_cutoffs_compare_squared_dots_and_skip_the_sentinel():
+    from metabolomix.library import matching
+
+    assert matching.dbs_cutoffs({"ms1_tolerance": 0.01}) is None
+    cutoffs = matching.dbs_cutoffs({"squared_weighted_dot_cutoff": 0.25, "total_score_cutoff": 1.0,
+                                    "minimum_spectrum_match": 2.0})
+    assert set(cutoffs) == {"squared_weighted_dot_cutoff", "total_score_cutoff",
+                            "minimum_spectrum_match"}
+    good = {"weighted_dot_product": 0.6, "total_score": 1.5, "matched_peaks_count": 3}
+    assert matching.passes_dbs_cutoffs(good, cutoffs) is True
+    # weighted dot 0.45 の二乗は 0.2025 < 0.25
+    assert matching.passes_dbs_cutoffs({**good, "weighted_dot_product": 0.45}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs({**good, "weighted_dot_product": -1}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs({**good, "matched_peaks_count": 1}, cutoffs) is False
+    assert matching.passes_dbs_cutoffs(good, None) is None
+
+
+# ---------- dataset_homolog_check の auto は付加体を組成で比べる（最終検証 F26） ----------
+
+#: mzTab-M の SME の付加体は `[M+H]1+`。RT は炭素数が増えるほど早い（逆相の向きに反する）。
+HOMOLOG_FEATURES = tuple(
+    {"id": str(30 + i), "mz": mz, "rt": rt, "values": _scaled(10),
+     "sme": [{"name": name, "inchikey": key, "formula": formula, "adduct": "[M+H]1+", "theo": mz}]}
+    for i, (name, key, formula, mz, rt) in enumerate((
+        ("PC 32:1", "AAAAAAAAAAAAAA-UHFFFAOYSA-N", "C40H78NO8P", 732.5538, 5.0),
+        ("PC 34:1", "BBBBBBBBBBBBBB-UHFFFAOYSA-N", "C42H82NO8P", 760.5851, 4.0),
+        ("PC 36:1", "CCCCCCCCCCCCCC-UHFFFAOYSA-N", "C44H86NO8P", 788.6164, 3.0),
+    )))
+
+
+def test_homolog_check_auto_adduct_matches_the_mztab_spelling(tmp_path):
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=HOMOLOG_FEATURES)
+    handle = _open({"mztab": mztab})
+    for adduct in ("[M+H]1+", "[M+H]+"):
+        out = json.loads(R.dataset_homolog_check(
+            {"auto": {"lipid_class": "PC", "adduct": adduct}}, dataset_handle=handle))
+        assert out["verdict"] == "fail" and out["n_violations"] == 2, out
+        assert out["n_members"] == 3 and out["n_pairs"] == 2 and "notes" not in out
+    absent = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC", "adduct": "[M+Na]+"}}, dataset_handle=handle))
+    assert absent["verdict"] == "not_evaluable" and absent["n_members"] == 0 and absent["n_pairs"] == 0
+    [note] = absent["notes"]
+    assert "not_evaluable" in note and "0 件" in note
+
+
+def test_homolog_check_auto_reads_noted_sme_names_and_skips_internal_standards(tmp_path):
+    """Console / mzTab-M の SME の名前は MSP の記録名（注記付き）のまま。同族列も目標照合・MS/MS の合否と同じ読み手で
+    注記を外して読み、RT の規則違反を見つける。同位体の標識のある内部標準は天然の種の列に混ぜない（レビュー V2）。"""
+    noted = tuple({**f, "sme": [{**f["sme"][0], "name": f"{f['sme'][0]['name']}; ExampleDB ID-000{i}"}]}
+                  for i, f in enumerate(HOMOLOG_FEATURES, 1))
+    standard = {"id": "40", "mz": 767.6290, "rt": 9.0, "values": _scaled(10),
+                "sme": [{"name": "PC 15:0_18:1(d7)", "inchikey": "DDDDDDDDDDDDDD-UHFFFAOYSA-N",
+                         "formula": "C41H73D7NO8P", "adduct": "[M+H]1+", "theo": 767.6290}]}
+    mztab = write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=noted + (standard,))
+    handle = _open({"mztab": mztab})
+    out = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC", "adduct": "[M+H]+"}}, dataset_handle=handle))
+    assert out["verdict"] == "fail" and out["n_violations"] == 2, out
+    assert out["n_members"] == 3 and out["n_pairs"] == 2
+    header, *rows = out["members"].splitlines()
+    assert sorted(r.split("	")[0] for r in rows) == ["30", "31", "32"]     # 内部標準（40）は集めない
+    # P- は種のレベルで O- に直るので、P- のクラスは集まらず、notes がそう書く（断らない）
+    plasmalogen = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC P-"}}, dataset_handle=handle))
+    assert plasmalogen["verdict"] == "not_evaluable" and plasmalogen["n_members"] == 0
+    assert any("'PC O-'" in note for note in plasmalogen["notes"])
+    # 修飾を書いた P- の指定（"PC P-;O"）も同じ案内で、案内のクラスに修飾を付け直す（最終の確かめ: 案内が消えていた）
+    oxidized = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PC P-;O"}}, dataset_handle=handle))
+    assert oxidized["verdict"] == "not_evaluable" and oxidized["n_members"] == 0
+    assert any("'PC O-;O'" in note for note in oxidized["notes"]), oxidized["notes"]
+
+
+def test_homolog_check_auto_keeps_oxidized_species_in_their_own_series(tmp_path):
+    """SME の `PE 36:2;O (oxPE)` は PE 36:2 の重複ではない（最終検証 WB）。混ぜると 36:2 の RT の中央値が
+    (12.0 + 9.0) / 2 = 10.5 < 36:1 の 11.0 に下がって違反が消えていた。修飾ごとの列で比べて違反を残し、
+    集めた修飾の内訳を notes に、`members` に `modification` の列を書く。rule_hash は spec だけで決まる（変わらない）。"""
+    rows = (("PE 18:0_18:2", "EEEEEEEEEEEEEE-UHFFFAOYSA-N", "C41H78NO8P", 744.5538, 12.0),
+            ("PE 36:2;O (oxPE)", "FFFFFFFFFFFFFF-UHFFFAOYSA-N", "C41H78NO9P", 760.5487, 9.0),
+            ("PE 18:0_18:1", "GGGGGGGGGGGGGG-UHFFFAOYSA-N", "C41H80NO8P", 746.5694, 11.0))
+    features = tuple({"id": str(50 + i), "mz": mz, "rt": rt, "values": _scaled(10),
+                      "sme": [{"name": name, "inchikey": key, "formula": formula, "adduct": "[M+H]1+",
+                               "theo": mz}]}
+                     for i, (name, key, formula, mz, rt) in enumerate(rows))
+    handle = _open({"mztab": write_mztab(tmp_path / "run" / "AlignResult-1.mzTab", features=features)})
+    spec = {"auto": {"lipid_class": "PE", "adduct": "[M+H]+"}}
+    out = json.loads(R.dataset_homolog_check(spec, dataset_handle=handle))
+    assert out["verdict"] == "fail" and out["n_violations"] == 1 and out["n_pairs"] == 1, out
+    assert out["duplicates"] == {}
+    [violation] = _tsv_rows(out["violations"])
+    assert (violation["low"], violation["high"]) == ("36:1", "36:2")
+    members = {r["feature_id"]: r for r in _tsv_rows(out["members"])}
+    assert members["51"]["modification"] == "O" and members["51"]["status"] == "ok"
+    assert members["50"]["modification"] == "" and members["50"]["status"] == "violation"
+    [note] = out["notes"]
+    assert "無修飾 2 件" in note and ";O 1 件" in note and "'PE;O'" in note
+    from metabolomix.analysis import homolog
+    assert out["rule_hash"] == homolog.rule_hash(homolog.normalize_spec(spec))
+    # 修飾を書けばその列だけ: 1 種なので not_evaluable（修飾の内訳の注記は出ない）
+    oxidized = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PE;O"}}, dataset_handle=handle))
+    assert oxidized["verdict"] == "not_evaluable" and oxidized["n_members"] == 1
+    assert len(oxidized["notes"]) == 1 and "not_evaluable" in oxidized["notes"][0]
+    # 修飾の無い列は前と同じ形（modification の列を足さない）
+    plain = json.loads(R.dataset_homolog_check(
+        {"auto": {"lipid_class": "PE;"}}, dataset_handle=handle))
+    assert plain["members"].splitlines()[0].split("\t") == ["feature_id", "carbons", "double_bonds", "rt",
+                                                             "status"]

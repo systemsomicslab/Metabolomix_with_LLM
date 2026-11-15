@@ -30,7 +30,8 @@ def _stats(**kwargs):
 
 def test_default_has_no_label_columns():
     plain = ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
-             "detected_a", "detected_b"]
+             "detected_a", "detected_b", "detected_units_a", "detected_units_b", "presence_p",
+             "detection_driven"]
     header, _ = _stats(merge_split=False)
     assert header == plain
     # merge_split（既定 true）は末尾に merged_from だけを足す

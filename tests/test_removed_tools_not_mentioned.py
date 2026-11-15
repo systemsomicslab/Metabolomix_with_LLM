@@ -83,3 +83,28 @@ def test_word_boundary_has_no_false_positives():
     assert not WORD.search("_list_reports dataset_loaded my_dataset_load_x")
     assert WORD.search("`dataset_load` で読む")
     assert WORD.search("arf_parser()")
+
+
+#: 消した符号と引数（仕分けの一覧の直し 2026-11-14）。いまの挙動として文書・コードに残すと、返らない符号を
+#: 待たせ・無い引数を渡させる。CLAUDE.md は統合の記録を書く場所なので対象外（経緯は HISTRY と spec）。
+REMOVED_NAMES = ("EXPLORATORY_ONLY_DATASET", "QUANT_NORMALIZE_STEP_REQUIRED", "PIPELINE_DOWNSTREAM_REMOVED",
+                 "REPEATED_MEASURES_UNSUPPORTED", "LIBRARY_BAD_REQUEST", "library_names")
+NAME_WORD = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(map(re.escape, REMOVED_NAMES)) + r")(?![A-Za-z0-9_])")
+
+
+def test_removed_codes_and_arguments_are_not_mentioned():
+    offenders = {}
+    for path in _doc_files():
+        if path.name == "CLAUDE.md":
+            continue
+        hits = set(NAME_WORD.findall(path.read_text(encoding="utf-8")))
+        if hits:
+            offenders[path.relative_to(ROOT).as_posix()] = sorted(hits)
+    for path in sorted((ROOT / "metabolomix").rglob("*.py")):
+        hits = set()
+        for text in _code_texts(path):
+            hits.update(NAME_WORD.findall(text))
+        if hits:
+            offenders[path.relative_to(ROOT).as_posix()] = sorted(hits)
+    assert not offenders, "消した符号・引数の名前が残っている:\n" + "\n".join(
+        f"  {path}: {', '.join(names)}" for path, names in offenders.items())

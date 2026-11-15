@@ -7,7 +7,7 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
 
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
-- 候補: 同じ付加体、|Δm/z| ≤ `ppm`、`min_rt_gap` < |ΔRT| ≤ `max_rt_gap` の 2 スポット
+- 候補: 同じ付加体（綴りでなく組成で比べる。`[M+HCOO]-` と `[M+CHO2]-`）、|Δm/z| ≤ `ppm`、`min_rt_gap` < |ΔRT| ≤ `max_rt_gap` の 2 スポット
   （m/z の昇順に並べて掃くので、全組を比べない）。
 - 割れの判定: 試料ごとの受け持ち（検出状態があれば検出、無ければ 2 スポットの値の大きい方）が
   補い合うこと。検出状態があれば「両方で検出された試料」が `max_both_detected` 以下で、
@@ -35,6 +35,9 @@ MS-DIAL のアライメントは、1 つの物質を 2 つ以上のスポット�
   analysis_spec）はこれを呼ぶ。
 - 残すのは受け持ち（`n_owned`）の多い側、同数なら小さい ID（`_keep_first`）。割れの群の並びは
   **残す ID が先頭**（`merge_groups[].features`・`usable_merge_groups` の戻り・`merged_from`）。
+- `dataset_alignment_qc` の最後の結果はデータセットに持たせる（`remember`）。統計の側
+  （`feature_search.merge_plan`）は JSON のパスを省かれたとき `remembered` で読み、データの指紋か
+  `metadata_revision`（試料の表・除外の変更で進む）が変わっていれば使わない。
 """
 from __future__ import annotations
 
@@ -49,10 +52,12 @@ from typing import NamedTuple
 import numpy as np
 
 from metabolomix.core.atomic_io import DomainError
+from metabolomix.msdial.adducts import same_adduct
 
 __all__ = ["SCHEMA", "TYPES", "MergedMatrix", "find_split_pairs", "merge_matrix_columns",
            "id_order", "inchikey_match", "names_compatible", "order_label", "read_qc_file",
-           "sample_injection_order", "split_partners", "usable_merge_groups"]
+           "remember", "remembered", "sample_injection_order", "split_partners",
+           "usable_merge_groups"]
 
 SCHEMA = "alignment-qc.v1"
 TYPES = ("injection_block", "group_aligned", "interleaved")
@@ -131,7 +136,8 @@ def _injection_order(names: list[str], rows: list[dict | None],
 
     引数で渡されればそれ（`metadata`。1 試料でも欠ける・数でなければ DomainError——
     呼び出し側が明示した順を黙って捨てない）、無ければ実験情報シートの `injection_order`
-    （出所が利用者のシートなら `manifest`、mzTab などから推した値なら `metadata`）。
+    （出所が利用者のシートなら `manifest`、mzTab などから推した値なら `metadata`。全試料の値をシートが
+    宣言 `# injection_order_source = filename` でファイル名の順と書いていれば、値はそのまま出所を `filename`）。
     シートの値が 1 試料でも欠ければ、推した順を信じずファイル名（試料名）の順にする
     （pipeline の参照ファイルの選び方 `choose_alignment_reference` と同じ規約）。
     """
@@ -147,8 +153,14 @@ def _injection_order(names: list[str], rows: list[dict | None],
         return order, "metadata"
     order = [_number((row or {}).get("injection_order")) for row in rows]
     if all(v is not None for v in order) and names:
-        sources = {(((row or {}).get("provenance") or {}).get("injection_order") or {})
-                   .get("source") for row in rows}
+        from metabolomix.analysis.sample_manifest import order_provenance_label
+
+        provs = [((row or {}).get("provenance") or {}).get("injection_order") or {} for row in rows]
+        if all(order_provenance_label(p) == "filename" for p in provs):
+            # シートが宣言でファイル名の順と書いた値（`# injection_order_source = filename`）は、自前の
+            # ファイル名の順と同じく実際の注入順とは限らない（値はシートのまま。ρ は出さない）
+            return order, "filename"
+        sources = {p.get("source") for p in provs}
         return order, "manifest" if sources == {"user_manifest"} else "metadata"
     ranked = sorted(range(len(names)), key=lambda i: (names[i], i))
     order = [0.0] * len(names)
@@ -396,8 +408,9 @@ def find_split_pairs(ds, *, ppm: float = 15.0, min_rt_gap: float = 0.05,
             gap = abs(rt_b - rt_a)
             if not params["min_rt_gap"] < gap <= params["max_rt_gap"]:
                 continue
-            # 付加体が分からないスポットは組にしない（None どうしを「同じ」と読まない）。
-            if adducts.get(fid_a) is None or adducts.get(fid_a) != adducts.get(fid_b):
+            # 付加体が分からないスポットは組にしない（None どうしを「同じ」と読まない）。付加体は綴りでなく
+            # 組成で比べる（2 つの半分の注釈が別のライブラリの綴り `[M+HCOO]-` / `[M+CHO2]-` のことがある）。
+            if adducts.get(fid_a) is None or not same_adduct(adducts.get(fid_a), adducts.get(fid_b)):
                 continue
             assessed = _owners(matrix[index_a], matrix[index_b],
                                None if mask is None else mask[index_a],
@@ -659,6 +672,41 @@ def read_qc_file(path_text: str, ds, *, field: str,
                           "（dataset_fingerprint が合わない、または無い）。このデータセットで "
                           "dataset_alignment_qc を実行し直す", {"field": field})
     return qc, hashlib.sha256(raw).hexdigest()
+
+
+#: `dataset_alignment_qc` の最後の結果を持つ DatasetState の属性。
+_LAST_ATTR = "last_alignment_qc"
+
+
+def remember(ds, qc: dict, *, sha256: str) -> None:
+    """`dataset_alignment_qc` の最後の結果をデータセットに持たせる（前の結果は置き換える）。
+
+    `sha256` は `output_path` に書くのと同じバイト列の hash（ファイルで渡したときと同じ値になる）。
+    いつの試料の表・除外で作ったかを `metadata_revision` で覚え、`remembered` が照合する。
+    """
+    setattr(ds, _LAST_ATTR, {"qc": qc, "sha256": sha256,
+                             "metadata_revision": getattr(ds, "metadata_revision", 0)})
+
+
+def remembered(ds, *, dataset_hash: str | None = None) -> tuple[dict, str] | None:
+    """データセットが持つ最後の結果 `(中身, sha256)`。今も使えなければ捨てて None。
+
+    使えないのは、データの指紋（`dataset_fingerprint`）が作ったときと違うか、試料の表・除外が変わった
+    （`metadata_revision` が進んだ）とき——群と注入順で割れの型が変わるので、古い組を黙って使わない。
+    `dataset_hash` は計算済みの `dataset_fingerprint(ds)`（任意）。
+    """
+    entry = getattr(ds, _LAST_ATTR, None)
+    if not entry:
+        return None
+    if dataset_hash is None:
+        from metabolomix.analysis.result_state import dataset_fingerprint
+
+        dataset_hash = dataset_fingerprint(ds)
+    if (entry["qc"].get("dataset_fingerprint") != dataset_hash
+            or entry["metadata_revision"] != getattr(ds, "metadata_revision", 0)):
+        setattr(ds, _LAST_ATTR, None)
+        return None
+    return entry["qc"], entry["sha256"]
 
 
 def usable_merge_groups(qc: dict, feature_ids) -> tuple[list[list[str]], list[list[str]]]:

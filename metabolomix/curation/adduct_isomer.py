@@ -7,7 +7,10 @@
 `ok` だった——ので、アラインメント全体の注釈付きスポットを相手にする。
 
 - 仮定するアダクトは X の極性の `DEFAULT_ADDUCTS` と X 自身のアダクト。Y 自身のアダクトは除く
-  （同じアダクトで同じ m/z なら重複スポットで、別の話）。
+  （同じアダクトで同じ m/z なら重複スポットで、別の話）。Y 自身のアダクトかは綴りでなく組成で比べ
+  （`msdial.adducts.same_adduct`。`.arf2` の AdductType は MSP の綴り `[M+CHO2]-`・`[M-H-H2O]-` のことがあり、
+  既定の `[M+HCOO]-`・`[M-H2O-H]-` と同じイオン）、Y と同じ m/z になるアダクト（`[M+H]+` に対する `[2M+2H]2+`）も
+  同じ理由で除く。
 - 組成式もクラスも同じ組は同じ分子種の別アダクト（正しい注釈）なので対象外。
 - 強さは段階（`evidence_tier`）で比べる。Y の段階が上なら `strong`、同じ段階なら Y の
   HeightAverage が X の `adduct_isomer_height_ratio` 倍以上のときだけ `minor`。
@@ -22,7 +25,7 @@ from functools import lru_cache
 
 from metabolomix.arf2.match_results import name_prefix
 from metabolomix.curation.judge import is_chain_level_name
-from metabolomix.msdial.adducts import mz_from_neutral, neutral_from_mz, parse_adduct
+from metabolomix.msdial.adducts import SAME_MZ_TOL, mz_from_neutral, neutral_from_mz, parse_adduct, same_adduct
 from metabolomix.msdial.analysis_params import DEFAULT_ADDUCTS
 
 _UNANNOTATED = {"", "unknown"}         # evidence.select_spots と同じ「未注釈」
@@ -74,8 +77,9 @@ def _severity(x: dict, y: dict, th: dict) -> str | None:
 
 def _candidate_adducts(x_adduct) -> list:
     names = DEFAULT_ADDUCTS[_POLARITY_KEY[x_adduct.polarity]]
-    adducts = [_adduct(n) for n in names]
-    return [a for a in adducts if a is not None] + ([x_adduct] if x_adduct.name not in names else [])
+    adducts = [a for a in (_adduct(n) for n in names) if a is not None]
+    # X 自身のアダクトは、既定に別の綴りで同じイオンがあれば足さない（同じ仮定を 2 度試さない）
+    return adducts + ([] if any(same_adduct(x_adduct.name, a.name) for a in adducts) else [x_adduct])
 
 
 def find_adduct_isomer(target: dict, pool: list[dict], th: dict) -> dict | None:
@@ -96,9 +100,12 @@ def find_adduct_isomer(target: dict, pool: list[dict], th: dict) -> dict | None:
             continue
         neutral = neutral_from_mz(y["mz"], y_adduct)
         for adduct in _candidate_adducts(x_adduct):
-            if adduct.name == y_adduct.name:
+            # Y 自身のアダクト（綴りでなく組成で比べる）と、Y と同じ m/z になるアダクトは Y そのもの（重複スポット）
+            if same_adduct(adduct.name, y_adduct.name):
                 continue
             expected = mz_from_neutral(neutral, adduct)
+            if abs(expected - y["mz"]) <= SAME_MZ_TOL:
+                continue
             ppm = (target["mz"] - expected) / expected * 1e6
             if abs(ppm) > th["adduct_isomer_ppm"]:
                 continue

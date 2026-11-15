@@ -93,6 +93,9 @@ TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "cancelled"})
 #: （計画の正準は `engine.build_stages`）。
 UNIT_HANDLERS = ("prepare_input", "upstream", "validate_outputs")
 
+#: 単位の根の下の Console の実行フォルダ（attempt ごと。`console_attempt_dir`）。
+CONSOLE_RUN_SUBDIR = "console"
+
 #: run の記録に絶対パスのまま保存してよいのは、実際に単位のフォルダの外を指す場合だけ
 #: （原本メソッド・LBM・実行体は通常その外にある）。中を指すときだけ相対化する対象。
 _RELATIVIZABLE_INPUT_PATHS = (("method", "source_path"), ("lbm", "path"), ("exe", "path"))
@@ -171,6 +174,15 @@ def run_units(record: dict) -> dict[str, dict]:
             "inputs": record.get("inputs") or {},
             "upstream": record.get("upstream") or {}}}
     return dict(record.get("units") or {})
+
+
+def console_attempt_dir(unit_root: Path, attempt) -> Path:
+    """単位の Console の実行フォルダ（`<unit_root>/console/attempt-NNNN/`。attempt は 1 から）。
+
+    `service._run_console_unit` が Console の job をここに作り、`recovery` が「Console をまだ起こして
+    いない」かをここで見る（2 か所で同じ規約を使う）。
+    """
+    return Path(unit_root) / CONSOLE_RUN_SUBDIR / f"attempt-{max(1, int(attempt or 1)):04d}"
 
 
 def unit_stage_id(handler: str, polarity: str | None) -> str:

@@ -1,14 +1,30 @@
 """POS と NEG の統合（Task 12）。
 
-正規化済み（または正規化を飛ばした）2 つのデータセットを、特徴を縦に連結した 1 つの派生
-データセットにする。試料は規則プラグインの `match_samples` で共通 ID に照合し、食い違えば
-黙って部分集合で統合せず止まる（`QUANT_MERGE_SAMPLE_MISMATCH`。対応表で進められる）。
+正規化の状態がそろった 2 つのデータセット（両方を同じく正規化したもの、または両方とも
+未正規化のもの。未正規化は skip=True で飛ばしたものも、正規化の工程を通っていないものも同じ）を、
+特徴を縦に連結した 1 つの派生データセットにする。試料は規則プラグインの `match_samples` で
+共通 ID に照合し、食い違えば黙って部分集合で統合せず止まる（`QUANT_MERGE_SAMPLE_MISMATCH`。
+対応表で進められる）。
 
 特徴 ID は `positive:<id>` / `negative:<id>`（msdial-workflow と同じ書式）。`derive` は親に無い
 ID の副次データを落とすので、特徴ごとの副次データ（候補・注釈・タグ・試料ごとの m/z）は
 ここで両側の ID に付け替えて載せる。キュレーションのフラグは写さず、極性ごとの `.arf2` の
 場所を `quant_state["arf2_by_polarity"]` に置く（統合後の ID と ID 空間が違うため。選別が
 その時点のフラグを極性ごとに読み直す）。
+
+試料の表は陽イオンのもの: 陽イオンのデータセットの試料の表（当てたシート `sample_metadata_rows` と
+`sample_ids` も）をそのまま持ち、統合したデータセットの試料の表＝陽イオンの測定。陰イオンは別の注入・別の
+測定の列なので、試料ごとの陰イオンのバッチと注入順（統計エンジンが陰イオンのデータセットから読む値）を
+`quant_state["polarity_runs"]["negative"]` に残し、統合したデータセットが陽イオンの測定として読む値と同じかを
+`polarity_runs_match` に書く。統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（正規化の係数も極性ごと）。
+試料は共通 ID へ改名するので、元の試料名を `quant_state["source_sample_names"]` に残す（raw のパスが無い
+データセットのファイルの順は、陽イオンの元の試料名で見る。`sample_manifest.file_order_keys`）。
+統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、バッチ・注入順は陽イオンの測定だけを決める
+（群・役割・include などの試料の実験情報は試料ごとなので両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
+ハンドルにシートを当てて統合し直す。
+除外（`dataset_exclude`）は両極性のハンドルから統合後の ID に写す（`merged_exclusions`。特徴は接頭辞つき、試料は
+共通 ID の和）。統合は極性ごとのハンドルから作るので、前の統合したハンドルに当てたシートと除外は統合し直すと
+引き継がれない。
 """
 from __future__ import annotations
 
@@ -19,8 +35,11 @@ from pathlib import Path
 
 import numpy as np
 
+from metabolomix.analysis.stats.data import sample_runs
+from metabolomix.core import handle_dispatch
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_errors import missing_state
+from metabolomix.core.session_state import dataset_assay_kind
 from metabolomix.core.serialization import json_payload
 from metabolomix.quant import derive as qderive
 from metabolomix.quant.inputs import quant_error
@@ -29,18 +48,19 @@ from metabolomix.quant.plugin import call, load_rules, rules_settings
 from metabolomix.quant.records import merged_record_folder, write_record
 from metabolomix.quant.table import require_msdial_source, resolve_quant_polarity
 
-__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "read_mapping"]
+__all__ = ["MAPPING_COLUMNS", "merge", "merge_tool", "merged_assay_kind", "merged_exclusions",
+           "merged_source_verification", "normalize_status", "read_mapping"]
 
 MAPPING_COLUMNS = ("mode", "source_sample", "sample_id", "group", "sample_type")
 #: 規則プラグイン（msdial-workflow の config.MODES・対応表の `mode` 列）が使うモード名。
 MODES = {"positive": "positive", "negative": "negative"}
 _MODE_ALIASES = {"pos": "positive", "positive": "positive", "neg": "negative",
                  "negative": "negative"}
-#: ハンドルのロックを待つ秒数（超えたら QUANT_HANDLE_BUSY）。
-LOCK_TIMEOUT = 30.0
 _MAX_LISTED = 20
 _HOW_MAPPING = ("mapping_csv（列: mode, source_sample, sample_id, group, sample_type。"
                 "mode は positive / negative）")
+#: 出所の裏取り（`DatasetState.source_verification`）の強い順。統合は弱いほうを名乗る。
+_VERIFICATION_RANK = {"verified": 2, "legacy_unverified": 1, "direct_unverified": 0}
 
 
 def read_mapping(path: Path) -> tuple[list[dict], str]:
@@ -85,27 +105,38 @@ def _check_polarities(pos_ds, neg_ds, polarities) -> None:
                           {"positive": polarities[0], "negative": polarities[1]})
 
 
+def normalize_status(state: dict) -> str:
+    """正規化の工程をどう通ったか: `applied`（dataset_quant_apply）/ `skipped`（skip=True）/
+    `not_run`（どちらも通っていない。値はそのまま＝未正規化）。"""
+    if "normalize" in (state.get("steps") or []):
+        return "applied"
+    if "normalize" in (state.get("skipped") or []):
+        return "skipped"
+    return "not_run"
+
+
 def _check_states(pos_ds, neg_ds) -> tuple[dict, dict]:
-    states = []
-    for label, ds in (("positive", pos_ds), ("negative", neg_ds)):
-        state = getattr(ds, "quant_state", None)
-        if not state or not ({"normalize"} & set((state.get("steps") or [])
-                                                  + (state.get("skipped") or []))):
-            raise DomainError(
-                "QUANT_NORMALIZE_STEP_REQUIRED",
-                f"{label} のデータセットは正規化の工程を通っていません。統合の前に "
-                "dataset_quant_apply で正規化してください（正規化しないなら skip=True で"
-                "飛ばした記録を作ります）。",
-                {"polarity": label})
-        states.append(state)
-    pos, neg = states
-    diffs = {k: [pos.get(k), neg.get(k)] for k in ("normalized", "method", "unit")
-             if pos.get(k) != neg.get(k)}
+    """両側の quant_state（無ければ空 dict）。正規化の状態が違えば統合しない。
+
+    正規化の工程を通っていない側（`quant_state` が無い・選別だけ通った等）は未正規化
+    （normalized=False・method=None・unit=None）として扱う。skip=True で飛ばしたのと同じ値なので、
+    未正規化どうしは手順を挟ませずにそのまま統合する。
+    """
+    pos, neg = ((getattr(ds, "quant_state", None) or {}) for ds in (pos_ds, neg_ds))
+
+    def view(state: dict) -> dict:
+        return {"normalized": bool(state.get("normalized")), "method": state.get("method"),
+                "unit": state.get("unit")}
+
+    pos_view, neg_view = view(pos), view(neg)
+    diffs = {k: [pos_view[k], neg_view[k]] for k in pos_view if pos_view[k] != neg_view[k]}
     if diffs:
         raise DomainError("QUANT_MERGE_STATE_MISMATCH",
                           "正規化の状態（normalized・method・unit）が 2 つのデータセットで違うため、"
-                          "統合しません。両方に同じ正規化を掛けるか、両方を飛ばしてください。",
-                          {"differs": diffs})
+                          "統合しません。両方に同じ正規化を掛けるか、両方とも正規化せずに渡して"
+                          "ください。",
+                          {"differs": diffs, "normalize": {"positive": normalize_status(pos),
+                                                           "negative": normalize_status(neg)}})
     return pos, neg
 
 
@@ -190,6 +221,69 @@ def _arf2_path(ds) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
+def merged_source_verification(pos_ds, neg_ds) -> tuple[str, dict]:
+    """統合の出所の裏取りと、陽陰で違うときだけ戻り値に足す欄。
+
+    統合は両側の特徴を持つので、POS の値をそのまま名乗らない。陽陰で同じならその値、違えば
+    弱いほう（verified > legacy_unverified > direct_unverified。知らない値はいちばん弱いものと
+    して扱う）を名乗り、戻り値に `source_verification`（`merged` と極性ごとの値）を足す。
+    """
+    sides = {prefix: getattr(ds, "source_verification", None) or "direct_unverified"
+             for prefix, ds in (("positive", pos_ds), ("negative", neg_ds))}
+    merged = min(sides.values(), key=lambda value: _VERIFICATION_RANK.get(value, -1))
+    if sides["positive"] == sides["negative"]:
+        return merged, {}
+    return merged, {"source_verification": {"merged": merged, **sides}}
+
+
+def merged_assay_kind(pos_ds, neg_ds, *, pos_handle_id: str | None = None,
+                      neg_handle_id: str | None = None) -> tuple[str, list[str]]:
+    """統合のアッセイ種別と、陽陰で違うときだけの注記。
+
+    `derive` は陽イオンの写しなので、そのままでは陰イオンにだけ記録した種別（`record_objective` は書いた
+    ハンドルだけを切り替える）を落とす。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
+    `metabolite` で食い違えば `unknown`（どちらの解釈規則も黙って当てない）。食い違いの注記は、誤っている側の
+    極性のハンドル（`pos_handle_id` / `neg_handle_id`）へ `record_objective(assay_kind=...)` で記録し直してから
+    統合し直すよう言う——統合したハンドルは陽イオンの写しで解析フォルダ（`analysis_dir`）も陽イオンのものなので、
+    そこへ記録すると陽イオンの解析フォルダに結び付いた目的を書き、開き直した陽イオンのデータセットの種別まで変わる。
+    """
+    sides = {"positive": dataset_assay_kind(pos_ds), "negative": dataset_assay_kind(neg_ds)}
+    if sides["positive"] == sides["negative"]:
+        return sides["positive"], []
+    known = {side: kind for side, kind in sides.items() if kind != "unknown"}
+    if len(known) == 1:
+        (side, kind), = known.items()
+        other = "negative" if side == "positive" else "positive"
+        return kind, [f"assay_kind は {side} の {kind} を採った（{other} は unknown）。"]
+    parents = (f"positive={pos_handle_id or '陽イオンのハンドル'}, "
+               f"negative={neg_handle_id or '陰イオンのハンドル'}")
+    return "unknown", [f"assay_kind が陽陰で食い違う（positive={sides['positive']}, negative={sides['negative']}）"
+                       "ので unknown にした。誤っている側の極性のハンドル（" + parents + "）へ "
+                       "record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...) で記録し直してから"
+                       "統合し直す（統合したハンドルへ記録すると、陽イオンの解析フォルダに結び付いた目的に書くので、"
+                       "開き直した陽イオンのデータセットの種別まで変わる）。"]
+
+
+def _runs_match(pos_runs: list[dict], neg_runs: list[dict]) -> dict:
+    """陰イオンの測定（バッチ・注入順）が陽イオンと同じか。
+
+    `injection_order`: 両方分かる試料のどれかで違えば `different`、違わないが片方でも分からない試料が
+    あれば `unknown`、それ以外は `same`。`batch`: 違う試料があれば `different`、無ければ `same`
+    （分からない同士は同じ）。`n_samples_differ` は注入順（両方分かるもの）かバッチの違う試料の数。
+    """
+    orders = [(p.get("injection_order"), n.get("injection_order")) for p, n in zip(pos_runs, neg_runs)]
+    order_diff = [a is not None and b is not None and a != b for a, b in orders]
+    batch_diff = [p.get("batch") != n.get("batch") for p, n in zip(pos_runs, neg_runs)]
+    if any(order_diff):
+        order = "different"
+    elif any(a is None or b is None for a, b in orders):
+        order = "unknown"
+    else:
+        order = "same"
+    return {"injection_order": order, "batch": "different" if any(batch_diff) else "same",
+            "n_samples_differ": sum(a or b for a, b in zip(order_diff, batch_diff))}
+
+
 def _union(a, b) -> list:
     return list(a) + [x for x in b if x not in a]
 
@@ -200,6 +294,34 @@ def _rename_inner(per_sample, names, ids, prefix) -> dict:
             for fid, inner in (per_sample or {}).items()}
 
 
+def merged_exclusions(pos_ds, neg_ds, pos_ids, neg_ids) -> tuple[dict, dict, list[str]]:
+    """両極性のハンドルの除外（`dataset_exclude`）を統合後の ID に写す: `(特徴の除外, 試料の除外, notes)`。
+
+    特徴は `positive:<id>` / `negative:<id>`（理由はそのまま）。試料は各側の試料名を共通 ID（`pos_ids` / `neg_ids`。
+    入力の名前と位置がそろう）へ写して和をとる。統合したデータセットの試料は両極性の列を 1 つに持つので、片方の
+    極性だけで外した試料も両極性の特徴から外れる。理由には外した極性を付ける（両方なら `; ` でつなぐ）。
+    その極性のデータセットに無い名前・ID の除外は写さない。何も引き継がなければ notes は空。
+    """
+    features: dict[str, str] = {}
+    samples: dict[str, list[str]] = {}
+    for prefix, ds, ids in (("positive", pos_ds, pos_ids), ("negative", neg_ds, neg_ids)):
+        known = set(ds.feature_ids)
+        features.update({f"{prefix}:{fid}": reason
+                         for fid, reason in (getattr(ds, "excluded_features", None) or {}).items()
+                         if fid in known})
+        rename = dict(zip(ds.sample_names, ids))
+        for name, reason in (getattr(ds, "excluded_samples", None) or {}).items():
+            if name in rename:
+                samples.setdefault(str(rename[name]), []).append(f"{prefix}: {reason}")
+    by_sample = {sid: "; ".join(reasons) for sid, reasons in samples.items()}
+    if not (features or by_sample):
+        return features, by_sample, []
+    return features, by_sample, [
+        f"極性ごとのハンドルの除外（dataset_exclude）を引き継いだ: 特徴 {len(features)}（positive: / negative: を付けた ID）・"
+        f"試料 {len(by_sample)}（共通 ID。片方の極性だけで外した試料も、統合したハンドルでは両極性の特徴から外す。"
+        "理由に外した極性を付けた）。"]
+
+
 def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
           pos_handle_id: str | None = None, neg_handle_id: str | None = None,
           mapping_input: tuple[str, str] | None = None, folder: Path | None = None,
@@ -208,8 +330,16 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
 
     `mapping_input` は (対応表のファイル名, sha256)（記録の入力に `mapping:<名前>` で載る）。
     正規化の状態（normalized・method・unit）が 2 つで違えば統合しない（method の違いも）。
+    正規化の工程を通っていない側は未正規化として扱い、各側が正規化をどう通ったか
+    （`applied` / `skipped` / `not_run`）を記録の `settings.normalize` と戻り値の `normalize` に書く。
     対応表の group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は POS の
-    ものを使う）。
+    ものを使う。陽イオンに当てたシートも試料の表ごと引き継ぐ）。陰イオンの試料ごとのバッチ・注入順は
+    `quant_state["polarity_runs"]["negative"]`（統合後の試料名 → `run_of` の形）に残し、統合したデータセットが
+    陽イオンの測定として読む値（`sample_runs(統合後)`）と同じかを `polarity_runs_match` と戻り値・記録の
+    `negative_runs` に書く。どちらかが探索専用（`exploratory_only`）なら統合も探索専用で、理由は極性付きで
+    合わせる（戻り値の `exploratory`）。アッセイ種別は両側から決める（`merged_assay_kind`。戻り値の `assay_kind`、
+    陽陰で違えば `notes`）。両側の除外は統合後の ID に写す（`merged_exclusions`。引き継いだときだけ戻り値の
+    `exclusions` と `notes`、記録の `summary.exclusions`）。
     `folder` を省くと 2 つの解析フォルダの共通の親（無理なら QUANT_RECORD_LOCATION_REQUIRED）。
     `polarities` は (positive 側, negative 側) の極性（省くとデータセットから決める）。
     記録は検査がすべて通ってから書く（止まるときは何も書かない）。
@@ -227,6 +357,9 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     folder = Path(folder)
 
     order = [neg_pos[sid] for sid in pos_ids]  # 共通 ID（POS の順）ごとの NEG の列
+    # 陰イオンの測定（バッチ・注入順）を統合後の試料名で残す（陽陰は別の注入。統計エンジンが極性ごとに読む）
+    neg_table = sample_runs(neg_ds)
+    neg_runs = {str(sid): neg_table[str(neg_ds.sample_names[j])] for sid, j in zip(pos_ids, order)}
     matrix = np.vstack([np.asarray(pos_ds.feature_matrix, dtype=float),
                         np.asarray(neg_ds.feature_matrix, dtype=float)[:, order]])
     detected = np.vstack([np.asarray(pos_ds.detected_mask, dtype=bool),
@@ -247,23 +380,21 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     if mapping_input is not None:
         inputs[f"mapping:{mapping_input[0]}"] = mapping_input[1]
     parents = [pos_state.get("record_id"), neg_state.get("record_id")]
+    normalize = {"positive": normalize_status(pos_state), "negative": normalize_status(neg_state)}
     n_pos, n_neg = len(pos_ds.feature_ids), len(neg_ds.feature_ids)
     counts = {"positive": n_pos, "negative": n_neg, "merged": n_pos + n_neg}
     qderive.check_capacity()  # 登録できない記録を残さない
-    record = write_record(
-        folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
-        settings={"rules": rules_settings(plugin), "match_rule": rule,
-                  "mapping": mapping_input[0] if mapping_input else None,
-                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id}},
-        summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
-                 "normalized": bool(pos_state.get("normalized"))})
+    # 記録 ID は記録を書いてから入れる（陽陰の測定の比較は、統合したデータセットが読む値で行うため）
     state = qderive.quant_state(
         normalized=bool(pos_state.get("normalized")), method=pos_state.get("method"),
-        unit=pos_state.get("unit"), record_id=record["record_id"],
+        unit=pos_state.get("unit"), record_id=None,
         steps=_union(pos_state.get("steps") or [], neg_state.get("steps") or []) + ["merge"],
         skipped=_union(pos_state.get("skipped") or [], neg_state.get("skipped") or []),
         record_folder=str(folder),
         arf2_by_polarity={"positive": _arf2_path(pos_ds), "negative": _arf2_path(neg_ds)},
+        polarity_runs={"negative": neg_runs},
+        source_sample_names={"positive": [str(n) for n in pos_ds.sample_names],
+                             "negative": [str(neg_ds.sample_names[j]) for j in order]},
         internal_standard_ids=_is_ids(pos_state, "positive") + _is_ids(neg_state, "negative"))
     new = qderive.derive(pos_ds, matrix=matrix, detected=detected, feature_ids=fids,
                          feature_metadata=metadata, sample_names=pos_ids,
@@ -288,11 +419,53 @@ def merge(pos_ds, neg_ds, *, mapping_rows: list[dict] | None = None,
     new.artifact_paths = {}
     new.job_path = None
     new.ion_mode_majority = None  # 陽陰の両方を持つので極性は決まらない
+    # SME の理論 m/z の出所（mzTab-M か、組成式と付加体の計算か）。2 極性で違えば mixed。
+    sources = {getattr(ds, "theoretical_mz_source", "mztab") for ds in (pos_ds, neg_ds)}
+    new.theoretical_mz_source = sources.pop() if len(sources) == 1 else "mixed"
+    # 計算した理論 m/z の特徴は、統合後の ID（`<極性>:<id>`）で持つ（根拠バンドルが特徴ごとに読む）。
+    new.theoretical_mz_computed = {f"{prefix}:{fid}" for prefix, ds in (("positive", pos_ds),
+                                                                      ("negative", neg_ds))
+                                   for fid in getattr(ds, "theoretical_mz_computed", None) or ()}
     new.curation_flags = None  # 選別が極性ごとの .arf2（quant_state["arf2_by_polarity"]）から読む
-    new.sample_metadata_rows = None
+    # 除外は陽イオンの写しにしない（統合後の ID に写し、陰イオンの除外も落とさない）
+    new.excluded_features, new.excluded_samples, exclusion_notes = merged_exclusions(
+        pos_ds, neg_ds, pos_ids, neg_ids)
+    # 試料の表（当てたシート `sample_metadata_rows` と `sample_ids`）は陽イオンのものを derive がそのまま
+    # 引き継ぐ（統合したデータセットの試料の表＝陽イオンの測定。陽イオンだけで前処理したのと同じ値を読む）。
     new.library_record = None
+    # 探索専用の印と出所の裏取りは POS だけでなく両側から（どちらかが探索専用なら統合も探索専用で
+    # 理由は極性付き。裏取りは弱いほう。POS だけの写しでは、裏取りの無い NEG の特徴まで
+    # 書き出しのメタ行で verified を名乗っていた）。
+    qderive.carry_exploratory(new, [pos_ds, neg_ds], labels=["positive", "negative"])
+    new.source_verification, verification_info = merged_source_verification(pos_ds, neg_ds)
+    # アッセイ種別も POS の写しにしない（NEG にだけ記録した種別を黙って落とさない）
+    new.assay_kind, kind_notes = merged_assay_kind(pos_ds, neg_ds, pos_handle_id=pos_handle_id,
+                                                   neg_handle_id=neg_handle_id)
+    # 陰イオンの測定を、統合したデータセットが陽イオンの測定として読む値（統計エンジンと同じ読み方）と比べる
+    pos_runs = sample_runs(new)
+    runs_match = _runs_match([pos_runs[str(sid)] for sid in pos_ids],
+                             [neg_runs[str(sid)] for sid in pos_ids])
+    new.quant_state["polarity_runs_match"] = {"negative": runs_match}
+    record = write_record(
+        folder, "merge", inputs=inputs, parent_ids=[p for p in parents if p],
+        settings={"rules": rules_settings(plugin), "match_rule": rule,
+                  "mapping": mapping_input[0] if mapping_input else None,
+                  "handles": {"positive": pos_handle_id, "negative": neg_handle_id},
+                  "normalize": normalize},
+        summary={"n_features": counts, "n_samples": len(pos_ids), "unit": pos_state.get("unit"),
+                 "normalized": bool(pos_state.get("normalized")), "negative_runs": runs_match,
+                 # 引き継いだ除外（統合後の ID）。引き継がなければ欄を足さない（記録の形を変えない）
+                 **({"exclusions": {"features": sorted(new.excluded_features),
+                                    "samples": sorted(new.excluded_samples)}} if exclusion_notes else {})})
+    new.quant_state["record_id"] = record["record_id"]
+    notes = kind_notes + exclusion_notes
     info = {"record_id": record["record_id"], "rule": rule, "n_features": counts,
-            "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"]}
+            "n_samples": len(pos_ids), "unit": state["unit"], "normalized": state["normalized"],
+            "normalize": normalize, "negative_runs": runs_match, "assay_kind": new.assay_kind,
+            **verification_info, **qderive.exploratory_info(new),
+            **({"exclusions": {"features": len(new.excluded_features), "samples": len(new.excluded_samples)}}
+               if exclusion_notes else {}),
+            **({"notes": notes} if notes else {})}
     return new, info
 
 
@@ -319,17 +492,15 @@ def merge_tool(pos_holder, neg_holder, mapping_csv: str | None, record_folder: s
             return quant_error("QUANT_RECORD_FOLDER_INVALID",
                                f"record_folder は既存のフォルダを指してください: {folder.name}",
                                {"label": folder.name})
-    # 2 つのハンドルのロックを handle_id の順に取る（逆順の呼び出しと噛み合っても止まらない）
+    # 2 つのハンドルのロックを handle_id の順に取る（逆順の呼び出しと噛み合っても止まらない）。待つのは
+    # 全部で最長 handle_dispatch.HANDLE_LOCK_WAIT 秒（ほかのツールと同じ上限）。待ちきれなければ何もせずに、
+    # ほかのツールと同じ HANDLE_BUSY（ロックを持つ長い仕事があればその job_id と道具）を返す——中継が
+    # 打ち切った後でロックが空いて、知らされない統合のハンドルが登録されることはない。
     ordered = sorted({id(h): h for h in holders}.values(), key=lambda h: h.handle_id)
-    acquired = []
+    acquired, busy = handle_dispatch.acquire_all(ordered)
+    if busy is not None:
+        return busy
     try:
-        for handle in ordered:
-            if not handle.lock.acquire(timeout=LOCK_TIMEOUT):
-                return quant_error("QUANT_HANDLE_BUSY",
-                                   "ハンドルが別の処理で使われていて待ちきれませんでした。"
-                                   "少し待ってからやり直してください。",
-                                   {"dataset_handle": handle.handle_id})
-            acquired.append(handle)
         pos_ds, neg_ds = pos_holder.dataset, neg_holder.dataset
         try:
             mapping_rows, mapping_input = None, None

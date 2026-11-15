@@ -16,9 +16,10 @@ import しない**——グローバルな現在状態を触る関数はワー�
     ``legacy_unverified``   ジョブ経由だが、証跡が無い/一致しない（旧実行など）。
     ``direct_unverified``   .mzTab を直接読んだ。実行の出所を語れない。
 ``exploratory_only``
-    完了していない実行（partial / failed / running）の出力。探索には使えるが、
-    2 群比較と TSV 出力は拒否する——欠けた検体を欠測ではなく「その群には無い」と
-    読み違えたまま結論が出てしまう。
+    完了していない実行（partial / failed / running）の出力（pipeline の単位なら、検証を
+    通っていない単位の出力も）。比較も書き出しもできるが、欠けた検体を欠測ではなく
+    「その群には無い」と読み違えうるので、書き出し（差次的 TSV のメタ行・根拠バンドルの
+    manifest）・図・最初の概観（比較を使う段の事実）に探索専用の印と理由（``exploratory_reason``）を書く。
 
 `completed` という文字列だけで `verified` にはしない。旧実装はそれを唯一の根拠に
 していたが、旧経路の completed は「ファイルが増えた」以上の意味を持たなかった。
@@ -202,6 +203,13 @@ class JobGate:
         return _INCOMPLETE_WARNING.format(status=self.job.status)
 
     @property
+    def exploratory_reason(self) -> str | None:
+        """探索専用にした理由（書き出しのメタ行に載せる 1 行。完了していれば None）。"""
+        if not self.exploratory_only:
+            return None
+        return f"解析ジョブが完了していない（status {self.job.status}）"
+
+    @property
     def unverified_warning(self) -> str | None:
         """出所を裏取りできなかったときの警告（裏取りできていれば None）。"""
         if self.verified:
@@ -238,7 +246,7 @@ def job_gate(job_path: Path, *, allow_incomplete: bool) -> JobGate:
             f"未完了の解析ジョブです（status={job.status}）。"
             "中断時点の生成物なので、既定では読み込みません。"
             "探索目的で読むなら allow_incomplete=True を明示してください"
-            "（2 群比較と差次的エクスポートは拒否されます）。",
+            "（読んだデータセットは探索専用の印が付き、書き出しと図にその旨が載ります）。",
             {"job_id": job.job_id, "status": job.status, "error": job.error})
 
     if not job.primary_mztab_files:
@@ -276,6 +284,7 @@ def _load_from_job(job_path: Path, *, allow_incomplete: bool):
         ds.validation_result.setdefault("warnings", []).insert(0, msp_warning)
 
     ds.exploratory_only = gate.exploratory_only
+    ds.exploratory_reason = gate.exploratory_reason
     if ds.exploratory_only:
         ds.validation_result.setdefault("warnings", []).insert(0, gate.incomplete_warning)
 

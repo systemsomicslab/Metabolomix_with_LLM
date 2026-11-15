@@ -32,7 +32,7 @@ from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
-from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct
+from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct, same_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
 
 __all__ = [
@@ -44,6 +44,7 @@ __all__ = [
     "STATS_COLUMNS_LABELED",
     "WINDOW_COLUMNS",
     "classify_identity",
+    "estimate_rt_offset",
     "feature_stats",
     "match_target",
     "merge_map",
@@ -61,12 +62,17 @@ __all__ = [
 ]
 
 # 付加体の層の既定（spec §4.1。手順書 v5 工程 7-1 の第 1 段と同じ集合に、陰イオンの酢酸付加
-# `[M+CH3COO]-` を足した。MS-DIAL の mzTab は `[M+CH3COO]1-` と書き、比較時に `1` を落とす）。
-# ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ質量なので別に持たない）。
+# `[M+CH3COO]-` と、陽イオンのメタノール付加 `[M+CH3OH+H]+`・二重の脱水 `[M+H-2H2O]+` を足した
+# （2026-11-14。どちらも Console の標準のメソッドが探す付加体）。ギ酸付加は `[M+FA-H]-`（`[M+HCOO]-` と同じ
+# イオンなので別に持たない）。SME の付加体との照合は綴りでなく組成で比べる（`msdial.adducts.same_adduct`:
+# MS-DIAL の mzTab の `[M+HCOO]1-`・MSP の `[M+CHO2]-` は `[M+FA-H]-` に、`[M+Hac-H]-`・`[M+C2H3O2]-` は
+# `[M+CH3COO]-` に一致する）。
+# 層を変えると、付加体の層を省いた目標の rule_hash が変わる。
 DEFAULT_ADDUCT_TIERS: dict[str, list[list[str]]] = {
     "positive": [
         ["[M+H]+", "[M]+"],
-        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+"],
+        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+",
+         "[M+CH3OH+H]+", "[M+H-2H2O]+"],
     ],
     "negative": [
         ["[M-H]-"],
@@ -88,17 +94,6 @@ _POLARITIES = ("positive", "negative")
 _SIGN_OF = {"positive": "+", "negative": "-"}
 _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
-
-#: `[M+H]1+`（mzTab-M）と `[M+H]+`（利用者の記法）を同じ adduct として扱うための
-#: 末尾電荷表記。`1+` / `1-` だけを落とす——`2+` を `+` に潰すと価数が消える。
-_ADDUCT_UNIT_CHARGE_RE = re.compile(r"\]1([+-])$")
-
-
-def _normalize_adduct(value) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip().replace(" ", "")
-    return _ADDUCT_UNIT_CHARGE_RE.sub(r"]\1", text).casefold()
 
 
 # parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
@@ -160,7 +155,12 @@ def _clean_tiers(target_id, tiers) -> list[list[str]]:
 
 
 def _species_target(target_id, raw: dict) -> dict | None:
-    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。"""
+    """``lipid_species`` を種のレベルに直す。指定が無ければ None（InChIKey の目標）。
+
+    同位体の標識のある名前（内部標準 ``PC 15:0_18:1(d7)``）は断る: SME・SML の候補の名前も標識付きは種に読まない
+    （``msms_rules.name_lipid_species``）ので種として一致を確かめられず、GOSLIN は標識を落として読む（PC 33:1）ので、
+    受けると天然の種を探して、内部標準そのものの同定を「SME・SML の裏付けが無い」と言ってしまう。"""
+    from metabolomix.analysis.msms_rules import isotope_labelled
     from metabolomix.msdial.lipid_identity import lipid_species_of, normalize_lipid_name
 
     value = raw.get("lipid_species")
@@ -169,6 +169,13 @@ def _species_target(target_id, raw: dict) -> dict | None:
     if raw.get("inchikey") is not None:
         raise _invalid(target_id, "lipid_species",
                        "inchikey と lipid_species は同時に指定できない（どちらか一方）")
+    if isotope_labelled(value):
+        raise _invalid(
+            target_id, "lipid_species",
+            f"lipid_species に同位体の標識（内部標準）がある: {value!r}。SME・SML の候補の名前も標識付きは種に"
+            "読まない（MS/MS の合否と同じ）ので種として一致を確かめられず、標識を外して読むと天然の種を探してしまう。"
+            "天然の種を探すなら標識の無い名前を渡す。内部標準そのものは m/z と RT の窓"
+            "（dataset_feature_search の窓検索）で探す")
     species = lipid_species_of(value) if isinstance(value, str) else None
     if species is None:
         raise _invalid(
@@ -316,7 +323,8 @@ def _normalize_one(raw, dataset_polarity: str | None):
 
 
 def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
-                      ppm_offset: dict | None = None) -> list[dict]:
+                      ppm_offset: dict | None = None,
+                      rt_offset_min: float | None = None) -> list[dict]:
     """目標のリストを検証して正規化する（既定値を埋め、理論 m/z を全付加体について計算する）。
 
     検証失敗は ``FEATURE_TARGET_INVALID``（details に ``target_id`` と ``field``）。
@@ -328,11 +336,17 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
     ``ppm_offset``（正規化済み。`mass_accuracy.normalize_ppm_offset`）を渡したときだけ、各目標に
     ``ppm_offset``（付加体 → その理論 m/z の帯の中心のずれ）を足す（rule_hash に入る）。渡さなければ
     目標の辞書は今と同じ。
+
+    ``rt_offset_min``（分。有限の数）を渡したときだけ、``rt_min`` のある目標に ``rt_offset_min`` を足す
+    （RT の窓の中心を ``rt_min + rt_offset_min`` にずらす。幅と ``delta_rt`` 列は変えない。rule_hash に入る）。
+    渡さなければ目標の辞書は今と同じ。
     """
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
     if not isinstance(targets, list):
         raise _invalid(None, "targets", "targets はリストで指定する")
+    if rt_offset_min is not None and not _is_number(rt_offset_min):
+        raise _invalid(None, "rt_offset_min", f"rt_offset_min は有限の数（分）: {rt_offset_min!r}")
     if len(targets) > MAX_TARGETS:
         raise _invalid(None, "targets",
                        f"目標は 1 回 {MAX_TARGETS} 件まで（{len(targets)} 件渡された）")
@@ -352,6 +366,8 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
             if ppm_offset is not None:
                 item["ppm_offset"] = {adduct: offset_for(mz, ppm_offset)
                                       for adduct, mz in item["theoretical_mz"].items()}
+            if rt_offset_min is not None and item["rt_min"] is not None:
+                item["rt_offset_min"] = float(rt_offset_min)
             normalized.append(item)
     if undecided:
         raise DomainError(
@@ -373,7 +389,8 @@ def rule_hash(normalized_targets: list[dict], *, merge_groups_hash: str | None =
 
     覆うのは照合を左右する欄だけ: ``target_id``・InChIKey 先頭ブロック（種の目標は
     ``lipid_species``）・分子式か
-    expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``。``name`` は
+    expected_mz・付加体の層と理論 m/z・ppm・RT・目標の極性・``applicable``、渡したときだけの
+    ``ppm_offset`` と ``rt_offset_min``（省けば欄ごと無いので hash は変わらない）。``name`` は
     入れず、目標は ``target_id`` の順に並べ替えてから作る——表示名の変更や
     ``targets`` の並べ替えでは hash は変わらない。
 
@@ -422,18 +439,22 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
     識別子を借りて一致してしまう（spec §2）。
 
     ``lipid_species`` を渡すと（種の目標）、識別子は InChIKey の先頭ブロックではなく
-    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読めない
+    候補自身の ``chemical_name``（SML なら ``name``）を種のレベルに読んだもの。読み方は MS/MS の
+    合否（ライブラリの記録の種）と同じ ``msms_rules.name_lipid_species``（名前 → 注記を外した名前。
+    `PE 36:2;O (oxPE)` は `PE 36:2;O`。同位体の標識のある内部標準の名前は読まない）。読めない
     名前は InChIKey の無い候補と同じく評価できないものとして飛ばす。
     """
     if (inchikey_block is None) == (lipid_species is None):
         raise ValueError("inchikey_block と lipid_species のどちらか一方を渡す")
     if lipid_species is not None:
-        from metabolomix.msdial.lipid_identity import lipid_species_of
+        from metabolomix.analysis.msms_rules import name_lipid_species
 
-        wanted, key_of, name_key = lipid_species, lipid_species_of, "chemical_name"
+        def key_of(name):
+            return name_lipid_species(name)[0]
+
+        wanted, name_key = lipid_species, "chemical_name"
     else:
         wanted, key_of, name_key = inchikey_block, _key_block, "inchikey"
-    wanted_adduct = _normalize_adduct(adduct)
     parsed = parse_adduct(adduct)
     wanted_charge = parsed.charge if parsed is not None else None
 
@@ -449,7 +470,8 @@ def _identity(candidates, annotation, *, inchikey_block: str | None = None,
         if block != wanted:
             reasons.append("identifier_mismatch")
             continue
-        if _normalize_adduct(candidate.get("adduct")) != wanted_adduct:
+        # 綴りでなく組成で比べる（`[M+HCOO]1-` と `[M+FA-H]-` は同じイオン。読めない表記は綴りで比べる）
+        if not same_adduct(candidate.get("adduct"), adduct):
             reasons.append("adduct_mismatch")
             continue
         charge = candidate.get("charge")
@@ -501,8 +523,8 @@ def classify_identity(candidates: list[dict], annotation: dict | None, *,
     ``sml_match`` / ``unannotated`` / ``contradicted``。``sme_rank`` は ``sme_match`` の
     ときだけ一致した候補の rank、それ以外は None。
 
-    - SME 候補（rank を問わない）のどれかが InChIKey 先頭ブロック・付加体（正規化して比較）・
-      価数のすべてで一致 → ``sme_match``。電荷が None の候補は、付加体が一致していれば
+    - SME 候補（rank を問わない）のどれかが InChIKey 先頭ブロック・付加体（綴りでなく組成で比較。
+      ``msdial.adducts.same_adduct``）・価数のすべてで一致 → ``sme_match``。電荷が None の候補は、付加体が一致していれば
       電荷の確認を通す（欠測は反証ではない）。
     - InChIKey を持つ SME 候補がどれも一致しない → ``contradicted``（理由は出た順に一意化）。
     - InChIKey を持つ SME 候補が無ければ SME は無いものとして SML を見る（SME 候補が
@@ -555,7 +577,8 @@ def match_target(ds, target: dict, *, max_results: int,
 
     行は（qualified が先、層の昇順、|ppm| の昇順）に並べ、``max_results`` 件で打ち切って
     残りの件数を ``truncated`` に書く。``counts`` は特徴 ID の一意な件数（打ち切り前）。
-    ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min。数値は丸めない
+    ``ppm`` は符号つき（観測 − 理論）、``delta_rt`` は RT − rt_min（``rt_offset_min`` があっても
+    rt_min からの差のまま。RT の窓は ``|RT − (rt_min + rt_offset_min)| ≤ rt_tol_min``）。数値は丸めない
     （丸めはツール層の仕事）。``sme_rank`` は ``sme_match`` の行で一致した候補の rank だが、
     その候補が rank を持たなければ ``sme_match`` でも None になりうる。
 
@@ -596,6 +619,8 @@ def match_target(ds, target: dict, *, max_results: int,
     centers = target.get("ppm_offset") or {}
     rt_min = target["rt_min"]
     rt_tol = target["rt_tol_min"]
+    # RT の窓の中心（`rt_offset_min` があればずらす。`delta_rt` 列は RT − rt_min のまま）
+    rt_center = None if rt_min is None else rt_min + target.get("rt_offset_min", 0.0)
     feature_ids = list(ds.feature_ids)
     if mz_array is None:
         mz_array = _feature_mz_array(ds)
@@ -610,7 +635,7 @@ def match_target(ds, target: dict, *, max_results: int,
             rt_ok, delta_rt = True, None
         elif _is_number(rt):
             delta_rt = rt - rt_min
-            rt_ok = abs(delta_rt) <= rt_tol + _BOUNDARY_EPS
+            rt_ok = abs(rt - rt_center) <= rt_tol + _BOUNDARY_EPS
         else:
             rt_ok, delta_rt = False, None
         if not partner:
@@ -722,15 +747,123 @@ def match_target(ds, target: dict, *, max_results: int,
     return out
 
 
+# ---------- 系統的な RT のずれの推定（適用はしない） ----------
+
+#: 一意の一致を探す RT の幅（分。目標の rt_min の前後）。参照の表と特徴の RT がずれていても拾える幅。
+RT_OFFSET_WINDOW_MIN = 2.0
+#: ずれを示す（`shift_min` を出す）のに要る一意の一致の数と、中央値の絶対値の下限（分）。
+RT_OFFSET_MIN_PAIRS = 10
+RT_OFFSET_MIN_ABS_MEDIAN = 0.2
+#: 1 つの目標の別の付加体に一致した特徴を、同じ化合物の付加体として 1 組にまとめる RT の差の上限（分）。
+#: `dataset_feature_relations` が同時溶出とみなす `rt_window` の既定と同じ値。
+RT_OFFSET_COELUTE_MIN = 0.05
+
+
+def estimate_rt_offset(ds, targets: list[dict], *, mz_array: np.ndarray | None = None,
+                       merged_from: dict[str, list[str]] | None = None) -> dict:
+    """目標の ``rt_min`` と特徴の一意の一致から、系統的な RT のずれ（特徴の RT − 目標の rt_min）を推定する。
+
+    推定するだけで、照合には当てない（当てるなら ``rt_offset_min`` を渡して呼び直す）。一致は、目標の
+    付加体の質量の窓（目標の ``ppm``・``ppm_offset`` の中心）に入り、``|RT − rt_min| ≤``
+    ``RT_OFFSET_WINDOW_MIN`` で、MS/MS の同定が別物質（``contradicted``）でない特徴。``rt_min`` は
+    ``rt_offset_min`` を当てる前の値。割れの組は残す ID で 1 つと数える。
+
+    規則は reanalysis-study の paper-rt-offset（論文の行ごとに m/z が 1 つ）を、付加体を複数持つ目標に広げたもの:
+    目標の付加体ごとに一致がたかだか 1 つ（2 つ以上の付加体があれば一意でない）で、一致した特徴どうしが
+    ``RT_OFFSET_COELUTE_MIN`` 以内に同時溶出し（1 つの化合物の ``[M+H]+`` と ``[M+Na]+`` などとみなす）、
+    そのどの特徴に一致する目標もこの目標だけのとき、1 組と数える（差は特徴ごとの差の中央値）。付加体ごとに
+    数えないのは、同じ化合物を付加体の数だけ数えて組の数を水増ししないため。
+    ``rt_min`` の無い目標・``not_applicable`` の目標・除外した特徴は使わない。
+
+    戻り値 ``{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}``（四分位は 2 組以上のとき
+    ``statistics.quantiles(n=4)``）。``shift_min`` は一意の一致が ``RT_OFFSET_MIN_PAIRS`` 以上かつ
+    ``|中央値| > RT_OFFSET_MIN_ABS_MEDIAN`` のときだけ中央値、そうでなければ None で、理由を
+    ``reason``（``too_few_pairs`` / ``below_threshold``）に書く。数値は丸めない。
+    """
+    import statistics
+    from collections import Counter
+
+    if mz_array is None:
+        mz_array = _feature_mz_array(ds)
+    kept_of = {fid: kept for kept, group in (merged_from or {}).items() for fid in group}
+    feature_ids = list(ds.feature_ids)
+    excluded = getattr(ds, "excluded_features", None) or {}
+    # 目標ごとに 付加体 → {特徴（割れの組は残す ID）: [RT − rt_min, ...]}
+    per_target: list[dict[str, dict[str, list[float]]]] = []
+    for target in targets:
+        rt_min = target.get("rt_min")
+        if rt_min is None or not target.get("applicable", True):
+            continue
+        identifier = ({"lipid_species": target["lipid_species"]} if target.get("lipid_species")
+                      else {"inchikey_block": target["inchikey_block"]})
+        centers = target.get("ppm_offset") or {}
+        by_adduct: dict[str, dict[str, list[float]]] = {}
+        for tier in target["adduct_tiers"]:
+            for adduct in tier:
+                theo = target["theoretical_mz"][adduct]
+                with np.errstate(invalid="ignore"):
+                    hits = np.nonzero(np.abs((mz_array - theo) / theo * 1e6 - centers.get(adduct, 0.0))
+                                      <= target["ppm"] + _BOUNDARY_EPS)[0]
+                for index in hits:
+                    fid = feature_ids[index]
+                    rt = (ds.feature_metadata.get(fid) or {}).get("rt")
+                    if (fid in excluded or not _is_number(rt)
+                            or abs(rt - rt_min) > RT_OFFSET_WINDOW_MIN + _BOUNDARY_EPS):
+                        continue
+                    identity = _identity(ds.feature_candidates.get(fid) or [],
+                                         ds.feature_annotations.get(fid), **identifier, adduct=adduct)
+                    if identity["evidence"] == "contradicted":
+                        continue
+                    (by_adduct.setdefault(adduct, {})
+                     .setdefault(kept_of.get(fid, fid), []).append(rt - rt_min))
+        per_target.append(by_adduct)
+    targets_of = Counter(unit for by_adduct in per_target
+                         for unit in {u for units in by_adduct.values() for u in units})
+    deltas = []
+    for by_adduct in per_target:
+        if not by_adduct or any(len(units) != 1 for units in by_adduct.values()):
+            continue                                   # 一致なし・ある付加体に 2 つ以上
+        per_unit: dict[str, list[float]] = {}
+        for units in by_adduct.values():
+            for unit, values in units.items():
+                per_unit.setdefault(unit, []).extend(values)
+        if any(targets_of[unit] != 1 for unit in per_unit):
+            continue                                   # 特徴から見て目標が 1 つでない
+        unit_deltas = [statistics.median(values) for values in per_unit.values()]
+        if max(unit_deltas) - min(unit_deltas) > RT_OFFSET_COELUTE_MIN + _BOUNDARY_EPS:
+            continue                                   # 付加体どうしが同時溶出しない（別の化合物かもしれない）
+        deltas.append(statistics.median(unit_deltas))
+    out = {"n_pairs": len(deltas), "median_min": None, "q1_min": None, "q3_min": None,
+           "shift_min": None,
+           "criteria": {"window_min": RT_OFFSET_WINDOW_MIN, "min_pairs": RT_OFFSET_MIN_PAIRS,
+                        "min_abs_median_min": RT_OFFSET_MIN_ABS_MEDIAN,
+                        "coelute_min": RT_OFFSET_COELUTE_MIN}}
+    if deltas:
+        out["median_min"] = statistics.median(deltas)
+    if len(deltas) >= 2:
+        out["q1_min"], _, out["q3_min"] = statistics.quantiles(deltas, n=4)
+    if len(deltas) < RT_OFFSET_MIN_PAIRS:
+        out["reason"] = "too_few_pairs"
+    elif abs(out["median_min"]) <= RT_OFFSET_MIN_ABS_MEDIAN:
+        out["reason"] = "below_threshold"
+    else:
+        out["shift_min"] = out["median_min"]
+    return out
+
+
 # ---------- 窓検索と差次的統計の結合（spec §4.2・§6） ----------
 
-#: 窓検索の行の列（この順で TSV にする）。
+#: 窓検索の行の列（この順で TSV にする）。`inchikey_ambiguity` は名前から InChIKey を引いたとき
+#: 研究室 MSP に同じ名前の別の InChIKey があり、構造からも導けず InChIKey が空のまま残った特徴の印
+#: （`name_conflict`。無ければ空）。
 WINDOW_COLUMNS = ("feature_id", "mz", "rt", "evidence", "name", "inchikey", "adduct", "n_sme",
-                  "ontology", "n_detected", "normalized", "msi_level")
+                  "ontology", "n_detected", "normalized", "msi_level", "inchikey_ambiguity")
 
-#: 特徴ごとの統計の行の列。
+#: 特徴ごとの統計の行の列。`detected_a/b` は注入単位の検出数（マスクから数え直す）、`detected_units_a/b`・
+#: `presence_p`・`detection_driven` は比較の記録の個体単位の検出から（`as_two_group`）。
 STATS_COLUMNS = ("feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a", "mean_b",
-                 "detected_a", "detected_b")
+                 "detected_a", "detected_b", "detected_units_a", "detected_units_b", "presence_p",
+                 "detection_driven")
 
 #: `with_group_labels=True` のときの列（既存の列の後ろに群の名前と比較の向きを足す）。
 STATS_COLUMNS_LABELED = STATS_COLUMNS + ("comparison", "group_a", "group_b",
@@ -756,23 +889,32 @@ def _window_identity(candidates, annotation) -> dict:
     ``chemical_name`` ・**その候補自身の** ``inchikey`` ・``adduct``。SME が無ければ SML 注釈
     （曖昧なら名前は None、InChIKey は ``;`` 連結）。目標の判定（`_identity`）とは別物で、
     ここは「この特徴には何が付いているか」を並べるだけ。
+    ``inchikey_ambiguity`` は、その証拠の名前から InChIKey を引いたとき同名衝突があった（研究室 MSP に
+    同じ名前の別の InChIKey があり、どれにも決めず、構造からも導けなかった）なら ``name_conflict``、無ければ None。
     """
     candidates = list(candidates or [])
     if candidates:
         top = min(candidates, key=_rank_key)
         return {"evidence": "sme", "name": top.get("chemical_name"),
                 "inchikey": top.get("inchikey"), "adduct": top.get("adduct"),
-                "n_sme": len(candidates)}
+                "n_sme": len(candidates), "inchikey_ambiguity": _ambiguity(top)}
     annotation = annotation or {}
     if annotation:
         if annotation.get("ambiguous"):
             keys = [key for key in annotation.get("inchikeys") or [] if key]
             return {"evidence": "sml", "name": None, "inchikey": ";".join(keys) or None,
-                    "adduct": annotation.get("adduct"), "n_sme": 0}
+                    "adduct": annotation.get("adduct"), "n_sme": 0,
+                    "inchikey_ambiguity": _ambiguity(annotation)}
         return {"evidence": "sml", "name": annotation.get("name"),
                 "inchikey": annotation.get("inchikey"), "adduct": annotation.get("adduct"),
-                "n_sme": 0}
-    return {"evidence": "none", "name": None, "inchikey": None, "adduct": None, "n_sme": 0}
+                "n_sme": 0, "inchikey_ambiguity": _ambiguity(annotation)}
+    return {"evidence": "none", "name": None, "inchikey": None, "adduct": None, "n_sme": 0,
+            "inchikey_ambiguity": None}
+
+
+def _ambiguity(entry: dict) -> str | None:
+    """同名衝突の印（`mztab.dataset_state._resolve_inchikey` が付ける `inchikey_name_conflict`）。"""
+    return "name_conflict" if (entry or {}).get("inchikey_name_conflict") else None
 
 
 def _check_range(low, high, label: str) -> None:
@@ -878,7 +1020,7 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
         annotation = ds.feature_annotations.get(fid) or {}
         # 同定の標準化の列は解析フォルダのデータセットだけが持つ（mzTab-M は None のまま）
         ident = meta.get("identity") or {}
-        rows.append({
+        row = {
             "feature_id": fid,
             "mz": float(mz) if _is_number(mz) else None,
             "rt": float(rt) if _is_number(rt) else None,
@@ -887,7 +1029,8 @@ def search_window(ds, *, feature_ids: list[str] | None, min_mz, max_mz, min_rt, 
             "n_detected": None if counts is None else int(counts[index]),
             "normalized": ident.get("normalized"),
             "msi_level": ident.get("msi_level"),
-        })
+        }
+        rows.append({column: row[column] for column in WINDOW_COLUMNS})   # 列の順を TSV と揃える
     return rows, len(hits) - len(rows)
 
 
@@ -1031,6 +1174,11 @@ def _num_or_none(value):
     return float(value) if _is_number(value) else None
 
 
+def _count_or_none(value):
+    """検出の例数（整数）。数でなければ None（bool は数えない）。"""
+    return int(value) if _is_number(value) else None
+
+
 def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
                   with_labels: bool = False) -> list[dict]:
     """特徴 × 結果の統計行（特徴が外側、結果が内側）。注釈の有無に関わらず全特徴に付ける。
@@ -1040,7 +1188,10 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
     結果の行列に無い）。後の 2 つは ``log2fc p q mean_a mean_b`` がすべて None。``q`` は結果の
     値をそのまま返し、ここで BH を掛け直さない（母集団は結果が持つ）。``tested`` でも q が
     None のことはある。``detected_a/b`` は検出例数で、マスクから対応を保証して取れないとき
-    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。
+    None（呼び出し側が注記する）。取れるときは status に関わらず付ける。``detected_units_a/b`` は
+    結果の行の個体単位の検出数（``presence_p`` と ``detection_driven`` の分子。行があれば status に関わらず。
+    検出状態が無ければ None）、``presence_p`` は結果の行の検出の有無の Fisher の p（個体単位。同じく）、
+    ``detection_driven`` は差が検出の有無から来ているかの印（``tested`` の行だけ、ほかは None）。
 
     ``with_labels=True`` のときだけ ``comparison``・``group_a``・``group_b``・
     ``log2fc_test_over_ref``（``log2fc`` と同じ値。group_b / group_a）を足す。
@@ -1060,6 +1211,7 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
             else:
                 status = "not_testable"
             tested = status == "tested"
+            row_of = source or {}                  # 結果の行の写し（行列に無ければ空）
             det_a, det_b = counter(fid) if counter is not None else (None, None)
             rows.append({
                 "feature_id": fid,
@@ -1072,6 +1224,10 @@ def feature_stats(ds, feature_ids: list[str], results: list[dict], *,
                 "mean_b": _num_or_none(source.get("mean_b")) if tested else None,
                 "detected_a": det_a,
                 "detected_b": det_b,
+                "detected_units_a": _count_or_none(row_of.get("detected_units_a")),
+                "detected_units_b": _count_or_none(row_of.get("detected_units_b")),
+                "presence_p": _num_or_none(row_of.get("presence_p")),
+                "detection_driven": source.get("detection_driven") if tested else None,
             })
             if with_labels:
                 rows[-1].update({"comparison": comparison_name(result),
@@ -1085,7 +1241,8 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
 
     ``bh_population``: ``n_features_total`` はデータセットの特徴数、``n_in_matrix`` は結果の
     行数（前処理後に残った特徴）、``n_tested`` は p が有限の行数。q の解釈にはこの母集団が要る
-    （窓で絞った特徴の数ではなく、この母集団で BH が掛かっている）。
+    （窓で絞った特徴の数ではなく、この母集団で BH が掛かっている）。比較の記録から読み替えた結果
+    （``n_units_a`` を持つ）には、個体の数 ``n_units_a`` / ``n_units_b`` も足す。
     """
     summaries = []
     for result in results:
@@ -1104,6 +1261,9 @@ def result_summaries(ds, results: list[dict]) -> list[dict]:
             },
             "caveats": list(result.get("caveats") or []),
         })
+        if "n_units_a" in result:
+            # 比較の記録の個体の数（`presence_p` / `detection_driven` の分母。`n_a` / `n_b` は注入の数）
+            summaries[-1].update(n_units_a=result["n_units_a"], n_units_b=result.get("n_units_b"))
     return summaries
 
 
@@ -1116,15 +1276,22 @@ def merge_plan(ds, *, alignment_qc_path: str | None = None, dataset_hash: str | 
     群は `alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット）だけで、
     ここでは足さない・広げない（`analysis_spec` の `features.merge_split` と同じ規則・同じ実装）。
     ``alignment_qc_path`` は `dataset_alignment_qc` が書いた JSON（今のデータセットの指紋で
-    作ったものだけを受ける）で、無ければその場で `find_split_pairs(ds)` を既定の閾値で回す。
+    作ったものだけを受ける）。無ければ `dataset_alignment_qc` がこのデータセットに持たせた最後の結果
+    （`alignment_qc.remembered`。データ・試料の表・除外が変わっていないものだけ）、それも無ければ
+    その場で `find_split_pairs(ds)` を既定の閾値で回す。``source`` は `alignment_qc`（ファイル）・
+    `last_alignment_qc`（最後の結果）・`find_split_pairs`（その場）。
     ``groups`` は残す ID が先頭の並び、``skipped`` はデータセットに 2 つ揃わない群。
     ``dataset_hash`` は計算済みの `dataset_fingerprint(ds)`（任意）、``field`` はエラーに書く欄の名前。
     """
     from metabolomix.analysis import alignment_qc
 
     if alignment_qc_path is None:
-        qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
-        source, sha256 = "find_split_pairs", None
+        last = alignment_qc.remembered(ds, dataset_hash=dataset_hash)
+        if last is not None:
+            (qc, sha256), source = last, "last_alignment_qc"
+        else:
+            qc = alignment_qc.find_split_pairs(ds, dataset_hash=dataset_hash)
+            source, sha256 = "find_split_pairs", None
     else:
         qc, sha256 = alignment_qc.read_qc_file(alignment_qc_path, ds, field=field,
                                                dataset_hash=dataset_hash)
@@ -1195,9 +1362,13 @@ def retest_merged(ds, result: dict, *, groups=()) -> dict:
                           f"まとめた行列で {result_id} の比較をやり直せない: {exc.message}",
                           {"result_id": result_id, "cause": exc.code}) from exc
     if analysis is None:
+        # 記録の spec をそのまま当て直すので、記録の analysis_id は必ずやり直しにある。無ければ記録の
+        # analysis_id と spec の analyses が食い違っている（内部の不整合。まとめる前の数字では埋めない）
         raise DomainError("FEATURE_MERGE_UNAVAILABLE",
-                          f"まとめた行列に {result_id} の前処理を当て直せない"
-                          "（利用者への確認が要る前処理）。", {"result_id": result_id})
+                          f"まとめた行列でやり直した結果に {result_id} の解析 "
+                          f"{record.get('analysis_id')!r} が無い（記録の analysis_id と spec の analyses が"
+                          "食い違う）。", {"result_id": result_id,
+                                         "analysis_id": record.get("analysis_id")})
     redone = as_two_group({**record, "engine": analysis["result"]}, source["contrast_id"])
     return {**result, "results": redone["results"], "volcano": redone["volcano"],
             "statistics": redone["statistics"]}

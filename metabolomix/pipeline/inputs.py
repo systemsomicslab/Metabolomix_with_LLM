@@ -4,13 +4,15 @@
 
 - `inspect_inputs(source_root, request, *, exe_path)`: 元フォルダを読むだけで
   何一つ変更せず、採用する形式・メソッド・LBM・実行体・極性を決定し、
-  「入力計画」(plan) を返す。
+  「入力計画」(plan) を返す。開いた形式（mzML ほか）の主ファイルが途中で切れている・
+  小さすぎるなら名指しして `PIPELINE_INPUT_INVALID`（`console.raw_integrity`）。
 - `select_method(candidates)`: メソッド候補を内容（sha256 と、宣言された参照
   キーの解決先ハッシュ）でグルーピングし、一意なら代表を返す。異なる内容が
   複数あれば `METHOD_FILE_CHOICE_REQUIRED`。mtimeは一切使わない。
 - `stage_inputs(plan, pipeline_root)`: planに基づき、raw・随伴・実効メソッドを
   `pipeline_root/input` へ実際に配置し、STAT fingerprint等を固定した
-  「入力スナップショット」(snapshot) を返す。
+  「入力スナップショット」(snapshot) を返す。配置の前に開いた形式の主ファイルを
+  もう一度確かめる（受付の後に切れたものも Console の前で止める）。
 - `verify_inputs(snapshot)`: 元rawと配置済みコピーのstat fingerprint・固定
   hashを再検査し、変化していれば例外にする（実行開始・上流終了時の再検査、
   および再開時の照合の両方から呼ばれる想定）。
@@ -40,6 +42,7 @@ from pathlib import Path
 
 from metabolomix.console import job_manager
 from metabolomix.console import method_file as method_file_mod
+from metabolomix.console import raw_integrity
 from metabolomix.console import runner as console_runner
 from metabolomix.console.input_prep import _companions_of
 from metabolomix.console.output_collector import is_upstream_artifact
@@ -163,6 +166,32 @@ def _iter_dir_raw_files(root_entry: Path, source_root: Path) -> list[Path]:
                 )
             out.append(fpath)
     return sorted(out, key=lambda p: str(p).lower())
+
+
+#: `PIPELINE_INPUT_INVALID` の details に載せる壊れたファイルの上限（戻り値を太らせない）。
+_MAX_REPORTED_BROKEN = 20
+
+
+def _assert_open_format_inputs(paths) -> None:
+    """開いた形式の主ファイルが途中で切れている・小さすぎるなら名指しして断る。
+
+    MS-DIAL Console は切れた mzML を読むところで落ち、どのファイルかをログに残さない。
+    """
+    broken = raw_integrity.broken_open_format_files(paths)
+    if not broken:
+        return
+    names = [entry["name"] for entry in broken]
+    shown = ", ".join(names[:5]) + (f" ほか {len(names) - 5} 件" if len(names) > 5 else "")
+    raise DomainError(
+        "PIPELINE_INPUT_INVALID",
+        f"計測ファイルが途中で切れているか、小さすぎます（{len(names)} 件）: {shown}。"
+        "MS-DIAL Console はこれを読むところで落ちます。取り直す（変換し直す）か、"
+        "フォルダの外へ移してから pipeline_run を呼び直してください。",
+        {"files": broken[:_MAX_REPORTED_BROKEN], "n_files": len(broken),
+         "min_bytes": raw_integrity.MIN_OPEN_FORMAT_BYTES,
+         "reasons": {"truncated": "末尾が閉じタグで終わらない",
+                     "too_small": f"{raw_integrity.MIN_OPEN_FORMAT_BYTES} バイト未満",
+                     "unreadable": "読めない"}})
 
 
 def _stat_entry(path: Path, relative_path: str, role: str) -> dict:
@@ -616,6 +645,7 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
     primaries, companions_map = _collect_primaries_and_companions(source_root, ext)
     entries, raw_stat = _build_entries_and_stat(source_root, primaries, companions_map)
     companions = {p.name: [c.name for c in cs] for p, cs in companions_map.items() if cs}
+    _assert_open_format_inputs(p for p in primaries if p.is_file())
 
     chosen_method = _resolve_method(source_root, request)
     method_path = Path(chosen_method["path"])
@@ -777,6 +807,9 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
     pipeline_root = Path(pipeline_root)
     input_dir = pipeline_root / _INPUT_SUBDIR
     inputs_meta_dir = pipeline_root / _INPUTS_META_SUBDIR
+
+    _assert_open_format_inputs(source_root / entry["name"] for entry in plan["entries"]
+                               if entry["kind"] == "file" and entry["role"] == "primary")
 
     total_size = sum(entry["size"] for entry in plan["raw_stat"])
     usage_root = pipeline_root

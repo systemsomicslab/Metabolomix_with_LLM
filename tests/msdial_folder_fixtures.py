@@ -54,7 +54,8 @@ def write_msdial_folder(
 ) -> dict:
     """`.arf` / `.arf2`（と `.mddata`）を 1 組、フォルダへ書く。
 
-    spots[i]: name, mz, rt, rts（試料ごとの RT。既定は全試料 rt）, ontology, adduct, heights, gap_filled, msms, matches, ion_mode,
+    spots[i]: name, mz, rt, rts（試料ごとの RT。既定は全試料 rt）, ontology, adduct, formula（`.arf2` Key13。
+    既定は `arf2_spot_raw` の PC 34:1 の組成式）, heights, gap_filled, msms, matches, ion_mode,
     blank_filtered（`.arf2` Key58。すべて任意）。
     samples[j]: file_id, name, class_id（必須）と file_type / order / batch、
     `.arf` に書く名前 arf_name（既定は name。改名後の `.mddata` との突き合わせ用）。
@@ -84,7 +85,8 @@ def write_msdial_folder(
         raw = arf2_spot_raw(
             spot_id=spot_id, name=spot.get("name", "Unknown"), mz=mz, rt=rt,
             ontology=spot.get("ontology", ""), adduct=spot.get("adduct", "[M+H]+"),
-            ion_mode=spot.get("ion_mode", 0), matches=spot.get("matches"))
+            ion_mode=spot.get("ion_mode", 0), matches=spot.get("matches"),
+            **({"formula": spot["formula"]} if "formula" in spot else {}))
         if spot.get("blank_filtered"):
             raw[58] = True
         raws.append(raw)

@@ -24,6 +24,8 @@ NON_TOOL_IDENTIFIERS = {
     "rerun_upstream",  # `pipeline_resume` の引数
     "wait_seconds",  # `load_dataset` の引数
     "load_id",  # `load_dataset` が返す受付番号（`dataset_load_status` の引数）
+    "matrix_source",  # `dataset_compare` / `dataset_pca` の戻り値の欄（どの行列を使ったか）
+    "job_id",  # 長い呼び出しが返す受付番号（`job_status` の引数）
 }
 WILDCARD_RE = re.compile(r"^(dataset|library|curation|dcl|pathway|console|pipeline)_\*$")
 #: バッククォートの中身が「名前」か「名前(...)」か「名前=...」のどれかで、名前に `_` を含むもの。
@@ -123,3 +125,17 @@ def test_semantics_caveat_describes_the_dataset_state_model():
     for stale in ("ARF行", "ARF2行", "PAI2", "IsGapFilled"):
         assert stale not in caveat
     assert "lipidmix://docs/output-format" in caveat
+
+
+def test_instructions_fit_the_client_limit():
+    """Claude Code はサーバの指示を 4,096 字で切る。切れた後半は届かないので余裕を残す。"""
+    assert len(mcp_core.MCP_INSTRUCTIONS) <= 4000
+
+
+def test_instructions_point_to_the_overview_and_long_call_rules():
+    text = mcp_core.MCP_INSTRUCTIONS
+    # 読み込みは概観を既定で返さない（overview=False）。最初の概観は別の呼び出し。
+    entry = text[text.index("ENTRY POINT"):text.index("ASSAY KIND")]
+    assert "dataset_overview" in entry
+    # 長い呼び出しは受付番号、長い表は先頭の行と truncated。
+    assert "job_status" in text and "truncated" in text

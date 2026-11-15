@@ -511,3 +511,14 @@ def test_tool_checks_handle_capacity_before_writing(tmp_path, monkeypatch):
     out = json.loads(_tool(h))
     assert out["error"]["code"] == "DATASET_HANDLE_LIMIT"
     assert not (tmp_path / "run" / "reports").exists()  # 登録できない記録を残さない
+
+
+def test_select_carries_exploratory(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    ds = _pos(tmp_path)
+    ds.exploratory_only, ds.exploratory_reason = True, "解析ジョブが完了していない（status failed）"
+    new, info = qs.select(ds, adduct=_adduct(), polarity="positive")
+    assert new.exploratory_only is True and new.exploratory_reason == ds.exploratory_reason
+    assert info["exploratory"] == {"exploratory_only": True, "reason": ds.exploratory_reason}
+    clean, info = qs.select(_pos(tmp_path, root="clean"), adduct=_adduct(), polarity="positive")
+    assert clean.exploratory_only is False and "exploratory" not in info

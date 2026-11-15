@@ -122,14 +122,14 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 10. EICの `peak_top` は強度ではなく頂点座標である。強度は `max_intensity`、平均強度は `mean_intensity` を使う。
 11. `total_samples` はEIC全スポットにわたるサンプルエントリ総数であり、ユニークサンプル数は `len(unique_file_ids)` である。
 12. m/zとRTの微小差はファイル形式の浮動小数精度、代表値の定義、アラインメント処理に由来し得る。厳密一致ではなく許容差を用いる。
-13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(min_detection_rate=...)` で実検出率による足切りができる（ARF 経路の同名引数と同義）。
+13. **mzTab-M（`dataset_*` 経路）の `abundance_assay[N]` は、非ゼロでも実測ピークとは限らない。** mzTab-M 自体は gap-fill（未検出セルの補間値）を区別する列を持たない。`load_dataset` は隣接する `.arf` が同一アライメントであると数値で検証できた場合にだけ検出状態を取り込む。`dataset_status` の `detection.available` が `false` の間は、**検出率・欠測率・「n 件で検出」といった主張をしてはいけない**。実データでは 60 サンプル × 714 特徴のうち**セルの 70.0% が gap-fill** だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。検出状態があるときは `dataset_preprocess(detection_min_rate=...)` で実検出率による足切りができる（gap-fill を数えない検出率。検出状態が無ければこの足切りは行わず、前処理の `steps` の足切りの段（`step: "filter"`）に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と出る）。
 
 ## 状態不足の伝え方（MCP クライアント向けの契約）
 
 多くのツールは、先行するツールが作ったセッション状態に依存する。
 `dataset_plot(kind="pca")` は `dataset_pca` の結果を、`dataset_plot(kind="volcano")` は
-`dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca` は前処理済みの行列（`dataset_preprocess` の
-`matrix_id`）を受けるが、省くと既定の前処理で自分で行列を作る。
+`dataset_compare` の結果を必要とする。`dataset_compare` と `dataset_pca`（と `pathway_project`）は前処理済みの行列（`dataset_preprocess` の
+`matrix_id`）を受けるが、省くとそのハンドルで `dataset_preprocess` が最後に作った行列を使い、それも無ければ既定の前処理で自分で行列を作る（戻り値の `matrix_source`）。
 
 その状態が無いとき、ツールは本文に次の JSON を返す。
 
@@ -144,6 +144,8 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 - `required_tools` は代替候補（OR）で、クライアントは候補のうち「リプレイ安全かつ本セッションで成功実績のある呼び出し」の中から**直近に成功したもの**を選んで再実行する。リスト順では選ばない。サーバは実際の生成元をすべて列挙する義務がある（取りこぼすと復旧できない、あるいはユーザーが見ていたものと別の状態が復元される）。
 - `message` は LLM と人間が読む説明。エンベロープを解釈しないクライアントでは
   これだけが見える。
+- `details` は任意（無いことが多い）。今は `dataset_plot` だけが、その kind の使わない引数を断らずに外したときに
+  `details.notes`（どの kind の引数か）を載せる。復旧の判断には使わない（上の 3 つで足りる）。
 
 エンベロープを解釈するクライアントは、`required_tools` のいずれかを
 **セッション履歴に記録済みの引数のまま**再実行して状態を復元できる。LLM に
@@ -156,23 +158,39 @@ README に記載された主要な MS-DIAL 出力パーサーを対象とする�
 利用者へ尋ねる問いで、**クライアントは答えを推測して呼び直してはならない**（利用者に `options` を見せて選んでもらう）。
 
 ```json
-{"needs_input": {"field":       "preprocess.drift.mode",
-                 "reason":      "内部標準で換算済みの値に QC があります。QC のドリフト補正を重ねるか…",
-                 "options":     [{"value": "on", "label": "…"}, {"value": "off", "label": "…"}],
-                 "argument":    "drift_mode",
-                 "retry_tools": ["dataset_preprocess"]}}
+{"needs_input": {"field":       "polarity",
+                 "reason":      "この run には極性の単位が 2 つある。どちらを読むか…",
+                 "options":     [{"value": "positive", "label": "…"}, {"value": "negative", "label": "…"}],
+                 "argument":    "polarity",
+                 "retry_tools": ["load_dataset"]}}
 ```
 
 - `field` は答えが入る設定の欄（spec の路）。`reason` は尋ねる理由、`options` は `{value, label}` の選択肢。
-- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。無いこともある（下の spec の経路）。
-- `retry_tools` は「`argument` を受けて呼び直せるツール」の候補（OR）。`dataset_preprocess`・`dataset_compare`・
-  `dataset_pca`・`pathway_project` が既定の前処理を自分で回して尋ねたときは、`drift_mode` 引数を持つのが
-  `dataset_preprocess` だけなので、いつも `["dataset_preprocess"]`（`reason` に、そのツールの `drift_mode` で行列を作り、
-  返った `matrix_id` を元のツールに渡して呼び直すと書く）。
-- `dataset_analysis_run` の spec v2 の経路は `argument` を持たず、`retry_tools` は `["dataset_analysis_run"]`、答えは
-  spec の `field`（`preprocess.drift.mode`）に入れて呼び直す（`reanalysis.md` §2.1）。
+- `argument` は答え（選ばれた `value`）を入れて呼び直すツールの**引数名**。`argument` が無い封筒は、`field` の
+  spec の路に `value` を入れて呼び直す。
+- `"patch": true` の封筒は、選択肢ごとに替える引数が違う問い（`argument` を持たない。`field` は問いの主題）。
+  選ばれた `value` は「引数名 → 値」の dict で、**その dict のとおりに引数を置き換え（値が `null` の引数は外し）、
+  ほかの引数はそのまま渡して**呼び直す。例: `dataset_compare` の `{"comparisons": [...], "reference_group": null,
+  "test_group": null}`（群の指定を対比に替える）・`{"factors": null}`・`{"matrix_id": null}`。
+- `retry_tools` は「答えを入れて呼び直せるツール」の候補（OR）。`argument` があればその引数を、`patch` なら
+  `value` の引数をすべて受ける。
+- 統計エンジンの前処理（`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`pathway_project`・`dataset_analysis_run`
+  の spec v2）は**尋ねない**: ドリフト補正の既定（`drift_mode=auto`）は、補正できても内部標準で換算済み・注入順が
+  ファイルの順かもしれないときは当てずに計算し、戻り値の `warnings`（`pathway_project` は run の manifest にも）の
+  `drift_not_applied_by_default`（理由と `suggestion: {"preprocess.drift.mode": "on"}`）で呼び直し方を示す
+  （`dataset.md` §10.2。`dataset_pca` / `pathway_project` は補正を当てなかった行列を使ったときだけ `warnings` を載せる）。
 - 定量の `dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features` も、
   別の問いで `status="needs_input"` の応答を返す（`quant.md`）。こちらは上の封筒ではなく、各ツールの戻り値の形。
+
+### ハンドルが塞がっている（`HANDLE_BUSY`）
+
+同じデータセットのハンドルへの呼び出しは 1 本ずつ動く。前の呼び出し（多くは `pathway_project` /
+`dataset_homolog_check` が受付番号を返して続けている仕事）がハンドルを持ったまま 25 秒たつと、後の呼び出しは
+**何もせずに** `{"error": {"code": "HANDLE_BUSY", "details": {"dataset_handle", "waited_s", "job_id", "tool",
+"running_s", "next"}, "required_tools": ["job_status"], …}}` を返す（`job_id` 以下は長い仕事が持っているときだけ）。
+`job_status(job_id)` で仕事の終わりを待ってから、**同じ呼び出しをし直す**。待ちきれなかった呼び出しが後から黙って
+効くことはない。`dataset_close` も同じで、仕事が走っているハンドルは閉じない（`reanalysis.md` の「並行と直列」）。
+2 つのハンドルを取る `dataset_merge_polarities` も同じ封筒で、待つのは 2 本**合わせて**最長 25 秒（`details.dataset_handle` は空かなかったほう）。
 
 ### 判定 3 値と「有意でない ≠ 変わっていない」
 
@@ -185,6 +203,8 @@ CI があるときだけで、n が小さい・ばらつきが大きいときの
 逆に、書き出し・根拠バンドルの `significant` と volcano の `up` / `down` は判定を見る: `q ≤ 閾値` かつ
 `|log2fc| ≥ log2fc_threshold` に加えて `verdict` が `changed` の行だけ（`large_changes` と同じ数え方）。
 `inconclusive` の行（検出が足りず量を判定できない行など）は q が小さくても有意にしない（`dataset.md` §11.4）。
+書き出しと根拠バンドル（別リポジトリとの契約）の `q_value` は比較の `p_adjust` によらず BH の q で、判定と `significant` も
+その q で読む（BH でない比較は同じ母集団の p から計算し直し、メタ行 `q_value_source` に書く）。
 
 ### annotations の解釈
 

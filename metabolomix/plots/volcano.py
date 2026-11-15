@@ -171,14 +171,14 @@ def build_volcano_plot_payload(
         "（q と p は別量なので破線位置と有意判定は厳密には一致しません）。"
     )
 
-    # spec §7.4(R16): allow_confounded=true で継続した比較は、その旨をこの図にも
+    # spec §7.4(R16): allow_confounded=true（既定）で完全交絡を越えて継続した比較は、その旨をこの図にも
     # 残す。`stats_results.as_two_group` が `provenance.comparison.unadjusted_confounded`
     # へ足す事実を読むだけで、ここで独自に交絡を判定はしない。
     comparison_prov = ((last_differential.get("provenance") or {}).get("comparison") or {})
     if comparison_prov.get("unadjusted_confounded"):
         caveats.append(
-            "allow_confounded=true が明示されたため、群とバッチの完全交絡を"
-            "未調整のまま解析を継続した比較です（この図はその補正前の結果です）。"
+            "群とバッチが完全交絡の比較を、allow_confounded=true（既定）のまま"
+            "未調整で解析した結果です（この図はその補正前の結果です）。"
         )
 
     # 座標は 4 桁で丸める。float の既定 repr は 17 桁まで出す（-0.17092926812859943）
@@ -198,7 +198,8 @@ def build_volcano_plot_payload(
     return {
         "plot_schema": VOLCANO_PLOT_SCHEMA,
         "plot_type": "scatter",
-        "title": title or f"Volcano ({group_a} vs {group_b})",
+        # 題の並びは test vs reference（対比 ID `test_vs_ref` と同じ向き。log2fc は正なら b＝test が高い）
+        "title": title or f"Volcano ({group_b} vs {group_a})",
         "comparison": {
             "group_a": group_a,
             "group_b": group_b,
@@ -258,6 +259,6 @@ def render_volcano_plot(last_differential: dict, title: str | None = None):
                        s=12, c=SIG_COLORS[sig], label=sig, alpha=0.7)
     ax.set_xlabel("log2 fold change")
     ax.set_ylabel("-log10 p")
-    ax.set_title(title or f"Volcano ({last_differential.get('a')} vs {last_differential.get('b')})")
+    ax.set_title(title or f"Volcano ({last_differential.get('b')} vs {last_differential.get('a')})")
     ax.legend()
     return fig

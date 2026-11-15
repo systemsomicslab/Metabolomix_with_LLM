@@ -39,6 +39,7 @@ def _write(path: Path, text: str) -> Path:
 def test_settings_table_has_a_kind_per_key():
     assert user_config.SETTINGS == {
         "msdial.exe": "path",
+        "msdial.min_free_commit_gb": "int",
         "library.msp_positive": "path",
         "library.msp_negative": "path",
         "library.lbm": "path",
@@ -56,7 +57,7 @@ def test_settings_table_has_a_kind_per_key():
     assert user_config.MOVED_KEYS == {"msdial.lbm": "library.lbm"}
     assert user_config.NON_PATH_SETTINGS == frozenset(
         {"mslipidmapper.mslipidmapper_api_url", "mslipidmapper.api_token",
-         "server.max_dataset_handles", "server.caveat_mode"})
+         "server.max_dataset_handles", "server.caveat_mode", "msdial.min_free_commit_gb"})
     assert user_config.CHOICES == {"server.caveat_mode": ("digest", "off")}
 
 

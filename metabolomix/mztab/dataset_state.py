@@ -131,6 +131,10 @@ class DatasetState:
 
     def __init__(self):
         self.source_format: str = "mztab"
+        # assay_kind: 脂質（lipid）か一般代謝物（metabolite）か、未確定（unknown）か。解釈規則の選択軸。
+        # `record_objective(assay_kind=...)` が書き、`load_dataset` が解析フォルダの目的ファイル
+        # （reports/*.objective.md）から読み戻す。派生（quant の複製）は親の値を引き継ぐ。指紋には入れない。
+        self.assay_kind: str = "unknown"
         self.source_files: dict[str, str] = {}          # path -> sha256
         self.quantification_measure: str | None = None  # peak_height | peak_area_above_zero
         self.quantification_confidence: str | None = None
@@ -173,8 +177,9 @@ class DatasetState:
         self.per_sample_mz: dict[str, dict[str, float]] | None = None
         # per_sample_rt: 試料ごとのピークの RT（分）の (n_features, n_samples) float 行列
         # （feature_matrix と同じ並び。gap-fill のセルも .arf の値。セルが無ければ NaN）。
-        # 解析フォルダ（.arf）から読んだデータセットだけが持つ。`dataset_sample_peaks` の材料。
-        # 指紋には入れない。mzTab-M の経路は None（値が無い。0 行列と混同させない）。
+        # 解析フォルダ（.arf）から読んだデータセットと、mzTab-M を隣の `.arf` と照合できた
+        # データセット（`evidence.apply_evidence`）が持つ。`dataset_sample_peaks` の材料。
+        # 指紋には入れない。照合できなかった mzTab-M は None（値が無い。0 行列と混同させない）。
         self.per_sample_rt: np.ndarray | None = None
 
         # --- ジョブ由来フィールド（load_dataset(job_path=...) で設定） ---
@@ -202,6 +207,10 @@ class DatasetState:
         # 結果から作った図（pca / loadings / volcano）は、その結果が古くなったとき
         # `result_state.invalidate_results` が捨てる。
         self.figures: dict[str, dict] = {}
+        # discarded_figures: `invalidate_results` が捨てた図の kind -> 捨てた理由（変わったもの。`exclusion` や
+        # 試料の表の列名）。save_figure が「描いたことが無い」（missing_state）と「古くなって捨てた」
+        # （STALE_FIGURE と理由）を見分ける印で、dataset_plot が同じ kind を描き直すと消える。指紋に含めない。
+        self.discarded_figures: dict[str, list[str]] = {}
 
         # --- 同一性と来歴（metabolomix/analysis/result_state.py が読み書きする） ---
         # dataset_id: この DatasetState 実体の ID。結果の provenance が指す先で、
@@ -226,9 +235,11 @@ class DatasetState:
         # legacy_unverified（ジョブ経由だが証跡が無い・一致しない）/
         # direct_unverified（.mzTab を直接読んだ）。pipeline は verified だけを受ける。
         self.source_verification: str = "direct_unverified"
-        # exploratory_only: 完了していない実行の出力。探索はできるが、2 群比較と
-        # 差次的エクスポートは拒否する（欠けた検体を「その群に無い」と読み違えるため）。
+        # exploratory_only: 完了していない実行（または検証を通っていない pipeline の単位）の出力。
+        # 比較も書き出しもできるが、欠けた検体を「その群に無い」と読み違えうるので、書き出しと図に
+        # 探索専用の印を付ける。exploratory_reason はその理由（書き出しのメタ行に載る 1 行）。
         self.exploratory_only: bool = False
+        self.exploratory_reason: str | None = None
         # assay_sources: {abundance 列名: 実行時に予定した raw のパス}。
         # 完了ゲート（console/validation.map_assays）と同じ対応関係。
         self.assay_sources: dict = {}
@@ -257,12 +268,23 @@ class DatasetState:
         self.curation_flags: dict | None = None
         # load_notes: 読み込み時に分かった注記（.mddata が無い等）。
         self.load_notes: list[str] = []
+        # theoretical_mz_source: SME の theoretical_mass_to_charge の出所。`mztab`（mzTab-M の SME の値。
+        # job / pipeline を解析フォルダで読んだときは照合した mzTab-M から写したもの）/ `formula_adduct`
+        # （mzTab-M と照合しない解析フォルダ。注釈の組成式と付加体から計算した値。`dataset.opening`）/
+        # `mixed`（出所の違う 2 極性を統合したもの）。SME の候補のキーは mzTab-M の経路と同じ集合に
+        # 保つので、出所は候補ではなくここに置く。指紋には入れない。
+        self.theoretical_mz_source: str = "mztab"
+        # theoretical_mz_computed: SME（rank 1）の理論 m/z を組成式と付加体から計算して入れた特徴 ID
+        # （`dataset.opening._fill_formula_theoretical_mz`。統合は `positive:<id>` へ付け替える）。根拠バンドルが
+        # その候補の `theoretical_mass_to_charge` を写さない（mzTab-M の値と混ぜない）ために特徴ごとに持つ。
+        self.theoretical_mz_computed: set[str] = set()
         # excluded_samples / excluded_features: `dataset_exclude` が持つ除外（名前または特徴 ID -> 理由）。
         # 解析の状態であって入力ではないので指紋（`result_state.dataset_fingerprint`）には入れない
         # （`sample_meta` の編集と同じ扱い）。前処理（`dataset_analysis`）が行列から外す。
         self.excluded_samples: dict[str, str] = {}
         self.excluded_features: dict[str, str] = {}
-        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit を読む。
+        # quant_state: 定量の工程（metabolomix/quant）が置く受け渡し。統計側は normalized / method / unit と、統合した
+        # データセットの polarity_runs / source_sample_names を読む（読み手の一覧は docs/output_format/quant.md §3）。
         self.quant_state: dict | None = None
         # stat_matrices: matrix_id -> 統計エンジンの前処理済み行列（`PreparedMatrix`）と、その設定・群の上書き・
         # 除外・指紋・metadata_revision（`analysis/stats_results.register_matrix`）。古さは `get_matrix` が見る。
@@ -279,16 +301,21 @@ _MSP_LOOKUP_COUNTERS = {"resolved": "resolved", "conflicting": "conflicting_name
                         "unmatched": "unmatched"}
 
 
-def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts: dict):
+def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts: dict,
+                      flags: dict | None = None):
     """InChIKey 形の識別子 → 研究室 MSP の表 → RDKit の順で解決する。
 
     MSP を RDKit より前に置くのは、研究室が整備した値をそのまま使い、RDKit の有無
     （機械のアプリケーション制御）で結果を変えないため（spec §3.2）。`derive_inchikey`
     はモジュール属性として呼ぶ（既存テストがここを差し替えて RDKit 不在を再現する）。
+    `flags` を渡すと、MSP の表で同じ名前に別の InChIKey があり決めず、構造（InChI / SMILES）からも
+    導けずに InChIKey が空のまま残ったとき `flags["name_conflict"] = True` を書く（特徴単位の曖昧の印
+    `inchikey_name_conflict` の材料）。構造から導けたなら、その InChIKey は名前に依らないので印を付けない。
     """
     text = str(database_identifier or "").strip()
     if text and _INCHIKEY_RE.match(text):
         return text, "database_identifier"
+    name_conflict = False
     if msp_table is not None:
         inchikey, outcome = msp_inchikey.lookup(msp_table, database_identifier)
         counter = _MSP_LOOKUP_COUNTERS.get(outcome)
@@ -296,7 +323,11 @@ def _resolve_inchikey(database_identifier, inchi, smiles, msp_table, msp_counts:
             msp_counts[counter] += 1
         if inchikey:
             return inchikey, "msp_library"
-    return derive_inchikey(database_identifier, inchi, smiles)
+        name_conflict = outcome == "conflicting"
+    inchikey, source = derive_inchikey(database_identifier, inchi, smiles)
+    if name_conflict and inchikey is None and flags is not None:
+        flags["name_conflict"] = True
+    return inchikey, source
 
 
 def build_dataset_state(
@@ -358,11 +389,12 @@ def build_dataset_state(
                                      msp_table=msp_table)
         ds.feature_candidates[fid] = candidates
         evidence = _best_evidence(row.get("SME_ID_REFS"), sme_by_id)
+        resolve_flags: dict = {}
         ik, src = _resolve_inchikey(
             evidence.get("database_identifier"),
             evidence.get("inchi"),
             evidence.get("smiles"),
-            msp_table, msp_counts,
+            msp_table, msp_counts, resolve_flags,
         )
         ds.feature_metadata[fid] = {
             "name": evidence.get("chemical_name"),
@@ -375,6 +407,10 @@ def build_dataset_state(
             "smiles": evidence.get("smiles"),
             "inchi": evidence.get("inchi"),
         }
+        if resolve_flags.get("name_conflict"):
+            # 名前から InChIKey を引こうとして、研究室 MSP に同じ名前の別の InChIKey があった
+            # （どれかに決めない）。書き出しの列は変えず、同定の欄（特徴検索など）で知らせる。
+            ds.feature_metadata[fid]["inchikey_name_conflict"] = True
         by_source[src] = by_source.get(src, 0) + 1
         # RDKit があれば拾えたはずの取りこぼし。構造が無い行は RDKit の有無に
         # 関係なく InChIKey を持てないので、ここには数えない。
@@ -637,9 +673,12 @@ def _all_candidates(refs, sme_by_id: dict, *, msp_table=None) -> list[dict]:
         }
         for key, column in _SME_TEXT_FIELDS.items():
             candidate[key] = row.get(column)
+        resolve_flags: dict = {}
         candidate["inchikey"], candidate["inchikey_source"] = _resolve_inchikey(
             candidate["database_identifier"], candidate["inchi"], candidate["smiles"],
-            msp_table, {"resolved": 0, "conflicting_names": 0, "unmatched": 0})
+            msp_table, {"resolved": 0, "conflicting_names": 0, "unmatched": 0}, resolve_flags)
+        if resolve_flags.get("name_conflict"):
+            candidate["inchikey_name_conflict"] = True
         candidates.append(candidate)
     return candidates
 
@@ -696,11 +735,14 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
             for key, column in _SML_FLAG_FIELDS.items():
                 entry[key] = _to_flag(row.get(column))
             # inchi は保持しないが、導出の材料としては渡す（他実装が書く余地を残す）。
+            resolve_flags: dict = {}
             ik, src = _resolve_inchikey(row.get("database_identifier"),
                                         row.get("inchi"), row.get("smiles"),
-                                        msp_table, msp_counts)
+                                        msp_table, msp_counts, resolve_flags)
             entry["inchikey"] = ik
             entry["inchikey_source"] = src
+            if resolve_flags.get("name_conflict"):
+                entry["inchikey_name_conflict"] = True
             by_feature.setdefault(fid, []).append(entry)
 
     annotations: dict[str, dict] = {}
@@ -721,7 +763,9 @@ def _build_feature_annotations(sml_rows, known_feature_ids: set, *,
                             "sml_ids": [e["sml_id"] for e in entries],
                             "name": None,
                             "inchikeys": inchikeys,
-                            **flags}
+                            **flags,
+                            **({"inchikey_name_conflict": True}
+                               if any(e.get("inchikey_name_conflict") for e in entries) else {})}
 
     warnings: list[str] = []
     if ambiguous:

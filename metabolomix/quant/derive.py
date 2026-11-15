@@ -3,8 +3,12 @@
 正規化・統合・選別は元の DatasetState を書き換えず、複製に値・検出マスク・欄を差し替えた
 派生の DatasetState を作り、新しいハンドルとして開いて直近にする。元のハンドルは残る。
 
-`quant_state` は統計側（C）との受け渡し。C は `getattr(ds, "quant_state", None)` を読み、
-`normalized` / `method` / `unit` だけを使う。それ以外のキーは自由（`**extra`）。
+`quant_state` は統計側（C）との受け渡し。C は `getattr(ds, "quant_state", None)` の `normalized` / `method` /
+`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）・
+`source_sample_names`（`sample_manifest.file_order_keys` が読み、drift=auto の保留と
+`injection_order_may_be_file_order` の注意を左右する）を読む。`**extra` で足すほかのキーにも読み手がある
+（`steps` / `skipped` / `record_id` / `internal_standard_ids` / `record_folder` / `arf2_by_polarity`。読み手の一覧は
+docs/output_format/quant.md §3）。キーの改名・削除は読み手を直してから行う（黙って欠けると既定の読み方に落ちる）。
 """
 from __future__ import annotations
 
@@ -16,9 +20,43 @@ import numpy as np
 from metabolomix.core import handles, session_state
 from metabolomix.mztab.polarity import dataset_polarity
 
-__all__ = ["QUANT_STATE_SCHEMA", "check_capacity", "derive", "quant_state", "register"]
+__all__ = ["QUANT_STATE_SCHEMA", "carry_exploratory", "check_capacity", "derive",
+           "exploratory_info", "quant_state", "register"]
 
 QUANT_STATE_SCHEMA = "lipidmix.quant-state.v1"
+#: 理由の無い探索専用の印を、ラベル付きで合わせるときの文面（書き出しの既定の理由と同じ）。
+_DEFAULT_EXPLORATORY_REASON = "incomplete analysis run (exploratory only)"
+
+
+def carry_exploratory(new, parents, *, labels=None) -> None:
+    """親の探索専用の印（`exploratory_only` / `exploratory_reason`）を派生へ写す。
+
+    親のどれかが探索専用なら派生も探索専用で、理由は探索専用の親の理由を `; ` でつなぐ（同じ理由は
+    1 回）。`labels`（親と同じ長さ。統合なら極性）を渡すと各理由の頭に `<label>: ` を付け、理由の無い
+    親は既定の文面で数える（どちらの親が探索専用かを残す）。探索専用の親が無ければ印を下ろす。
+    """
+    labels = list(labels) if labels is not None else [None] * len(parents)
+    reasons = []
+    flagged = False
+    for label, parent in zip(labels, parents):
+        if not getattr(parent, "exploratory_only", False):
+            continue
+        flagged = True
+        reason = getattr(parent, "exploratory_reason", None)
+        if label is not None:
+            reasons.append(f"{label}: {reason or _DEFAULT_EXPLORATORY_REASON}")
+        elif reason:
+            reasons.append(reason)
+    new.exploratory_only = flagged
+    new.exploratory_reason = ("; ".join(dict.fromkeys(reasons)) or None) if flagged else None
+
+
+def exploratory_info(ds) -> dict:
+    """派生が探索専用なら戻り値に足す `{"exploratory": {exploratory_only, reason}}`（でなければ空）。"""
+    if not getattr(ds, "exploratory_only", False):
+        return {}
+    return {"exploratory": {"exploratory_only": True,
+                            "reason": getattr(ds, "exploratory_reason", None)}}
 
 
 def quant_state(*, normalized: bool, method: str | None, unit: str | None, record_id: str,
@@ -68,24 +106,30 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
            state: dict):
     """`ds` の複製に値・マスク・欄を差し替えた派生データセット（`ds` は動かさない）。
 
-    古い行列から出た結果（results / stat_matrices / last_*）は空に戻す。指紋は保存せず都度計算する
+    古い行列から出た結果（results / stat_matrices / last_*）と、図（figures）と捨てた図の印（discarded_figures）は
+    空に戻す（親の図は親の行列から描いたもので、この行列の図ではない）。指紋は保存せず都度計算する
     （`result_state.dataset_fingerprint`）ので、古い指紋が残ることはない。
 
     試料: `sample_index` は新しい各試料の親での位置。試料名だけを渡せば名前で引く（親に無い
     名前は ValueError）。index を渡したときの `sample_names` は新しい名前を決めるだけ（統合は
     試料を照合した ID へ改名するので、親に無い名前もありうる）。`sample_names` に並走する
     リスト（sample_assay_ids / sample_ids / sample_raw_paths / msdial_samples）は位置で、
-    名前で引く欄（roles / sample_meta / per_sample_mz の内側）は新しい名前へ、親の試料から
-    引き継ぐ。
+    名前で引く欄（roles / sample_meta / per_sample_mz の内側 / 試料の除外 excluded_samples）は新しい名前へ、
+    親の試料から引き継ぐ（選ばなかった試料の除外は落とす）。
 
     特徴: `feature_ids` を渡すと、ID で引く欄（feature_metadata（明示しないとき）/
-    feature_candidates / feature_annotations / per_sample_mz / feature_tags）をその ID に絞る。
+    feature_candidates / feature_annotations / per_sample_mz / feature_tags / 特徴の除外 excluded_features）を
+    その ID に絞る（選別が落とした特徴の除外を残すと、統計が「存在しない特徴 ID」で止まる）。
     親の母集団の要約（sml_rows / sme_rows は None、inchikey_coverage は空、feature_qc は
     セル数・検出数・欠測率だけ新しい行列から数え直す）は持ち越さない。`curation_flags` は
     アラインメント単位のフラグ集合なので触らない。**親に無い新しい ID（統合後の
     `positive:<id>` など）には副次データを付けない。呼び出し側が埋める。**
+
+    探索専用の印（`exploratory_only` / `exploratory_reason`）は親のものを引き継ぐ（`carry_exploratory`。
+    統合は 2 つ目の親の印を呼び出し側が合わせる）。
     """
     new = copy.deepcopy(ds)
+    carry_exploratory(new, [ds])
     parent_names = list(ds.sample_names)
     idx = _sample_positions(parent_names, sample_names, sample_index)
     if len(set(idx)) != len(idx):
@@ -114,8 +158,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
         for entry, name in zip(new.msdial_samples, new_names):
             if isinstance(entry, dict):
                 entry["name"] = name
-    for attr in ("roles", "sample_meta"):
-        old = getattr(ds, attr) or {}
+    for attr in ("roles", "sample_meta", "excluded_samples"):
+        old = getattr(ds, attr, None) or {}
         setattr(new, attr, {name: copy.deepcopy(old[parent_names[i]])
                             for name, i in zip(new_names, idx) if parent_names[i] in old})
     if ds.per_sample_mz is not None:
@@ -130,8 +174,8 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
         keep = set(new.feature_ids)
         if feature_metadata is None:
             new.feature_metadata = {k: v for k, v in new.feature_metadata.items() if k in keep}
-        for attr in ("feature_candidates", "feature_annotations", "feature_tags"):
-            setattr(new, attr, {k: v for k, v in getattr(new, attr).items() if k in keep})
+        for attr in ("feature_candidates", "feature_annotations", "feature_tags", "excluded_features"):
+            setattr(new, attr, {k: v for k, v in (getattr(new, attr, None) or {}).items() if k in keep})
         if new.per_sample_mz is not None:
             new.per_sample_mz = {k: v for k, v in new.per_sample_mz.items() if k in keep}
         new.sml_rows = None
@@ -147,6 +191,10 @@ def derive(ds, *, matrix: np.ndarray, detected: np.ndarray,
     new.dataset_id = f"ds_{uuid.uuid4().hex}"
     new.results = {}
     new.stat_matrices = {}
+    # 図と捨てた図の印も親のもの（親の行列から描いた図・親の除外の理由）なので持ち越さない。派生のハンドルは
+    # まだ何も描いていない（`save_figure` は `dataset_plot` を案内する missing_state を返す）。
+    new.figures = {}
+    new.discarded_figures = {}
     new.last_pca = None
     new.last_differential = None
     new.quant_state = copy.deepcopy(state)

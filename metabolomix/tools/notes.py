@@ -279,14 +279,19 @@ def write_objective(
     meta_fields: dict,
     sub_questions: list[str],
     evidence: list[str] | None = None,
+    slug: str | None = None,
 ) -> Path:
-    """objective レコードを <directory>/<analysis_id>.objective.md として書き出す。"""
+    """objective レコードを <directory>/<analysis_id>.objective.md として書き出す。
+
+    `slug` を渡すとそのファイル名（`<slug>.md`）で書く（同じ名前の目的が別の解析フォルダのものなので、
+    番号付きの名前で作るとき。frontmatter の `analysis_id` はいつも `analysis_id`）。
+    """
     meta = {"type": "objective", "analysis_id": analysis_id}
     meta.update(meta_fields)
     meta.setdefault("status", "active")
     meta["confirmed"] = bool(meta.get("confirmed_objective"))
     body = build_objective_body(meta.get("confirmed_objective", ""), sub_questions, evidence)
-    return write_note(directory, objective_slug(analysis_id), meta, body)
+    return write_note(directory, slug or objective_slug(analysis_id), meta, body)
 
 
 def update_objective_meta(path: str | Path, updates: dict) -> Path:
@@ -328,13 +333,17 @@ def _append_under_section(body: str, header: str, new_line: str) -> str:
     return "\n".join(out)
 
 
-def add_subquestions(path: str | Path, texts: list[str]) -> Path:
-    """創発的な小問を採番（既存 Q の最大+1）して本文に追記する。"""
+def add_subquestions(path: str | Path, texts: list[str], *, initial: bool = False) -> Path:
+    """創発的な小問を採番（既存 Q の最大+1）して本文に追記する。
+
+    `initial=True` は「派生する小問」の節へ足す（小問を省いて作った目的に、後から最初の小問を足すとき）。
+    """
     path = Path(path)
     meta, subqs, body = parse_objective(path)
     next_n = (max(int(label[1:]) for label, _ in subqs) if subqs else 0) + 1
+    header = _SUBQ_HEADER if initial else _EMERGENT_HEADER
     new_body = body
     for text in texts:
-        new_body = _append_under_section(new_body, _EMERGENT_HEADER, f"- Q{next_n}: {text}")
+        new_body = _append_under_section(new_body, header, f"- Q{next_n}: {text}")
         next_n += 1
     return write_note(path.parent, path.stem, meta, new_body)

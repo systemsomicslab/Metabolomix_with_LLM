@@ -198,13 +198,13 @@ def test_load_dataset_returns_group_and_role_counts(tmp_path, fresh_state):
 
 
 def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
-    """前処理前の PCA・`.arf2` の要約は返さない。最初の概観（A）の PCA は前処理後のもので、直近の PCA
-    （図の既定）にもしない。`overview=False` なら PCA の欄は一切出ない。"""
-    out = _load(directory=str(_folder(tmp_path / "a")))
+    """前処理前の PCA・`.arf2` の要約は返さない。最初の概観（A。`overview=True` のときだけ載る）の PCA は
+    前処理後のもので、直近の PCA（図の既定）にもしない。既定（`overview=False`）なら PCA の欄は一切出ない。"""
+    out = _load(directory=str(_folder(tmp_path / "a")), overview=True)
     assert "前処理後" in out["overview"]["global"]["facts"][0]
     ds = session_state.session.dataset
     assert ds.last_pca is None
-    out = _load(directory=str(_folder(tmp_path / "b")), overview=False)
+    out = _load(directory=str(_folder(tmp_path / "b")))
     text = json.dumps(out, ensure_ascii=False)
     assert "PCA" not in text.replace("dataset_pca", "")
     assert "overview" not in out
@@ -212,9 +212,11 @@ def test_load_dataset_has_no_initial_pca(tmp_path, fresh_state):
 
 def test_load_dataset_is_always_threaded(tmp_path, fresh_state):
     assert handle_dispatch.ALWAYS_THREADED == frozenset({"load_dataset", "dataset_load_status",
-                                                         "dataset_merge_polarities"})
+                                                         "job_status", "dataset_merge_polarities",
+                                                         "list_data_files", "pipeline_sample_sheet"})
     assert server.mcp._tool_manager._tools["load_dataset"].is_async
     assert server.mcp._tool_manager._tools["dataset_load_status"].is_async
+    assert server.mcp._tool_manager._tools["job_status"].is_async
 
 
 def test_old_entry_names_are_gone():
@@ -318,7 +320,7 @@ class ListDataFilesEntryTraceTests(unittest.TestCase):
         self.assertNotIn("s1.wiff", listed)
 
 
-# ---------- library_names=False（ライブラリのファイル名を戻り値に出さない） ----------
+# ---------- ライブラリはファイル名と sha256 だけ（置き場所は出さない） ----------
 
 _LIB_NAME = "Zebra_SecretLab_Loaded.msp2.dbs"
 
@@ -335,22 +337,3 @@ def test_default_still_shows_names(tmp_path, fresh_state, monkeypatch):
     assert out["library"]["file"] == _LIB_NAME
     assert out["library_record"]["file"] == _LIB_NAME
     assert _LIB_NAME in json.dumps(out, ensure_ascii=False)
-
-
-def test_load_dataset_hides_library_file_names(tmp_path, fresh_state, monkeypatch):
-    use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
-    raw = handle_tools.load_dataset(directory=str(_folder_with_library(tmp_path / "gui")),
-                                    library_names=False)
-    out = json.loads(raw)
-    assert out["status"] == "success"
-    assert _LIB_NAME not in raw and "Zebra" not in raw and "SecretLab" not in raw
-    assert out["library"]["sha256"] and out["library"]["record_count"] == 1
-    assert "file" not in out["library"] and "file" not in out["library_record"]
-    assert out["library_record"]["sha256"] and out["library_record"]["status"] == "known"
-    assert out["library_record"]["kind"] == "dbs"
-
-
-def test_load_dataset_rejects_non_bool_library_names(tmp_path, fresh_state):
-    out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
-                                               library_names="no"))
-    assert out["error"]["code"] == "DATASET_BAD_REQUEST"

@@ -143,6 +143,41 @@ def _check_factor_columns(columns: list[str]) -> None:
         seen.add(name)
 
 
+#: schema の行と見出しの間に置ける宣言の行（`# <鍵> = <値>`）の鍵: シートの `injection_order` が何から
+#: 作られたか。`raw_acquisition_time`（raw の取得時刻の順。`pipeline_sample_sheet` が書く）/ `filename`
+#: （ファイル名の順。実際の測定順とは限らない）/ `sheet`（既定。宣言しないのと同じ）。
+ORDER_SOURCE_DECLARATION = "injection_order_source"
+ORDER_SOURCE_DECLARED_VALUES = ("sheet", "raw_acquisition_time", "filename")
+_DECLARATION_RE = re.compile(r"# ([A-Za-z_]+) = (\S+)")
+
+
+def _read_declarations(lines: list[str], path: Path) -> tuple[dict[str, str], int]:
+    """schema の行の後ろの宣言の行を読む。戻り値は（鍵 → 値（`sheet` は落とす）, 見出しの行の位置）。
+
+    `#` で始まる行は宣言の形・既知の鍵・既知の値でなければ SAMPLE_MANIFEST_INVALID（黙って読み飛ばさない）。
+    """
+    declared: dict[str, str] = {}
+    index = 1
+    while index < len(lines) and lines[index].startswith("#"):
+        line = lines[index].rstrip()
+        match = _DECLARATION_RE.fullmatch(line)
+        key, value = (match.group(1), match.group(2)) if match else (None, None)
+        if key != ORDER_SOURCE_DECLARATION or value not in ORDER_SOURCE_DECLARED_VALUES:
+            raise DomainError(
+                "SAMPLE_MANIFEST_INVALID",
+                f"{index + 1}行目の宣言が読めません: {line!r}（書けるのは "
+                f"`# {ORDER_SOURCE_DECLARATION} = <{' | '.join(ORDER_SOURCE_DECLARED_VALUES)}>` だけ）。",
+                {"path": str(path), "line": index + 1,
+                 "allowed": {ORDER_SOURCE_DECLARATION: list(ORDER_SOURCE_DECLARED_VALUES)}},
+            )
+        if key in declared:
+            raise DomainError("SAMPLE_MANIFEST_INVALID", f"宣言 {key} が重複しています。",
+                              {"path": str(path), "line": index + 1})
+        declared[key] = value
+        index += 1
+    return {k: v for k, v in declared.items() if v != "sheet"}, index
+
+
 def parse_manifest(path: Path, *, source_root: Path,
                     expected_sources: list[str]) -> list[dict]:
     """sample-manifest を厳密に読み、列+provenance+conflictsの行リストを返す。
@@ -155,6 +190,13 @@ def parse_manifest(path: Path, *, source_root: Path,
     raw測定単位）。全件に1行ずつ対応することを要求し、未知のsource_file・
     行欠落・重複を許さない。1件でも不正なら例外にし、部分的な行リストを
     返さない。
+
+    schema の行と見出しの間には宣言の行 `# injection_order_source = <raw_acquisition_time | filename |
+    sheet>` を置ける（`ORDER_SOURCE_DECLARATION`）。`sheet` 以外なら、値のある注入順の出所の記録に
+    `derived_from` を足す（`source` は `user_manifest` のまま。出所の名前は `order_provenance_label`）。
+    宣言のあるシートが一部の行にだけ注入順を持つ（`pipeline_sample_sheet` が取得時刻の読めない raw を空にした）
+    ときは、空の行の出所の記録にも `derived_from` を足す: その作り方では順が分からなかった印で、`.mddata`・
+    mzTab-M の番号で埋めない（`sheet_order_unknown`。番号の付け方が違う値を混ぜない）。すべて空なら印は付けない。
     """
     path = Path(path)
     source_root = Path(source_root).resolve()
@@ -172,8 +214,10 @@ def parse_manifest(path: Path, *, source_root: Path,
              "supported": sorted(_SCHEMA_HEADERS)},
         )
     role_values = _ROLE_VALUES_V2 if fields is FIELDS_V2 else _ROLE_VALUES
+    declarations, body_start = _read_declarations(lines, path)
+    order_origin = declarations.get(ORDER_SOURCE_DECLARATION)
 
-    reader = csv.DictReader(lines[1:], delimiter="\t",
+    reader = csv.DictReader(lines[body_start:], delimiter="\t",
                             restkey=_EXTRA_KEY, restval=None)
     fieldnames = list(reader.fieldnames or [])
     # 見出しは「既知の列（＋任意の `subject_id`）」で始まることを求め、その後ろだけを因子の列として受ける
@@ -202,7 +246,8 @@ def parse_manifest(path: Path, *, source_root: Path,
     seen_ids: set[str] = set()
     seen_raw_norm: dict[str, str] = {}
 
-    for line_no, raw_row in enumerate(reader, start=3):  # 1行目schema, 2行目見出し
+    # 1 行目 schema、続く宣言の行、その次が見出し
+    for line_no, raw_row in enumerate(reader, start=body_start + 2):
         if raw_row.get(_EXTRA_KEY) is not None:
             raise DomainError(
                 "SAMPLE_MANIFEST_INVALID",
@@ -319,6 +364,9 @@ def parse_manifest(path: Path, *, source_root: Path,
                 {"value": None, "source": None, "confidence": None} if value is None else
                 {"value": value, "source": "user_manifest", "confidence": "confirmed"}
             )
+        if order_origin is not None and values["injection_order"] is not None:
+            # シートの注入順が何から作られたかの宣言（raw の取得時刻・ファイル名）。値の出所はシートのまま
+            provenance["injection_order"]["derived_from"] = order_origin
 
         row = dict(values)
         row["provenance"] = provenance
@@ -332,6 +380,12 @@ def parse_manifest(path: Path, *, source_root: Path,
             f"予定raw {len(missing)} 件に行がありません: {', '.join(missing)}",
             {"missing_sources": missing},
         )
+
+    if order_origin is not None and any(row["injection_order"] is not None for row in rows):
+        # 宣言した作り方で一部の行だけ順が付いたシート: 空の行は「その作り方では分からない」（別の番号で埋めない）
+        for row in rows:
+            if row["injection_order"] is None:
+                row["provenance"]["injection_order"]["derived_from"] = order_origin
 
     # batch内（blank=未確認batchも1グループとして扱う）の注入順重複を拒否する。
     by_batch: dict[str | None, list[int]] = {}
@@ -392,23 +446,135 @@ def batch_labels_informative(labels) -> bool:
     """バッチのラベルが情報を持つか（2 種類以上あるか）。
 
     MS-DIAL のバッチラベルは CSV インポートで指定しない限り全件 "1"（Console は設定しない）。
-    定数のラベルは情報を持たないので採らず、ファイル名の日付の推定に戻す——定数を採ると、日付で
-    分かれていた交絡が検出できなくなる。mzTab 経路（`dataset_analysis.build_dataset_pp_inputs`）と
-    解析フォルダの経路が同じ規則を使うための唯一の定義。
+    定数のラベルは情報を持たないので採らない（バッチは不明のまま。試料名の 8 桁は候補として返すだけで
+    当てない）。mzTab 経路（`dataset_analysis.build_dataset_pp_inputs`）と解析フォルダの経路が同じ規則を
+    使うための唯一の定義。
     """
     return len({label for label in labels if label is not None}) > 1
 
 
 def filename_date_batch(name: str) -> str | None:
-    """試料名の中の 8 桁の日付（バッチの推定）。無ければ None。"""
+    """試料名の中の 8 桁の数字（バッチの**候補**。日付として正しいかは確かめない）。無ければ None。
+
+    統計（ドリフト補正・反復のまとめ・交絡の判定）にはこれを当てない（2026-11-14 の A7）。試料の表の行は
+    `provenance.batch.candidate` に、統計エンジンは `StudyData.batch_candidates` に候補として持つだけ。
+    """
     match = _DATE_RE.search(name or "")
     return match.group(1) if match else None
 
 
-def _filename_date_prov(value) -> dict:
-    if value is None:
-        return {"value": None, "source": None, "confidence": None}
-    return {"value": value, "source": "filename_date", "confidence": "inferred"}
+def _no_batch_prov(name: str) -> dict:
+    """バッチが不明な行の出所。試料名に 8 桁があれば候補として添える（値には当てない）。"""
+    prov = {"value": None, "source": None, "confidence": None}
+    candidate = filename_date_batch(name)
+    if candidate is not None:
+        prov["candidate"] = {"value": candidate, "source": "filename_date", "confidence": "inferred"}
+    return prov
+
+
+# ---------- 注入順の出所 ----------
+
+#: 試料の表の行の `provenance.injection_order.source`（と `sample_meta` の `run_order_source`）→ 出所の名前。
+#: 値に出所の記録が無い（手で組んだ行・古い記録）ときは `sheet`（表に明示された値として扱う）。
+INJECTION_ORDER_SOURCES = {
+    "user_manifest": "sheet", "mztab": "mzTab", "mztab_injection_sequence": "mzTab",
+    "msdial_mddata": "mddata", "raw_acquisition_time": "raw_acquisition_time", "filename": "filename",
+}
+#: MS-DIAL が振った注入順の出所。利用者が入れない限り MS-DIAL はファイルの順に 1, 2, … を振る
+#: （GUI はパスの昇順、Console はフォルダの列挙の順）。
+MSDIAL_ORDER_SOURCES = frozenset({"mzTab", "mddata"})
+FILE_ORDER_WARNING = "injection_order_may_be_file_order"
+
+
+def injection_order_source_label(source) -> str:
+    """出所の記録（provenance の source）を出所の名前（sheet / mzTab / mddata / raw_acquisition_time / filename）に。"""
+    if source is None:
+        return "sheet"
+    return INJECTION_ORDER_SOURCES.get(str(source), str(source))
+
+
+def sheet_order_unknown(row) -> bool:
+    """試料の表の行の注入順が「宣言した作り方（取得時刻・ファイル名）では分からない」空欄か。
+
+    `parse_manifest` が、一部の行にだけ注入順を持つ宣言つきのシートの空の行に付ける印（値が無く、出所の記録に
+    `derived_from` がある）。この空欄は `.mddata`・mzTab-M の番号で埋めない（`_merge_row` と統計エンジンの
+    試料の表）——シートの順位と MS-DIAL の番号は付け方が違い、混ぜるとドリフト補正・交絡の判定が狂う。
+    """
+    row = row or {}
+    prov = (row.get("provenance") or {}).get("injection_order") or {}
+    return row.get("injection_order") is None and bool(prov.get("derived_from"))
+
+
+def order_provenance_label(prov) -> str:
+    """試料の表の 1 欄の出所の記録（`{value, source, confidence[, derived_from]}`）を出所の名前に。
+
+    シートが宣言で値の作り方を書いていれば（`derived_from`: `raw_acquisition_time` / `filename`）その名前、
+    さもなくば `source` の名前（`injection_order_source_label`）。
+    """
+    prov = prov or {}
+    return injection_order_source_label(prov.get("derived_from") or prov.get("source"))
+
+
+def matches_file_order(orders, keys) -> bool:
+    """ファイル名（`keys`）の昇順に並べた試料の注入順が**狭義に増える**か（大文字小文字を区別しても
+    しなくても、どちらかで増えれば真）。値の無い試料は数えず、3 試料未満は判定しない（偽）。
+
+    同じ注入順の試料があれば偽（すべて同じ・同順位の多い値は MS-DIAL の既定の 1, 2, … ではなく、同順位を
+    ファイル名で割ると何でも「一致」に見えてしまう。そのときは通常の条件で判定させる）。
+    """
+    pairs = [(float(o), str(k)) for o, k in zip(orders, keys) if o is not None and k]
+    if len(pairs) < 3:
+        return False
+    for fold in (str, str.casefold):
+        ranked = [o for o, _k in sorted(pairs, key=lambda p: (fold(p[1]), p[0]))]
+        if all(a < b for a, b in zip(ranked, ranked[1:])):
+            return True
+    return False
+
+
+def file_order_keys(ds) -> list[str]:
+    """試料ごとの「ファイルの順」の鍵（`ds.sample_names` の順）。raw のパスが全試料で分かればそのファイル名、
+    さもなくば試料名（MS-DIAL の試料名はファイルの幹）。
+
+    陽陰を統合したデータセット（`dataset_merge_polarities`）は試料を共通 ID へ改名しているので、試料名の代わりに
+    試料の表の測定（陽イオン）の元の試料名（`quant_state["source_sample_names"]["positive"]`）で見る
+    （陽イオンだけのデータセットと同じ鍵）。"""
+    names = [str(n) for n in (getattr(ds, "sample_names", None) or [])]
+    paths = [_raw_path_for_sample(ds, i) for i in range(len(names))]
+    if names and all(paths):
+        return [os.path.basename(str(p).replace("\\", "/").rstrip("/")) for p in paths]
+    state = getattr(ds, "quant_state", None)
+    source = ((state.get("source_sample_names") or {}).get("positive")
+              if isinstance(state, dict) else None)
+    if isinstance(source, list) and len(source) == len(names):
+        return [str(n) for n in source]
+    return names
+
+
+def file_order_warning(n_samples: int) -> dict:
+    """`injection_order_may_be_file_order` の注意（前処理・交絡の判定・質量精度の ρ が返す）。"""
+    return {"code": FILE_ORDER_WARNING, "n_samples": int(n_samples),
+            "message": "注入順は MS-DIAL が振った値（.mddata / mzTab-M の MS:4000089）で、ファイル名の順と一致する。"
+                       "MS-DIAL は利用者が入れない限り注入順をファイルの順で振るので、実際の測定順とは限らない"
+                       "（実際の順が分かれば試料の表の injection_order に入れる: dataset_set_sample_metadata）。"}
+
+
+def injection_order_file_order_warning(ds) -> dict | None:
+    """試料の表の注入順が MS-DIAL 由来で、ファイル名の順と一致するなら注意を返す（さもなくば None）。
+
+    試料の表は `ds.sample_metadata_rows`（無ければ既定の行）。MS-DIAL 由来の値を持つ試料だけで判定する。
+    """
+    rows = getattr(ds, "sample_metadata_rows", None) or resolve_metadata(ds, None)
+    keys = file_order_keys(ds)
+    orders, chosen = [], []
+    for row, key in zip(rows, keys):
+        prov = ((row or {}).get("provenance") or {}).get("injection_order") or {}
+        if (row or {}).get("injection_order") is None:
+            continue
+        if order_provenance_label(prov) in MSDIAL_ORDER_SOURCES:
+            orders.append(row["injection_order"])
+            chosen.append(key)
+    return file_order_warning(len(orders)) if matches_file_order(orders, chosen) else None
 
 
 def _unverified_mztab_prov(value) -> dict:
@@ -454,13 +620,16 @@ def _msdial_row(ds, index: int, sample: dict, name: str) -> dict:
     if not in_mddata:
         provenance["role"] = {"value": values["role"], "source": "default",
                               "confidence": "inferred"}
+    elif not sample.get("role_declared", True):
+        # Console の既定の .mddata（class=FileID・type=0）は宣言とみなさない。役割はファイル名の推定。
+        provenance["role"] = {"value": values["role"], "source": "filename_token",
+                              "confidence": "inferred"}
     for field, fallback in (("batch", mz_batch), ("injection_order", mz_order)):
         if values[field] is None and fallback is not None:
             values[field] = fallback
             provenance[field] = _unverified_mztab_prov(fallback)
     if values["batch"] is None:
-        values["batch"] = filename_date_batch(name)
-        provenance["batch"] = _filename_date_prov(values["batch"])
+        provenance["batch"] = _no_batch_prov(name)     # 試料名の 8 桁は候補だけ（値には当てない）
     row = dict(values)
     row["provenance"] = provenance
     row["conflicts"] = []
@@ -478,10 +647,7 @@ def _default_row(ds, index: int, name: str) -> dict:
     if not batch_labels_informative(
             [_mztab_batch_and_order(ds, i)[0] for i in range(len(ds.sample_names))]):
         batch = None
-    batch_prov = _unverified_mztab_prov(batch)
-    if batch is None:
-        batch = filename_date_batch(name)
-        batch_prov = _filename_date_prov(batch)
+    batch_prov = _unverified_mztab_prov(batch) if batch is not None else _no_batch_prov(name)
 
     values = {
         "sample_id": name, "source_file": source_file, "role": role,
@@ -505,8 +671,27 @@ def _default_row(ds, index: int, name: str) -> dict:
     return row
 
 
+def _mddata_batch_and_order(ds, index: int) -> tuple[str | None, int | None]:
+    """.mddata が宣言したバッチ（2 種類以上あるときだけ）と注入順（解析フォルダのデータセットだけ）。"""
+    msdial = list(getattr(ds, "msdial_samples", None) or [])
+    if index >= len(msdial):
+        return None, None
+    sample = msdial[index] or {}
+    labels = [None if s.get("batch") is None else str(s["batch"]) for s in msdial]
+    batch = (str(sample["batch"]) if sample.get("batch") is not None
+             and batch_labels_informative(labels) else None)
+    order = sample.get("injection_order")
+    return batch, order if isinstance(order, int) and not isinstance(order, bool) else None
+
+
 def _merge_row(ds, index: int, name: str, row: dict) -> dict:
-    """明示シートの1行へ、埋まっていない列だけdataset由来の候補で補う。"""
+    """明示シートの1行へ、埋まっていない列だけdataset由来の候補で補う。
+
+    バッチと注入順の空欄は `.mddata` の宣言（解析フォルダ）→ mzTab-M の MTD（未確認）の順に埋め、値と出所を
+    行に残す（統計エンジンも同じ順に読むので、試料の表に見える値と統計が使う値が食い違わない）。ただし
+    宣言つきのシートが「その作り方では分からない」と印を付けた注入順の空欄（`sheet_order_unknown`）は埋めない。
+    明示値と違う候補は上書きせず ``conflicts`` に残す。
+    """
     values = dict(row)
     provenance = {field: dict(prov) for field, prov in row["provenance"].items()}
     conflicts = list(row.get("conflicts", []))
@@ -517,20 +702,22 @@ def _merge_row(ds, index: int, name: str, row: dict) -> dict:
         values["role"] = "sample"
         provenance["role"] = {"value": "sample", "source": "default", "confidence": "inferred"}
 
+    md_batch, md_order = _mddata_batch_and_order(ds, index)
     mz_batch, mz_order = _mztab_batch_and_order(ds, index)
+    if sheet_order_unknown(row):
+        md_order = mz_order = None    # シートの作り方では分からない注入順は、別の番号で埋めない
+    declared = {"source": "msdial_mddata", "confidence": "declared"}
+    for field, md_value, mz_value in (("batch", md_batch, mz_batch),
+                                      ("injection_order", md_order, mz_order)):
+        candidates = [(v, {"value": v, **declared}) for v in (md_value,) if v is not None]
+        candidates += [(v, _unverified_mztab_prov(v)) for v in (mz_value,) if v is not None]
+        if values[field] is None:
+            if candidates:
+                values[field], provenance[field] = candidates[0]
+        else:
+            conflicts += [{"field": field, **prov} for v, prov in candidates if v != values[field]]
     if values["batch"] is None:
-        if mz_batch is not None:
-            values["batch"] = mz_batch
-            provenance["batch"] = _unverified_mztab_prov(mz_batch)
-    elif mz_batch is not None and mz_batch != values["batch"]:
-        conflicts.append({"field": "batch", **_unverified_mztab_prov(mz_batch)})
-
-    if values["injection_order"] is None:
-        if mz_order is not None:
-            values["injection_order"] = mz_order
-            provenance["injection_order"] = _unverified_mztab_prov(mz_order)
-    elif mz_order is not None and mz_order != values["injection_order"]:
-        conflicts.append({"field": "injection_order", **_unverified_mztab_prov(mz_order)})
+        provenance["batch"] = _no_batch_prov(name)     # 試料名の 8 桁は候補だけ（値には当てない）
 
     merged = dict(values)
     merged["provenance"] = provenance
@@ -663,9 +850,10 @@ def apply_metadata(ds, rows: list[dict]) -> dict:
                     if before.get(field) != after.get(field)}
 
     # ここまでの検証が全部通ってから、まとめて反映する（半端な適用を作らない）。
-    # 因子の列は設計（design.factors）の入力なので、群と同じく差次的解析を古くする。
+    # 因子の列は設計（design.factors）の入力なので、群と同じく差次的解析を古くする。捨てた図の理由
+    # （save_figure の STALE_FIGURE の details.reason）には、広げる前の実際に変わった列だけを残す。
     invalidate_results(ds, changed | (STAT_FIELDS if changed & _factor_columns_of(rows + old_rows)
-                                      else set()))
+                                      else set()), reason=changed)
     ds.sample_metadata_rows = rows
     ds.sample_ids = [row["sample_id"] for row in rows]
     if changed:   # 何も変わらない再適用は版を進めない（図・分子種 PCA を無駄に古くしない）
@@ -713,7 +901,10 @@ def pp_inputs_from_rows(sample_names: list[str], rows: list[dict]) -> tuple[dict
             "batch": row.get("batch"),
             "batch_source": batch_prov.get("source"),
             "run_order": row.get("injection_order"),
-            "run_order_source": order_prov.get("source"),
+            # シートが宣言で作り方を書いた注入順（raw の取得時刻・ファイル名）はその名前を出所にする。値の無い
+            # 注入順に出所は無い（`sheet_order_unknown` の印の `derived_from` を出所と読ませない）
+            "run_order_source": ((order_prov.get("derived_from") or order_prov.get("source"))
+                                 if row.get("injection_order") is not None else None),
         }
         # 任意の列。シートが持ち、値があるときだけ載せる（B では持つだけで統計には使わない）。
         if row.get("subject_id") is not None:
@@ -740,8 +931,9 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
     契約により ``ds`` には一切触れない（対話的なDatasetState経路にも同じ検証・出所・
     無効化規則を適用する、spec §7.3）。
 
-    ``DatasetState`` は ``source_root`` 自体を保持しないため、実行時に予定した raw の
-    絶対パス（``ds.assay_sources``）から逆算する。
+    ``DatasetState`` は ``source_root`` 自体を保持しないため、試料ごとの raw の絶対パス
+    （``_raw_path_for_sample``。``resolve_metadata`` がシートの行を試料へ結ぶのと同じ値）から逆算する
+    （``_raw_manifest_layout``）。
     """
     source_root, expected_sources = _raw_manifest_layout(ds)
     rows = parse_manifest(Path(manifest_path), source_root=source_root,
@@ -753,16 +945,19 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
 def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
     """sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を、予定した raw の絶対パスから逆算する。
 
-    mzTab-M のアダプタのデータセットは ``ds.assay_sources``（abundance_assay[N] -> raw）を持つ。
-    解析フォルダのアダプタのデータセットは持たないので、試料ごとに
-    ``_raw_path_for_sample``（job の mzTab-M の場所 → ``.mddata`` の
-    ``file_path`` → assay id の優先順。resolve_metadata がシートの行を試料へ結ぶのと同じ関数）を使う。
+    試料ごとに ``_raw_path_for_sample``（``ds.sample_raw_paths`` → ``.mddata`` の ``file_path`` →
+    assay id から ``ds.assay_sources`` の優先順）を使う。resolve_metadata がシートの行を試料へ結ぶのと
+    **同じ関数**で、検証の置き場所と結び方が別の raw を見ることは無い（pipeline の run を動かしたあと
+    ``source="mztab"`` で開くと、試料の対応表を raw の名前で結んだ ``sample_raw_paths`` は今の run の場所、
+    ``assay_sources`` は Console が走ったときの場所になる。置き場所を ``assay_sources`` から取ると、どのシートも
+    試料に結べなかった）。試料から 1 つも引けないときだけ ``ds.assay_sources`` の値を使う（assay id を
+    持たない合成のデータセット）。
     """
-    paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
+    paths = [Path(p) for p in (
+        _raw_path_for_sample(ds, i)
+        for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
     if not paths:
-        paths = [Path(p) for p in (
-            _raw_path_for_sample(ds, i)
-            for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
+        paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
     if not paths:
         if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
             reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"

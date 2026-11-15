@@ -1,7 +1,7 @@
 """描画の MCP ツール `dataset_plot`（spec §8）。`kind` ごとの関数へ振り分ける。
 
 入力は `DatasetState`（ハンドル）。数値・描画の組み立ては `plots/*` の純粋な部品を使い、ここは
-結果の選び方（古い結果は描かない）・引数の取り違えの拒否・`.EIC.aef` の出所・戻り値の形だけを持つ。
+結果の選び方（古い結果は描かない）・別の kind の引数の扱い（断らずに外して notes）・`.EIC.aef` の出所・戻り値の形だけを持つ。
 作った図の記録は `ds.figures[kind]` に置き、`save_figure(kind=...)` がそこから描く。
 
 `kind` と形式名（Use-LLLM が読む）:
@@ -18,6 +18,7 @@ group_intensity / species / species_pca は `plot_species_kinds.py`（項目の�
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -42,6 +43,7 @@ from metabolomix.plots import species as species_plot
 from metabolomix.plots import volcano as volcano_plot
 from metabolomix.plots.result_output import build_annotated, figure_annotations
 from metabolomix.tools import plot_species_kinds
+from metabolomix.tools._contrast_choice import contrast_envelope
 from metabolomix.tools._holder import resolve_holder
 
 __all__ = ["dataset_plot"]
@@ -53,7 +55,7 @@ RESULT_KINDS = ("volcano", "pca", "loadings")
 _ITEM_ARGS = ("items", "groups", "low_reliability_samples", "standard_samples", "apply_curation",
               "exclude_auto_likely_wrong")
 
-#: kind ごとの引数。ここに無い引数が渡されたら、どの kind の引数かを添えて拒む。
+#: kind ごとの引数。ここに無い引数が渡されたら使わず、どの kind の引数かを説明（payload は `notes`）に書く。
 _KIND_ARGS: dict[str, tuple[str, ...]] = {
     "volcano": ("contrast_id",),
     "pca": ("color_by",),
@@ -173,7 +175,8 @@ def _volcano(ds, req: _Request) -> dict:
     points = [p for p in result["volcano"] if volcano_plot._is_drawable(p)]
     up = sum(1 for p in points if p.get("sig") == "up")
     down = sum(1 for p in points if p.get("sig") == "down")
-    caption = (f"Volcano: {result.get('a')} (n={result.get('n_a')}) vs {result.get('b')} (n={result.get('n_b')})"
+    # 並びは test vs reference（対比 ID `test_vs_ref` と同じ向き。log2fc は正なら test が高い）
+    caption = (f"Volcano: {result.get('b')} (n={result.get('n_b')}) vs {result.get('a')} (n={result.get('n_a')})"
                f" — 全 {len(result['volcano'])} 特徴のうち up={up} / down={down} / ns={len(points) - up - down}"
                f"（検定不能 {len(result['volcano']) - len(points)} 件は非描画）。"
                f" しきい値 q<{result.get('q_threshold')}, |log2FC|>={result.get('log2fc_threshold')}。"
@@ -425,6 +428,49 @@ def build_figure(ds, kind: str, **args) -> dict:
     return _KINDS[kind](ds, request)
 
 
+# ---------- ファイルへの保存（`dataset_plot(output_path=...)` と `save_figure` が共有する） ----------
+
+#: PNG と同名の SVG も書く kind（報告書用に dpi 300）。ほかは dpi 120 の PNG だけ。
+SVG_KINDS = ("loadings", "group_intensity", "species", "species_pca")
+
+
+def write_figure_files(ds, record: dict, out_path, title: str | None = None) -> list:
+    """図の記録をファイルに書き、書いたパス（PNG が先）を返す。
+
+    pca / volcano は `save_result_figure`（dpi 120。探索専用・未調整の交絡の但し書きを図に入れる。一時ファイルから
+    置換）、loadings / group_intensity / species / species_pca は dpi 300 の PNG と同名 `.svg`、eic / eic_compounds は
+    dpi 120 の PNG。`title` を省けば図を作ったときの題。
+    """
+    from pathlib import Path
+
+    from metabolomix.plots.result_output import save_result_figure
+
+    kind = record["kind"]
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    title = title or record.get("title")
+    if kind == "pca":
+        save_result_figure(ds, record["payload"], out_path, kind="pca", title=title)
+        return [out_path]
+    if kind == "volcano":
+        save_result_figure(ds, record["result"], out_path, kind="volcano", title=title)
+        return [out_path]
+    if kind in SVG_KINDS:
+        build = {"loadings": loadings_plot.render_loadings_plot,
+                 "group_intensity": group_intensity_plot.render_group_intensity_plot,
+                 "species": species_plot.render_species_plot,
+                 "species_pca": scores_plot.render_pca_scores}[kind]
+        if kind == "species_pca":
+            title = title or record["payload"]["title"]
+        svg = out_path.with_suffix(".svg")
+        plot_render.render_files(build, {"png": out_path, "svg": svg}, record["payload"],
+                                 dpi=300, title=title)
+        return [out_path, svg]
+    plot_render.render_files(eic_plot.render_eic_plot, {"png": out_path}, record["payload"],
+                             dpi=120, title=title)
+    return [out_path]
+
+
 # ---------- 描画 ----------
 
 def _png(ds, record: dict) -> bytes:
@@ -450,17 +496,43 @@ def _png(ds, record: dict) -> bytes:
     return plot_render.render_png(eic_plot.render_eic_plot, record["payload"], title=title)
 
 
-def _check_arguments(kind: str, request: _Request) -> None:
+def _drop_unused_arguments(kind: str, request: _Request) -> list[str]:
+    """`kind` が使わない引数を `request` から外し、外したことの注記（どの kind の引数か）を返す。
+
+    断らない: その kind の図は外した引数によらず同じものを描くので、描いて説明（payload は `notes`）に書く
+    （`save_figure` の使わない `result_id` / `contrast_id` と同じ扱い）。値の誤りは各 kind が `DATASET_BAD_REQUEST`。
+    """
     allowed = set(_KIND_ARGS[kind]) | ({"result_id"} if kind in RESULT_KINDS else set())
+    notes = []
     for name in sorted(request.given - allowed):
         owners = ([k for k, args in _KIND_ARGS.items() if name in args]
                   or (list(RESULT_KINDS) if name == "result_id" else []))
-        raise _bad(f"{name} は kind={' / '.join(owners)} の引数です（kind={kind!r} では使いません）。",
-                   argument=name, kind=kind, belongs_to=owners)
+        notes.append(f"{name} は kind={' / '.join(owners)} の引数なので使っていない（kind={kind!r}）。")
+        setattr(request, name, None)
+    request.given &= allowed
+    return notes
+
+
+def _with_notes(envelope: str, notes: list[str]) -> str:
+    """誤りの封筒（`{"error": {...}}`）の `details.notes` に、使わなかった引数の注記を足す（注記が無ければそのまま）。
+
+    `dataset_plot` が描けずに返すどの誤りの封筒にも、断らずに外した引数を書く（直して呼び直す前に知れる）。
+    `missing_state` の封筒も `details` を持つ（`state` / `required_tools` / `message` はそのまま）。誤りでない封筒
+    （`needs_input`）は変えない。
+    """
+    if not notes:
+        return envelope
+    body = json.loads(envelope)
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return envelope
+    error["details"] = {**(error.get("details") or {}), "notes": list(notes)}
+    return json_payload(body)
 
 
 @mcp.tool(annotations=ToolAnnotations(
-    # 図を ds.figures へ、species_pca は結果を ds.results へ登録する（メモリ上。ファイルは save_figure）。
+    # 図を ds.figures へ、species_pca は結果を ds.results へ登録する（メモリ上）。`output_path` を渡せば
+    # 描いた図をそのファイルにも書く（同じパスは上書き）。
     readOnlyHint=False, destructiveHint=False, idempotentHint=False),
     structured_output=False)
 def dataset_plot(
@@ -491,12 +563,17 @@ def dataset_plot(
     log_transform: bool | None = None,
     orient_by: str | None = None,
     contrast_id: str | None = None,
+    output_path: str | None = None,
 ) -> list | str:
-    """データセットの図を描く — 既定は PNG 画像と 1 行の説明。ファイルは書かない（保存は `save_figure`）。
+    """データセットの図を描く — 既定は PNG 画像と 1 行の説明。`output_path` を渡せば同じ図をファイルにも書く。
 
-    kind と、その kind だけの引数（別の kind の引数を渡すと DATASET_BAD_REQUEST）:
+    kind と、その kind だけの引数（別の kind の引数は断らずに使わず、説明の最後の `notes:` 行〔payload は `notes`。
+    描けなかった誤りの封筒は `missing_state` も含めて `details.notes`。誤りでない `needs_input` は持たない〕に
+    どの kind の引数かを書く）:
       - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`）。`result_id` で名指しもできる。対比が複数の結果は
-        `contrast_id`（`T_vs_C` など）で 1 つ選ぶ（省くと `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`）。
+        `contrast_id`（`T_vs_C` など。`result_id#contrast_id` の形でも可）で 1 つ選ぶ（2 群の対比が複数で省くと
+        `needs_input`〔選択肢は対比の一覧〕、交互作用は `CONTRAST_NOT_TWO_GROUP`）。題と説明の並びは
+        `test vs reference`（log2fc は正なら test が高い）。
       - `pca`: 直近の `dataset_pca`（`result_id` で名指し）。`color_by="group"`（既定）/ `"batch"` / `"role"`。
       - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
         1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、
@@ -535,10 +612,15 @@ def dataset_plot(
       `lipidmix.pca_scores.v1` `lipidmix.pca_loadings.v1` `lipidmix.group_intensity.v1`
       `lipidmix.species_intensity.v1` `lipidmix.species_pca.v1` `lipidmix.eic.v1` `lipidmix.eic.multi.v1`。
       volcano は有意な点を全件、ns の点を間引いて返す）。環境変数 `LIPIDMIX_PLOT_OUTPUT` で既定を変えられる。
-      座標を LLM に渡すより画像のほうが桁違いに安いので、画面に出すだけなら image。
+      座標を LLM に渡すより画像のほうが桁違いに安いので、画面に出すだけなら image。返す PNG は
+      画素数に上限があり（大きな図は解像度を下げて返す）、ファイルに書く図はそれと別に描く。
+    output_path: 描いた図を書くファイル（`.png`。親のフォルダは作る。同じパスは上書き）。`save_figure` と同じ
+      描き方で、loadings / group_intensity / species / species_pca は dpi 300 の PNG と同名の `.svg`、ほかは
+      dpi 120 の PNG。書いたパスは説明（payload なら `saved_files`）に出る。
     title: 図の題。dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
 
-    作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が描く。
+    作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が
+    `reports/figures/` へ書く。
     """
     if feature_id is not None:
         feature_id = str(feature_id)  # MCP クライアントは数字だけの ID を整数で送ることがある
@@ -563,32 +645,60 @@ def dataset_plot(
         return mztab_error("DATASET_BAD_REQUEST",
                            f"kind は {', '.join(_KINDS)} のどれかを指定してください（受け取った値: {kind!r}）。",
                            {"kinds": list(_KINDS)})
+    # 使わない引数は断らず、戻り値の notes に書く。描けなかった誤りの封筒にも `details.notes` で添える
+    # （`_with_notes`。引数の形の誤り・ハンドル・データセットの無いとき・書けないときも）。
+    notes = _drop_unused_arguments(kind, request)
     try:
-        _check_arguments(kind, request)
         mode = plot_render.resolve_plot_output(output)
-    except DomainError as exc:
-        return mztab_error(exc.code, exc.message, exc.details or None)
     except ValueError as exc:
-        return mztab_error("DATASET_BAD_REQUEST", str(exc), {"output": output})
+        return _with_notes(mztab_error("DATASET_BAD_REQUEST", str(exc), {"output": output}), notes)
+    if output_path is not None and not str(output_path).lower().endswith(".png"):
+        return _with_notes(mztab_error(
+            "DATASET_BAD_REQUEST",
+            f"output_path は .png のファイルを指定してください（受け取った値: {output_path!r}）。",
+            {"output_path": output_path}), notes)
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
-        return holder
+        return _with_notes(holder, notes)
     ds = holder.dataset
     if ds is None:
-        return missing_state("dataset", ["load_dataset"],
-                             "DatasetState がありません。先に load_dataset を実行してください。")
+        return _with_notes(missing_state("dataset", ["load_dataset"],
+                                         "DatasetState がありません。先に load_dataset を実行してください。"),
+                           notes)
     try:
         record = _KINDS[kind](ds, request)
+        saved = []
+        if output_path is not None:
+            from pathlib import Path
+
+            try:
+                saved = [str(p) for p in write_figure_files(ds, record, Path(output_path).expanduser(),
+                                                            title=title)]
+            except OSError as exc:
+                # output_path に書けないときだけ（図の組み立て・入力の読み取りの OSError はここに来ない）。
+                # 図の置き場（ds.figures）は変えない。
+                return _with_notes(mztab_error("FIGURE_SAVE_FAILED", f"図を書けませんでした: {exc}",
+                                               {"output_path": output_path}), notes)
         if mode == plot_render.PAYLOAD:
-            body = json_payload(record["payload"])
+            body = json_payload({**record["payload"], **({"saved_files": saved} if saved else {}),
+                                 **({"notes": notes} if notes else {})})
         else:
             png = _png(ds, record)
-            body = [record["caption"], Image(data=png, format="png")]
+            caption = record["caption"]
+            if saved:
+                caption += f" 保存: {', '.join(saved)}"
+            if notes:
+                caption += "\nnotes: " + " ".join(notes)
+            body = [caption, Image(data=png, format="png")]
     except _Missing as exc:
-        return missing_state(exc.state, exc.required_tools, exc.message)
+        return _with_notes(missing_state(exc.state, exc.required_tools, exc.message), notes)
     except DomainError as exc:
-        return mztab_error(exc.code, exc.message, exc.details or None)
+        # 使わなかった引数も添える（例: eic_compounds に file_id でなく file_ids を渡した）。対比を選ばせる問い
+        # （needs_input）は誤りの封筒ではないので変えない
+        return _with_notes(contrast_envelope(exc, "dataset_plot"), notes)
     except ValueError as exc:                      # 描くものが無い等（描画部品の検査）
-        return mztab_error("DATASET_BAD_REQUEST", str(exc), {"kind": kind})
+        return _with_notes(mztab_error("DATASET_BAD_REQUEST", str(exc), {"kind": kind}), notes)
     ds.figures[kind] = record
+    # 描き直した図は新しいもの（捨てた図の印を消す。save_figure はもう STALE_FIGURE を返さない）
+    (getattr(ds, "discarded_figures", None) or {}).pop(kind, None)
     return body

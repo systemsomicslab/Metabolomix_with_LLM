@@ -253,8 +253,6 @@ def test_dataset_export_refuses_without_inchikey(tmp_path):
     assert not out.exists()
 
 
-# --- min_detection_rate（evidence sidecar 由来）---
-
 # ---------- 結果 ID と無効化（Task 6） ----------
 # 前処理をやり直したのに古い差次的結果が残っていると、TSV と図が別々の前処理から
 # 出た数字を並べる。ツール層でもその境界が効いていることを確かめる。
@@ -368,7 +366,7 @@ def test_export_records_which_result_it_came_from(tmp_path):
 def test_factor_tokens_flow_name_tokens_to_group_levels_to_compare_with_matrix_id():
     """USAGE.md §7 の例そのまま: 試料名のトークン → preprocess の group_levels → matrix_id で比較。
 
-    比較に群の引数を渡すと matrix_id と併用できない（群は行列が決めている）。
+    群は行列が決めている: 比較に同じ群の引数を添えても重複として notes に書くだけで、同じ比較になる。
     """
     from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
 
@@ -381,7 +379,8 @@ def test_factor_tokens_flow_name_tokens_to_group_levels_to_compare_with_matrix_i
     assert compared["status"] == "success"
     assert compared["matrix_id"] == prepared["matrix_id"]
     assert compared["group_n"] == {"ctrl": 4, "treat": 4}
-    refused = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
-                                         matrix_id=prepared["matrix_id"],
-                                         group_levels=["ctrl", "treat"]))
-    assert "error" in refused
+    redundant = json.loads(dataset_compare(reference_group="ctrl", test_group="treat",
+                                           matrix_id=prepared["matrix_id"],
+                                           group_levels=["ctrl", "treat"]))
+    assert redundant["status"] == "success" and redundant["result_id"] == compared["result_id"]
+    assert any("group_levels" in n for n in redundant["notes"])

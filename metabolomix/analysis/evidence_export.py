@@ -55,10 +55,12 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
                            spectra_files, output_dir, source_analysis_id=None,
                            exclusions=None, provenance=None, preprocessing_report=None,
                            samples=None, intensities=None, intensities_stage=None,
-                           detection_unavailable_reason=None):
+                           detection_unavailable_reason=None, exploratory=None):
     """同じ親の一時ディレクトリを完成させてから公開する。既存出力は置換しない。
 
     `samples` と `intensities` を両方渡せば v3、どちらも無ければ v2（ARF 経路）。
+    `exploratory`（`{"exploratory_only", "reason"}`）は `exploratory_only` が真のときだけ manifest の最上位の
+    `exploratory` に書く（受け手は未知の欄を許す。ファイルと列は変えず、探索専用でない束の manifest も変えない）。
     """
     if (samples is None) != (intensities is None):
         raise ValueError('samples と intensities は両方渡すか、両方省いてください')
@@ -114,6 +116,8 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
         if v3:
             manifest['intensities_stage'] = intensities_stage
             manifest['population']['detection_unavailable_reason'] = detection_unavailable_reason
+        if exploratory is not None and exploratory.get('exploratory_only'):
+            manifest['exploratory'] = clean(exploratory)
         (staging/'manifest.json').write_text(packed(manifest)+'\n',encoding='utf-8')
         os.rename(staging, out)
     summary = dict(status='success', output_path=str(out/'manifest.json'),contract_version=version,
@@ -122,6 +126,8 @@ def write_evidence_bundle(*, comparison, features, annotations, spectrum_links,
     if v3:
         summary.update(n_samples=len(samples),n_intensity_rows=len(intensities),
                        intensities_stage=intensities_stage)
+    if exploratory is not None and exploratory.get('exploratory_only'):
+        summary['exploratory'] = clean(exploratory)
     return summary
 
 
@@ -130,18 +136,37 @@ def _intensity_cell(row):
     return {**row,'value':export_contract.format_number(row['value'],'.10g')}
 
 
-def comparison_of(result, preprocess):
-    """manifest の `comparison`。`result` は `as_two_group` の出力で、実際の検定名と `statistics`
-    （検定・CI 水準・判定規則・BH の母集団・単位）を持つ。`allow_confounded=true` で完全交絡を越えた比較なら
-    `unadjusted_confounded: true` も足す。`n_a` / `n_b` は注入の数で、`samples.tsv` の群 a / b の行数と一致する。"""
+#: 補正の方法 → manifest の `comparison.correction` の名前（BH は従来どおり `BH`）。
+_CORRECTION_NAMES = {'bh': 'BH', 'bonferroni': 'Bonferroni', 'holm': 'Holm', 'none': 'none'}
+
+
+def correction_name(method) -> str:
+    """補正の方法（無ければ BH）を manifest の `correction` の名前にする。"""
+    key = str(method or 'bh').lower()
+    return _CORRECTION_NAMES.get(key, key)
+
+
+def comparison_of(result, preprocess, exploratory=None):
+    """manifest の `comparison`。`result` は `as_two_group(..., contract_q=True)` の出力で、実際の検定名と
+    `statistics`（検定・CI 水準・判定規則・BH の母集団・単位）を持つ。`correction` は `features.tsv` の `q_value`
+    を作った補正で、契約どおりいつも BH（`result['q_value_method']`）。比較の補正が BH でなく q を p から計算し直した
+    ときだけ、比較の方法 `p_adjust_method`（`bonferroni` / `holm` / `none`）と `q_value_source`
+    （`recomputed_from_p_value`）を足す（BH の比較の manifest は変えない。`statistics` には重ねて載せない）。
+    `allow_confounded=true` で完全交絡を越えた比較なら `unadjusted_confounded: true` も足す。探索専用のデータセットなら
+    最上位の `exploratory` と同じ `{exploratory_only, reason}` を `comparison.exploratory` にも写す（受け手が `comparison`
+    をそのまま見せる経路でも印が届く）。`n_a` / `n_b` は注入の数で、`samples.tsv` の群 a / b の行数と一致する。"""
     statistics = result['statistics']
+    method = statistics.get('p_adjust_method') or 'bh'
+    q_method = result.get('q_value_method') or method
     comparison = dict(group_a=result['a'], group_b=result['b'], n_a=result['n_a'], n_b=result['n_b'],
                       log2fc_sign=export_contract.LOG2FC_SIGN,
-                      method=statistics['test'],correction='BH',
+                      method=statistics['test'],correction=correction_name(q_method),
                       q_threshold=result['q_threshold'],log2fc_threshold=result['log2fc_threshold'],
                       preprocess=clean(preprocess),log_transform=result.get('log_transform'))
     # spec §13: 書き出しのメタ行と同じ定義を manifest にも置く（受け手は未知の欄を許す）
-    comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(statistics),
+    # 補正の方法は correction に出す（statistics の欄は v3 の見本のまま）
+    shown = {k: v for k, v in statistics.items() if k != 'p_adjust_method'}
+    comparison.update(contrast_id=result.get('contrast_id'),statistics=clean(shown),
                       effect_size_definition=clean(result.get('effect_size_definition')),
                       mean_definition=export_contract.MEAN_DEFINITION,
                       matrix_id=result.get('matrix_id'),rule_hash=result.get('rule_hash'))
@@ -149,6 +174,10 @@ def comparison_of(result, preprocess):
     # 来歴そのもの（manifest の provenance.result.comparison）にも同じ形で載る。
     if ((result.get('provenance') or {}).get('comparison') or {}).get('unadjusted_confounded'):
         comparison['unadjusted_confounded'] = True
+    if result.get('q_value_source') not in (None, 'comparison'):
+        comparison.update(p_adjust_method=method, q_value_source=result['q_value_source'])
+    if exploratory is not None and exploratory.get('exploratory_only'):
+        comparison['exploratory'] = clean(exploratory)
     return comparison
 
 
@@ -170,6 +199,19 @@ def annotation_row(fid, source, raw, index=0):
                 name=name,inchikey=key,rank=raw.get('rank'),status='active',provenance=clean(raw),curation={},
                 structure_ids={k:raw[k] for k in ('inchi','smiles','database_identifier') if raw.get(k)},
                 scores={k:raw[k] for k in ('confidence_measure','confidence_value') if raw.get(k) is not None})
+
+
+def library_candidate(candidate, computed: bool):
+    """根拠バンドルに写す SME の候補。`computed`（その特徴の rank 1 の理論 m/z を組成式と付加体から計算した。
+    `DatasetState.theoretical_mz_computed`）なら、その `theoretical_mass_to_charge` を空にした写し。
+
+    バンドルの `provenance.theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z（mzTab-M の SME の値）の
+    意味のまま保つ。計算した値は注釈が表す m/z で別物だが、来歴の欄を足さず（契約の形を変えない）、
+    `directory=` で開いたデータセットでは計算の前と同じ空にする。データセットの候補は変えない。
+    """
+    if not computed or candidate.get('rank') != 1:
+        return candidate
+    return {**candidate, 'theoretical_mass_to_charge': None}
 
 
 def curate_annotations(annotations, flags, fid_to_spot):
@@ -391,15 +433,22 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
 
     `result` は統計エンジンの `compare` の記録（`as_two_group` で 1 つの対比を読む。対比が複数なら
     `contrast_id` が要る）。`comparison.method` は実際の検定名で `comparison.statistics` を足し、
-    `intensities.tsv` は行列の `sample_values`（`pre_imputation`）。"""
-    if getattr(ds,'exploratory_only',False):
-        raise DomainError('EXPLORATORY_ONLY_DATASET','探索専用データセットは比較の根拠として出力できません',{})
+    `intensities.tsv` は行列の `sample_values`（`pre_imputation`）。`features.tsv` の `q_value` と `significant` は
+    契約どおり BH の q とその q で読んだ判定（比較が別の補正なら p から計算し直し、`comparison.p_adjust_method` /
+    `q_value_source` と戻り値の `notes` に書く。`comparison_of`）。
+    探索専用のデータセット（中断された実行・検証を通っていない pipeline の単位）も断らず、manifest の
+    `exploratory` に `{exploratory_only: true, reason}` を書く（`comparison.exploratory` にも。探索専用でなければ
+    どちらの欄も作らない）。"""
+    from metabolomix.analysis.dataset_export import exploratory_reason, recomputed_q_note
+    reason = exploratory_reason(ds)
+    exploratory = dict(exploratory_only=reason is not None,reason=reason)
     record = result
     assert_current(ds,record)
-    result = as_two_group(record,contrast_id)
+    # features.tsv の q_value は契約の BH の q（比較が別の補正なら p から計算し直す。significant もその q で読む）
+    result = as_two_group(record,contrast_id,contract_q=True)
     provenance = result.get('provenance') or {}
     entry = get_matrix(ds,record['matrix_id'])
-    comparison = comparison_of(result,dict(entry['config']) if entry else {})
+    comparison = comparison_of(result,dict(entry['config']) if entry else {},exploratory)
     comparison['polarity'] = polarity
     try:
         samples = _samples_table(ds,result)
@@ -408,6 +457,7 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         raise DomainError('EVIDENCE_INTENSITIES_UNAVAILABLE',
                           f'試料ごとの値を取り出せません: {exc.message}',exc.details) from exc
     adducts = alignment_qc._feature_adducts(ds)
+    computed_mz = getattr(ds,'theoretical_mz_computed',None) or set()
     features, annotations, mapping = [], [], {}
     for row in result['results']:
         fid = str(row['feature'])
@@ -419,7 +469,8 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
         features.append(feature)
         candidates = getattr(ds,'feature_candidates',{}).get(row['feature'],[]) or []
         if candidates:
-            annotations.extend(annotation_row(fid,'msdial_sme',candidate,i) for i,candidate in enumerate(candidates))
+            annotations.extend(annotation_row(fid,'msdial_sme',library_candidate(candidate,fid in computed_mz),i)
+                               for i,candidate in enumerate(candidates))
             if meta.get('inchikey') or meta.get('name'):
                 annotations.append(annotation_row(fid,'msdial_resolved_annotation',meta))
             annotation = getattr(ds,'feature_annotations',{}).get(row['feature'],{})
@@ -437,11 +488,17 @@ def export_dataset_evidence(ds, result, output_dir, *, curation=None, polarity=N
     annotations = curate_annotations(annotations,flags,mapping)
     source_id = provenance.get('result_id') or hashlib.sha256(packed(result).encode()).hexdigest()
     links, spectra, link_provenance = dataset_spectrum_links(ds,result['results'],arf2_path,dcl_path,source_id)
-    return write_evidence_bundle(comparison=comparison,features=features,annotations=annotations,
-                                  spectrum_links=links,spectra_files=spectra,output_dir=output_dir,
-                                  source_analysis_id=source_id,provenance=dict(result=provenance,
-                                      source_files=getattr(ds,'source_files',[]),curation_state=(curation or {}).get('state'),
-                                      **link_provenance),
-                                  exclusions=_engine_exclusions(entry),samples=samples,
-                                  intensities=intensities,intensities_stage=stage,
-                                  detection_unavailable_reason=detection_reason)
+    summary = write_evidence_bundle(comparison=comparison,features=features,annotations=annotations,
+                                    spectrum_links=links,spectra_files=spectra,output_dir=output_dir,
+                                    source_analysis_id=source_id,provenance=dict(result=provenance,
+                                        source_files=getattr(ds,'source_files',[]),curation_state=(curation or {}).get('state'),
+                                        **link_provenance),
+                                    exclusions=_engine_exclusions(entry),samples=samples,
+                                    intensities=intensities,intensities_stage=stage,
+                                    detection_unavailable_reason=detection_reason,
+                                    exploratory=exploratory)
+    note = recomputed_q_note(result)
+    if note:
+        summary.update(p_adjust_method=result['statistics']['p_adjust_method'],
+                       q_value_source=result['q_value_source'],notes=[note])
+    return summary

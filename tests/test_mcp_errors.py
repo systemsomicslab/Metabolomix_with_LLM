@@ -80,31 +80,52 @@ class TestDatasetBadRequest(unittest.TestCase):
 class NeedsInputEnvelopeTests(unittest.TestCase):
     """利用者に尋ねてから呼び直す封筒。エラーではない（`error` キーを持たない）。"""
 
-    OPTIONS = [{"value": "on", "label": "補正する"}, {"value": "off", "label": "補正しない"}]
+    OPTIONS = [{"value": "B_vs_A", "label": "B vs A（対照 A）"},
+               {"value": "C_vs_A", "label": "C vs A（対照 A）"}]
 
     def test_needs_input_envelope_shape(self):
         raw = mcp_errors.needs_input(
-            "preprocess.drift.mode", "内部標準で換算済みの値に QC のドリフト補正を重ねるか",
-            self.OPTIONS, argument="drift_mode",
-            retry_tools=["dataset_preprocess", "dataset_compare"])
+            "contrast_id", "この比較には対比が 2 つあります。どの対比を描くか選んでください。",
+            self.OPTIONS, argument="contrast_id", retry_tools=["dataset_plot", "save_figure"])
         payload = json.loads(raw)
         self.assertEqual(set(payload), {"needs_input"})
         self.assertNotIn("error", payload)
         body = payload["needs_input"]
-        self.assertEqual(body["field"], "preprocess.drift.mode")
-        self.assertIn("ドリフト", body["reason"])
+        self.assertEqual(body["field"], "contrast_id")
+        self.assertIn("対比", body["reason"])
         self.assertEqual(body["options"], self.OPTIONS)
-        self.assertEqual(body["argument"], "drift_mode")
-        self.assertEqual(body["retry_tools"], ["dataset_preprocess", "dataset_compare"])
-        self.assertIn("補正する", raw)   # 日本語をエスケープしない
+        self.assertEqual(body["argument"], "contrast_id")
+        self.assertEqual(body["retry_tools"], ["dataset_plot", "save_figure"])
+        self.assertIn("対照", raw)   # 日本語をエスケープしない
 
     def test_argument_is_omitted_when_not_given(self):
-        """spec の欄で答える経路（dataset_analysis_run の v2）は argument を持たない。"""
+        """spec の欄で答える経路（dataset_novel_candidates の statistics.result_id）は argument を持たない。"""
         body = json.loads(mcp_errors.needs_input(
-            "preprocess.drift.mode", "理由", self.OPTIONS,
-            retry_tools=["dataset_analysis_run"]))["needs_input"]
+            "statistics.result_id", "理由", self.OPTIONS,
+            retry_tools=["dataset_novel_candidates"]))["needs_input"]
         self.assertNotIn("argument", body)
-        self.assertEqual(body["field"], "preprocess.drift.mode")
+        self.assertEqual(body["field"], "statistics.result_id")
+
+    def test_patch_envelope_names_the_arguments_in_each_value(self):
+        """答えが 1 つの引数に収まらない問いは patch の封筒: argument を持たず、各選択肢の value が「引数名 → 値」の
+        dict（null はその引数を外す）。"""
+        options = [{"value": {"group_levels": None}, "label": "行列の群"},
+                   {"value": {"matrix_id": None}, "label": "渡した群"}]
+        body = json.loads(mcp_errors.needs_input(
+            "matrix_id", "理由", options, patch=True, retry_tools=["dataset_compare"]))["needs_input"]
+        self.assertIs(body["patch"], True)
+        self.assertNotIn("argument", body)
+        self.assertEqual(body["options"], options)
+        self.assertEqual(list(body), ["field", "reason", "options", "patch", "retry_tools"])
+        plain = json.loads(mcp_errors.needs_input("f", "r", self.OPTIONS, argument="contrast_id",
+                                                  retry_tools=["t"]))["needs_input"]
+        self.assertNotIn("patch", plain)
+        for bad in ([{"value": "B_vs_A", "label": "x"}], [{"value": {}, "label": "x"}],
+                    [{"value": {"": 1}, "label": "x"}]):
+            with self.subTest(options=bad), self.assertRaises(ValueError):
+                mcp_errors.needs_input("f", "r", bad, patch=True, retry_tools=["t"])
+        with self.assertRaises(ValueError):
+            mcp_errors.needs_input("f", "r", options, argument="matrix_id", patch=True, retry_tools=["t"])
 
     def test_required_parts_are_validated(self):
         ok = dict(field="f", reason="r", options=self.OPTIONS, retry_tools=["t"])
@@ -115,6 +136,26 @@ class NeedsInputEnvelopeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     mcp_errors.needs_input(kwargs.pop("field"), kwargs.pop("reason"),
                                            kwargs.pop("options"), **kwargs)
+
+
+
+class CodeListsTests(unittest.TestCase):
+    """仕分けの一覧の直し（2026-11-14）で足した・消した符号が、封筒の種類ごとの一覧と合う。"""
+
+    def test_new_codes_are_listed_by_envelope(self):
+        for code in ("POLARITY_INVALID", "PIPELINE_INPUT_INVALID"):  # console_error で返る
+            self.assertIn(code, mcp_errors.CONSOLE_ERROR_CODES)
+        for code in ("FIGURE_SAVE_FAILED", "STALE_FIGURE", "JOB_NOT_FOUND", "JOB_LIMIT", "JOB_FAILED",
+                     "PLSDA_SPECIFICATION_INVALID", "PLSDA_MISSING_VALUES", "PLSDA_TOO_FEW_FEATURES",
+                     "SAMPLE_TABLE_INVALID", "SAMPLE_SHEET_EXISTS"):  # mztab_error で返る
+            self.assertIn(code, mcp_errors.MZTAB_ERROR_CODES)
+        self.assertIn("MSLM_R_PACKAGE_LOAD_FAILED", mcp_errors.PATHWAY_ERROR_CODES)
+
+    def test_removed_codes_are_not_listed(self):
+        lists = mcp_errors.CONSOLE_ERROR_CODES | mcp_errors.MZTAB_ERROR_CODES | mcp_errors.PATHWAY_ERROR_CODES
+        for code in ("EXPLORATORY_ONLY_DATASET", "QUANT_NORMALIZE_STEP_REQUIRED",
+                     "PIPELINE_DOWNSTREAM_REMOVED", "REPEATED_MEASURES_UNSUPPORTED", "LIBRARY_BAD_REQUEST"):
+            self.assertNotIn(code, lists)
 
 
 if __name__ == "__main__":

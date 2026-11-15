@@ -1,25 +1,28 @@
 """最初の概観 `dataset_overview`（spec 2026-11-06-dataset-overview-design、計画 2026-11-09-a-overview）。
 
 品質 → 全体 → クラス → 分子種の 4 段で「群の間で何が変わり、何が変わっていないか」を粗く示す。
-`load_dataset` は読み込みの最後に `build_overview_payload(embedded=True)` を呼び、鎖を進めた後は
-`dataset_overview` で同じ形を出し直す。統計はすべて C のエンジン（既定の前処理・PCA・spec v2 の比較・組成）を通す。
+`dataset_overview` が出す（`load_dataset(overview=True)` も読み込みの最後に `build_overview_payload(embedded=True)` を
+呼んで同じものを載せる）。鎖を進めた後は `dataset_overview` で同じ形を出し直す。統計はすべて C のエンジン（既定の前処理・PCA・spec v2 の比較・組成）を通す。
 
 概観の比較と PCA は `ds.results` に登録する（`result_id` で掘れる）が、直近（`last_differential` / `last_pca`）は
 動かさない（判断 #3）。概観そのものは `ds.results[ovw_…]` と `reports/stats/`（step=overview）に残す。
 """
 from __future__ import annotations
 
+import json
+
 from mcp.types import ToolAnnotations
 
 from metabolomix.analysis import overview, stats_records, stats_results
+from metabolomix.analysis.dataset_export import exploratory_reason
 from metabolomix.analysis.result_state import dataset_fingerprint
 from metabolomix.analysis.stats import pca as stats_pca
 from metabolomix.analysis.stats import quality, spec_v2
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.confounding import confounding_report
-from metabolomix.analysis.stats.data import from_dataset
-from metabolomix.analysis.stats.preprocess import NeedsInput, normalize_preprocess_config
-from metabolomix.core import mcp_core, session_state
+from metabolomix.analysis.stats.data import from_dataset, polarity_samples
+from metabolomix.analysis.stats.preprocess import runs_remedy
+from metabolomix.core import mcp_core
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.core.mcp_core import mcp
 from metabolomix.core.mcp_errors import missing_state, mztab_error
@@ -34,8 +37,74 @@ _Q, _EQ_FC, _LOG2FC = 0.05, 1.2, 1.0
 _MSDIAL_SOURCE = "msdial_folder"          # quant.table.MSDIAL_SOURCE と同じ（定量の鎖が使える入口）
 _NOTE = ("考察は事実 ID（例 {oid}#S1）を挙げて、事実と別の欄に書く。サーバは考察を書かない。"
          "判定は changed / unchanged / inconclusive だけ（有意でないことは変わっていないことではない）。")
-_DRIFT_NOTE = ("ドリフト補正の既定が未決（内部標準で換算済みかつ QC あり）のため、概観は補正なしで計算した"
-               "（決めるには dataset_preprocess(drift_mode=...)）")
+#: drift=auto が補正を止めた理由（前処理の drift の段の `reasons`）→ 概観の事実に書く短い言い方。
+#: `injection_order_may_be_file_order` は試料の表から出所を読めないときの言い方（読めれば `_order_doubt`）。
+_DRIFT_HELD = {"quant_normalized": "内部標準などで換算済み",
+               "injection_order_may_be_file_order": "注入順が MS-DIAL の既定（ファイルの順）かシートの宣言で"
+                                                    "ファイル名の順かもしれない"}
+
+
+def _order_doubt(samples) -> str:
+    """注入順が確かでない（`data.order_may_be_file_order`）理由を、その注入の出所どおりに言う。
+
+    MS-DIAL が振った値がファイル名の順と一致する（`injection_order_may_be_file_order`）か、試料の表が宣言
+    `# injection_order_source = filename` でファイル名の順と書いた（出所 `filename`）か。ドリフト補正に使う
+    注入（含める生体・QC）だけを見る。どちらも無い（読めない）ときは両方を挙げる言い方。"""
+    used = [s for s in samples if s.include and s.role in ("sample", "qc")]
+    msdial = any(s.injection_order_may_be_file_order for s in used)
+    declared = any(s.injection_order_source == "filename" for s in used)
+    if msdial and declared:
+        return "注入順が MS-DIAL の既定（ファイルの順）かもしれない注入と、シートの宣言でファイル名の順の注入がある"
+    if msdial:
+        return "注入順が MS-DIAL の既定（ファイルの順）かもしれない"
+    if declared:
+        return "注入順はシートの宣言（# injection_order_source = filename）でファイル名の順で、実際の測定順とは限らない"
+    return _DRIFT_HELD["injection_order_may_be_file_order"]
+
+
+def _held_why(reasons, samples) -> str:
+    return "・".join(_order_doubt(samples) if r == "injection_order_may_be_file_order" and samples is not None
+                    else _DRIFT_HELD.get(r, r) for r in reasons)
+
+
+def _drift_note(prepared, study=None) -> tuple[str | None, bool]:
+    """既定の前処理が drift=auto で補正を止めたなら、その旨の文と、drift_mode="on" で呼び直せるか。
+
+    陽陰を統合したデータセットでは、止めた極性（段の `by_polarity` の `rerun_with`）を名指しする。注入順が確かで
+    ない極性があれば、drift_mode="on" はその注入順のまま当てはめると添え、その極性の測定の入れ直し方
+    （`preprocess.runs_remedy`。陰イオンはそのハンドルへのシートと統合し直し、陽イオンを最後に）を書く。ほかの極性が
+    補正の条件を満たさない（段の全体に `rerun_with` が無い）ときも止めた極性は書き、drift_mode="on" はその極性のせいで
+    PREPROCESS_PRECONDITION になると添える（呼び直せない）。注入順が確かでない理由は `study`（前処理に渡した
+    試料の表）があれば出所どおりに言う（MS-DIAL の既定かもしれない・シートの宣言でファイル名の順）。
+    止めていなければ `(None, False)`。
+    """
+    step = next((s for s in prepared.steps if s.get("step") == "drift"), {})
+    by = step.get("by_polarity") or {}
+    held = {p: st.get("reasons") or [] for p, st in by.items() if st.get("rerun_with")}
+    rerunnable = bool(step.get("rerun_with"))
+    if held:
+        # 陽陰を統合したデータセット: 補正は極性ごと。止めた極性だけを名指しする
+        why = "; ".join(f"{p}: " + _held_why(rs, polarity_samples(study, p) if study is not None else None)
+                        for p, rs in held.items())
+        head = (f"ドリフト補正は既定（drift=auto）では {', '.join(held)} に当てなかった（{why}）。概観はその極性を"
+                "補正なしで計算した")
+        unsure = [p for p, rs in held.items() if "injection_order_may_be_file_order" in rs]
+        remedy = runs_remedy(unsure)
+        if rerunnable:
+            if not unsure:
+                return head + "（補正するなら dataset_preprocess(drift_mode=\"on\")）", True
+            return (head + "（補正するなら dataset_preprocess(drift_mode=\"on\")。ただし注入順が確かでない極性（"
+                    + ", ".join(unsure) + "）はその注入順のまま当てはめる。実際の注入順で補正するなら先に（書いた順に）入れる: "
+                    + remedy.rstrip("。") + "）"), True
+        other = [p for p, st in by.items() if p not in held and st.get("status") != "applied"]
+        return (head + f"。ほかの極性（{', '.join(other)}）は補正の条件を満たさないので、drift_mode=\"on\" は "
+                "PREPROCESS_PRECONDITION になる。"
+                + ("実際の注入順で補正するなら先に（書いた順に）入れる: " + remedy if unsure else "")).rstrip(), False
+    if not rerunnable:
+        return None, False
+    why = _held_why(step.get("reasons") or [], study.samples if study is not None else None)
+    return (f"ドリフト補正は既定（drift=auto）では当てなかった（{why}）。概観は補正なしで計算した"
+            "（補正するなら dataset_preprocess(drift_mode=\"on\")）"), True
 
 
 def _curation_judgments(holder, ds) -> int | None:
@@ -89,10 +158,12 @@ def _counts(ds, study, prepared) -> dict:
 
 
 def _compare(ds, study, prepared, config, inputs, comps):
+    # 全群をまとめた表の完全交絡は呼ぶ前に外してある。多群で一部の対だけが完全交絡なら止めずに比べ、
+    # 記録の `confounding.by_contrast` と対比の `confounded` の印に残す（dataset_compare の既定と同じ）。
     spec = spec_v2.normalize_spec_v2(stats_results.compare_spec(
         factors=["group"], comparisons=comps, covariates=[], block=None, method="moderated_t",
         effect_size="log2_mean_difference", bh_population="matrix", q_threshold=_Q,
-        equivalence_fc=_EQ_FC, allow_confounded=False, preprocess=config, inputs=inputs))
+        equivalence_fc=_EQ_FC, allow_confounded=True, preprocess=config, inputs=inputs))
     run = spec_v2.run_spec_v2(spec, study, prepared=prepared)
     return stats_results.register_compare(ds, run, log2fc_threshold=_LOG2FC, units=prepared.units,
                                           make_current=False, origin="overview")
@@ -160,6 +231,7 @@ def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, de
         "status": "success",
         "overview_id": oid,
         "provisional": chain["provisional"],
+        "assay_kind": assay_kind,
         "state": _state_line(holder, ds, chain, None, assay_kind),
         **({} if embedded else {"counts": _counts(ds, study, None)}),
         "quality": _texts(q_sec),
@@ -173,13 +245,18 @@ def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, de
     return json_safe(payload)
 
 
-def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) -> dict:
+def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, top_capped: bool = False,
+                           capped_from: int | None = None) -> dict:
     """概観を計算して登録し、戻り値の dict を返す。`DomainError` はそのまま送出する（呼び出し側が封筒にする）。
 
     `embedded=True`（`load_dataset` の中）は `counts` を省く（`load_dataset` の summary と重なるため）。
+    `top_capped=True`（求めた `top_n` を上限に下げた）なら、分子種の段の上位の表を切ったときに印を付ける。
+    `capped_from`（下げる前の `top_n`）を渡すと、戻り値の `notes` に下げたことと、比べ方に合う全行の引き方を書く
+    （`_cap_note`）。
     """
     ds = holder.dataset
-    assay_kind = getattr(session_state.session, "assay_kind", "unknown") or "unknown"
+    # 種別はハンドル（データセット）ごと。直近のハンドルを読み替えず、渡されたもの（holder）の値を使う。
+    assay_kind = getattr(holder, "assay_kind", "unknown") or "unknown"
 
     _, inputs, config = stats_results.matrix_inputs(ds, None)
     study = from_dataset(ds, **inputs)
@@ -190,14 +267,10 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     detection = quality.detection_summary(study)
     n_blank = sum(1 for s in study.samples if s.include and s.role == "blank")
 
-    # 1. 既定の前処理（ドリフト補正の既定が未決なら補正なしで計算する。§7）
-    drift_note = None
+    # 1. 既定の前処理（drift=auto が補正を止めたら、補正なしで計算したことを事実に書く。§7）
     try:
         prepared = stats_results.prepare_default(study, config)
-        if isinstance(prepared, NeedsInput):
-            config = normalize_preprocess_config({**config, "drift": {**config["drift"], "mode": "off"}})
-            prepared = stats_results.prepare_default(study, config)
-            drift_note = _DRIFT_NOTE
+        drift_note, drift_rerunnable = _drift_note(prepared, study)
         entry, _record = register_default(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,
@@ -220,13 +293,13 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     except DomainError:
         pca_result = None
 
-    # 4. 比較（群が 2 つ以上・探索専用でない・完全交絡でないとき。直近にしない）
+    # 4. 比較（群が 2 つ以上・完全交絡でないとき。直近にしない）。探索専用のデータセットも dataset_compare・
+    # 書き出しと同じく断らずに比べ、比較の数字を使う段の事実に印を付ける
     comps, pairs_omitted = overview.group_comparisons(plan)
+    exploratory = exploratory_reason(ds)
     record, omitted = None, None
     if plan["mode"] == "none":
         omitted = plan["reason"]
-    elif getattr(ds, "exploratory_only", False):
-        omitted = "探索専用のデータセット（allow_incomplete=True で開いた未完了の実行）なので比較しない"
     elif conf.get("batch_status") == "complete":
         omitted = "群とバッチが完全交絡なので比較しない（品質の段を見る）"
     else:
@@ -239,10 +312,10 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
     q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection,
                                    drift=drift, confounding=conf, replicate_warnings=replicates,
                                    verdict=verdict, reasons=reasons, n_qc=len(prepared.qc_ids),
-                                   n_blank=n_blank, drift_note=drift_note,
+                                   n_blank=n_blank, drift_note=drift_note, drift_rerunnable=drift_rerunnable,
                                    pca_id=pca_rec["result_id"] if pca_rec else None)
     g_sec = overview.global_facts(pca_result=pca_result, labels=labels, record=record, plan=plan,
-                                  omitted=omitted, quality_note=q_note)
+                                  omitted=omitted, quality_note=q_note, exploratory=exploratory)
 
     # 5. クラス（付加体の選別の後だけ。§4.3）
     chain = overview.chain_state(ds, curation_judgments=_curation_judgments(holder, ds))
@@ -266,11 +339,12 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
         except DomainError as exc:
             gate, gate_next = f"{exc.code}: {exc.message}", g_sec["next"]
     c_sec = overview.class_facts(composition_result=comp_result, gate=gate, gate_next=gate_next,
-                                 plan=plan, quality_note=q_note)
+                                 plan=plan, quality_note=q_note, exploratory=exploratory)
 
     # 6. 分子種
     s_sec = overview.species_facts(ds, record=record, plan=plan, top_n=top_n, pairs_omitted=pairs_omitted,
-                                   omitted=omitted, quality_note=q_note)
+                                   omitted=omitted, quality_note=q_note, exploratory=exploratory,
+                                   report_cut=top_capped)
 
     sections = {"quality": q_sec, "global": g_sec, "classes": c_sec, "species": s_sec}
     ids = {"compare": record["result_id"] if record else None,
@@ -282,7 +356,9 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
                                       "assay_kind": assay_kind, "chain": chain})
     settings = {"thresholds": quality.QUALITY_THRESHOLDS, "top_n": top_n, "plan": plan,
                 "verdict_rule": {"q": _Q, "equivalence_fc": _EQ_FC}, "log2fc_threshold": _LOG2FC,
-                "result_ids": ids, "chain": chain, "assay_kind": assay_kind}
+                "result_ids": ids, "chain": chain, "assay_kind": assay_kind,
+                # 探索専用のときだけ足す（そうでないデータセットの記録の形は変えない）
+                **({"exploratory": {"exploratory_only": True, "reason": exploratory}} if exploratory else {})}
     reg = overview.register_overview(ds, result_id=oid, matrix_id=prepared.matrix_id, sections=sections,
                                      parents=[prepared.matrix_id, ids["compare"], ids["pca"]],
                                      settings=json_safe(settings))
@@ -292,6 +368,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
         "status": "success",
         "overview_id": oid,
         "provisional": chain["provisional"],
+        "assay_kind": assay_kind,
         "state": _state_line(holder, ds, chain, prepared, assay_kind),
         **({} if embedded else {"counts": _counts(ds, study, prepared)}),
         "quality": _texts(q_sec),
@@ -302,6 +379,9 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
         "record": written,
         "note": _NOTE.format(oid=oid),
     }
+    if capped_from is not None:
+        payload["notes"] = [_cap_note(capped_from, mode=plan["mode"] if record else None,
+                                      levels=plan["levels"], matrix_id=prepared.matrix_id)]
     return json_safe(payload)
 
 
@@ -310,27 +390,47 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False) ->
 def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     """最初の概観: 品質 → 全体 → クラス → 分子種の 4 段で「群の間で何が変わり、何が変わっていないか」を粗く示す。
 
-    `load_dataset` が読み込みの最後に同じものを返す（`overview` 欄）。鎖を進めた後（キュレーション・換算・統合・
+    `load_dataset(overview=True)` も読み込みの最後に同じものを返す（`overview` 欄。既定は載せない）。鎖を進めた後（キュレーション・換算・統合・
     選別・除外・試料の表の更新）に呼び直すと、同じ形で出し直す。図は入れない（各段の `next` の dataset_plot で描く）。
 
-    - 計算は C の既定の前処理（ドリフト補正の既定が未決なら補正なしで計算し、そう書く）・PCA（QC は投影）・
+    - 計算は C の既定の前処理（drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）・PCA（QC は投影）・
       moderated t（2 群は 1 対比、3〜6 群は全対と moderated F、7 群以上は基準との対比と F）。判定は
       changed / unchanged / inconclusive だけ（q≤0.05、同等 ±1.2 倍）。
     - 2 群の向きは**仮**（試料の表で先に現れた群を基準。名前から対照を推測しない）。向きを決めるのは
       `dataset_compare(reference_group=..., test_group=...)`。
     - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、
-      群とバッチが完全交絡なら比較を回さない。群が 1 つ・探索専用のデータセットも比較しない。
+      群とバッチが完全交絡なら比較を回さない。注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言で
+      ファイル名の順）なら、注入順を使う事実（ドリフトの兆候・注入順の偏り）に但し書きを添え、next に実際の測定順の入れ方を足す
+      （陽陰を統合したデータセットで陽イオン以外の極性なら、統合したハンドルへのシートはその極性を変えないので、
+      その極性のハンドルにシートを当てて dataset_merge_polarities で統合し直す。統合し直すと統合したハンドルに当てた
+      シートと除外は引き継がれないので、その手は next の中で dataset_exclude と drift_mode="on" より前に置く）。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
+      比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実（理由つき）を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。考察は事実 ID を挙げて
       事実と別に書く（サーバは考察を書かない）。
     - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。
       概観は `reports/stats/` に記録を 1 件追記する（書けなくても概観は成功し `record.written=false`）。
 
-    top_n: 分子種の段の上位の件数（既定 5、0〜20）。
+    top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて出し、`notes` にそう書く
+        （そのとき上位の表を 20 行で切ったら `species.top_truncated: true` と `species.top_n_more`＝載せなかった
+        行数）。`notes` の全行の引き方は比べ方で変わる: 2 群は `result_ids.compare` を dataset_feature_search・
+        dataset_export_differential で、多群（上位は F の q の順）は概観の群と行列をそのまま渡した
+        `dataset_compare(groups=[<概観の群>], matrix_id=<概観の行列>, output_path=...)` が書く F 検定の表
+        （`<stem>.ftests.tsv` の `f_q`）で引く（注記はその呼び出しを書いたとおりに挙げる。`matrix_id` を省くと
+        このハンドルで dataset_preprocess が最後に作った行列で比べ、F の母集団と `f_q` が概観と違いうる）。
+        比較を回さなかった（群が 1 つ・完全交絡）なら引き方は書かない。
+        整数でない・負の値は DATASET_BAD_REQUEST。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
+
+    戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める。
+    `record_objective(assay_kind=...)` で確定）。
     """
-    if isinstance(top_n, bool) or not isinstance(top_n, int) or not 0 <= top_n <= _TOP_N_MAX:
-        return mztab_error("DATASET_BAD_REQUEST", f"top_n は 0〜{_TOP_N_MAX} の整数です。", {"top_n": top_n})
+    if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
+        return mztab_error("DATASET_BAD_REQUEST", "top_n は 0 以上の整数です。", {"top_n": top_n})
+    # 長いだけの指定は断らない: 上限に下げて出し、全行の引き方を notes に書く（dataset_compare と同じ）
+    capped_from = top_n if top_n > _TOP_N_MAX else None
+    if capped_from is not None:
+        top_n = _TOP_N_MAX
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
         return holder
@@ -338,6 +438,36 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
         return missing_state("dataset", ["load_dataset"],
                              "DatasetState がありません。先に load_dataset を実行してください。")
     try:
-        return json_payload(build_overview_payload(holder, top_n=top_n))
+        payload = build_overview_payload(holder, top_n=top_n, top_capped=capped_from is not None,
+                                         capped_from=capped_from)
     except DomainError as exc:
         return mztab_error(exc.code, exc.message, json_safe(exc.details) if exc.details else None)
+    if capped_from is not None and "notes" not in payload:
+        # 品質の段だけで返った（既定の前処理で特徴が残らない）: 比較が無いので引き方は書かない
+        payload = {**payload, "notes": [_cap_note(capped_from, mode=None)]}
+    return json_payload(payload)
+
+
+def _cap_note(requested: int, *, mode: str | None, levels: list[str] | None = None,
+              matrix_id: str | None = None) -> str:
+    """`top_n` を上限に下げたことの注記。全行の引き方は比較の回し方（`group_plan` の mode）で変わる。
+
+    - `two`: 上位は 1 対比の行なので、概観の比較（`result_ids.compare`）を特徴検索・書き出しに名指しして引ける。
+    - `multi`: 上位は moderated F の q（`f_q`）の順。書き出し・特徴検索は対比ごとの行なので F の順の残りは返らない。
+      F 検定の表は `dataset_compare(output_path=...)` が `<stem>.ftests.tsv` に書く。概観と同じ F の母集団になるのは
+      概観の行列（`matrix_id`）を全群（`levels`）で比べたときだけなので、その呼び出しを書いたとおりに挙げる
+      （`matrix_id` を省いた dataset_compare は、このハンドルで dataset_preprocess が最後に作った行列を使う）。
+    - None: 比較を回していない（群が 1 つ・完全交絡・品質の段だけ）。引き方は書かない。
+    """
+    head = f"top_n={requested} は上限の {_TOP_N_MAX} に下げた（戻り値を肥大させない）。"
+    if mode == "two":
+        return head + ("全行は result_ids.compare を dataset_feature_search（result_ids に名指し）・"
+                       "dataset_export_differential（result_id）で引ける。")
+    if mode == "multi":
+        call = (f"dataset_compare(groups={json.dumps(list(levels or []), ensure_ascii=False)}, "
+                f"matrix_id={json.dumps(matrix_id)}, output_path=...)")
+        return head + (f"多群の上位は moderated F の q（f_q）の順で、載せなかった行は {call} が書く F 検定の表"
+                       "（<stem>.ftests.tsv の f_q）で引ける（matrix_id は概観の行列。省くとこのハンドルで "
+                       "dataset_preprocess が最後に作った行列で比べるので、F の母集団と f_q が概観と違いうる。"
+                       "対比ごとの行は result_ids.compare を dataset_feature_search に名指し）。")
+    return head

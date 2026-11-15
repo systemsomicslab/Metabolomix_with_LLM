@@ -95,6 +95,9 @@ def test_target_without_any_identifier_still_names_inchikey():
 
 
 # ---------- InChIKey の目標は変わらない（変更前の値で固定） ----------
+# 値は 2026-11-14 に陽イオンの既定の付加体の層へ [M+CH3OH+H]+・[M+H-2H2O]+ を足した後のもの（A12-T18。
+# 足す前は rule_hash 1890f39f…・照合 5ff0be55…。層を戻した計算で一致を確かめてある）。種の目標の追加では
+# 変わらないことを縛る。
 
 def test_inchikey_targets_are_byte_identical_to_before():
     [t] = normalize_targets([{"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2",
@@ -102,7 +105,7 @@ def test_inchikey_targets_are_byte_identical_to_before():
     assert sorted(t) == ["adduct_tiers", "applicable", "expected_mz", "formula", "inchikey_block",
                          "name", "polarity", "ppm", "rt_min", "rt_tol_min", "target_id",
                          "theoretical_mz"]
-    assert rule_hash([t]) == "1890f39fd2d7408cba18962e9c6028180bad10b1f11fd6cdc2d216e4d4324d19"
+    assert rule_hash([t]) == "1c44a07e577acede3e79209ad348daba9eb4a288dd4bc74f5e71d465f649e4e6"
     t2 = normalize_targets([{"target_id": "c2", "inchikey": GABA_KEY, "expected_mz": 104.0706,
                              "adduct": "[M+H]+"}], dataset_polarity=None)
     assert rule_hash(t2) == "33131cfe7e1b022b54412d0d6d10b0fe8a7bfdfcf947f65a4ef3cfd30082b7f1"
@@ -121,7 +124,7 @@ def test_inchikey_matching_output_is_unchanged():
     assert canonical_hash(out) == PINNED_MATCH_HASH
 
 
-PINNED_MATCH_HASH = "5ff0be55dc08b1bfc345b3155bd94de05e1b7395739da1715a3fb1c95265a4ba"
+PINNED_MATCH_HASH = "114bf20c06306d0e2e79fdc6d938da8331c4590319dfcb3d7f863b615f7f11e4"
 
 
 # ---------- 種の目標の照合 ----------
@@ -220,3 +223,74 @@ def test_classify_identity_needs_exactly_one_identifier():
     with pytest.raises(ValueError):
         classify_identity([], None, inchikey_block="BTCSSZJGUNDROE", lipid_species="PC 34:4",
                           adduct="[M+H]+")
+
+
+# ---------- SME の名前は MS/MS の合否と同じ読み方（注記を外す。最終検証 F27） ----------
+
+@pytest.mark.parametrize("name", [
+    "PC 34:4; ExampleDB ID-0000", "PC 18:3_16:1; ExampleDB ID-0000", "Phosphatidylcholine 16:1-18:3",
+    "low score: PC 34:4; ExampleDB ID-0000",
+])
+def test_noted_sme_name_is_read_like_the_msms_side(name):
+    """MSP の記録名（注記付き）がそのまま SME の名前になる。走査も MS/MS の側（`record_lipid_species`）と同じく
+    注記を外して種に読む——読めないとして unannotated に落とすと、MS/MS で同定された特徴が MS1 だけの SML に負ける。"""
+    from metabolomix.analysis.msms_rules import name_lipid_species, record_lipid_species
+
+    assert lipid_species_of(name) is None                       # 素の GOSLIN では読めない名前
+    assert name_lipid_species(name) == ("PC 34:4", "name_cleaned")
+    assert record_lipid_species({"name": name}) == name_lipid_species(name)
+    assert classify_identity([_pc(name, adduct="[M+H]1+")], None, lipid_species="PC 34:4",
+                             adduct="[M+H]+") == ("sme_match", [], 1)
+
+
+def test_noted_sme_beats_an_ms1_only_sml_on_another_feature():
+    ds = _dataset({
+        "1": {"mz": PC_MH, "rt": 8.40, "candidates": [_pc("PC 34:4; ExampleDB ID-0000")],
+              "annotation": {"sml_id": "1", "ambiguous": False, "name": "PC 34:4; ExampleDB ID-0000"}},
+        "2": {"mz": PC_MH, "rt": 8.45,
+              "annotation": {"sml_id": "2", "ambiguous": False, "name": "PC 34:4", "inchikey": None}},
+    })
+    out = match_target(ds, _species(), max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    assert out["selected_evidence"] == "sme_match"
+    assert _row(out, "1")["evidence"] == "sme_match"
+
+
+def test_noted_sme_of_another_species_is_contradicted():
+    ds = _dataset({"1": {"mz": PC_MH, "rt": 8.4, "candidates": [_pc("PE 37:4; ExampleDB ID-0000")]}})
+    row = _row(match_target(ds, _species(), max_results=20), "1")
+    assert row["evidence"] == "contradicted" and row["qualified"] is False
+    assert _reasons(row) == ["identifier_mismatch"]
+
+
+def test_noted_sml_name_is_read_too():
+    sml = {"sml_id": "1", "ambiguous": False, "name": "PE 36:2;O (oxPE)", "inchikey": None}
+    assert classify_identity([], sml, lipid_species="PE 36:2;O", adduct="[M+H]+") \
+        == ("sml_match", [], None)
+
+
+def test_isotope_labelled_internal_standard_is_not_read_as_the_species():
+    """内部標準（`(d7)`）の SME は、MS/MS の側と同じく種に読まない（評価できない候補として飛ばす）。"""
+    from metabolomix.analysis.msms_rules import name_lipid_species
+
+    assert lipid_species_of("PC 15:0_18:1(d7)") == "PC 33:1"     # 素の GOSLIN は標識を落として読む
+    assert name_lipid_species("PC 15:0_18:1(d7)") == (None, None)
+    assert classify_identity([_pc("PC 15:0_18:1(d7)")], None, lipid_species="PC 33:1",
+                             adduct="[M+H]+") == ("unannotated", ["sme_identity_unresolved"], None)
+
+
+def test_isotope_labelled_species_target_is_refused_not_read_as_the_natural_species():
+    """目標の側も候補の側と同じく標識を読む（レビュー V3）。素の GOSLIN は `PC 15:0_18:1(d7)` を PC 33:1 に読むので、
+    受けると内部標準の特徴（SME も同じ名前）を「SME の裏付けが無い」unannotated にし、天然の PC 33:1 を探してしまう。
+    断って、標識の無い名前か窓検索を案内する。"""
+    for name in ("PC 15:0_18:1(d7)", "PC 33:1(d7)", "w/o MS2: PC 15:0_18:1(d7)", "PE 16:0-d31_18:1"):
+        raw = {"target_id": "IS", "lipid_species": name, "formula": "C41H73D7NO8P", "rt_min": 8.4}
+        with pytest.raises(DomainError) as exc:
+            normalize_targets([raw], dataset_polarity="positive")
+        assert exc.value.code == "FEATURE_TARGET_INVALID"
+        assert exc.value.details == {"target_id": "IS", "field": "lipid_species"}
+        assert "標識" in exc.value.message and "窓検索" in exc.value.message
+    # 長鎖塩基の d18:1 は標識ではない（`:` が続く）
+    [target] = normalize_targets([{"target_id": "SM", "lipid_species": "SM d18:1/16:0", "formula": "C39H79N2O6P"}],
+                                 dataset_polarity="positive")
+    assert target["lipid_species"] == "SM 34:1;O2"

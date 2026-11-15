@@ -388,3 +388,20 @@ def test_handle_capacity_checked_before_record(tmp_path, monkeypatch):
                                        parent_handle_id=parent, skip_step=skip_step))
         assert out["error"]["code"] == "DATASET_HANDLE_LIMIT", skip_step
     assert not (tmp_path / "analysis" / "reports").exists()  # 登録できない記録を残さない
+
+
+def test_apply_and_skip_carry_exploratory(tmp_path, monkeypatch):
+    """探索専用のデータセットから作った派生も探索専用（書き出しと図に印が載る）。"""
+    _point(tmp_path, monkeypatch)
+    ds = _simple(tmp_path)
+    ds.exploratory_only = True
+    ds.exploratory_reason = "pipeline の単位 positive が検証を通っていない（failed）"
+    new, info = qn.apply(ds, _ref(tmp_path), None, "positive")
+    assert new.exploratory_only is True and new.exploratory_reason == ds.exploratory_reason
+    assert info["exploratory"] == {"exploratory_only": True, "reason": ds.exploratory_reason}
+    skipped, sinfo = qn.skip(ds, "positive")
+    assert skipped.exploratory_only is True and skipped.exploratory_reason == ds.exploratory_reason
+    assert sinfo["exploratory"]["reason"] == ds.exploratory_reason
+    clean = _simple(tmp_path / "clean")
+    new, info = qn.apply(clean, _ref(tmp_path), None, "positive")
+    assert new.exploratory_only is False and "exploratory" not in info

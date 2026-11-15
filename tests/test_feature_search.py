@@ -8,6 +8,7 @@ from metabolomix.analysis.feature_search import (
     MAX_TARGETS,
     _feature_mz_array,
     classify_identity,
+    estimate_rt_offset,
     feature_stats,
     match_target,
     normalize_targets,
@@ -54,7 +55,8 @@ def test_default_tiers_follow_dataset_polarity():
 def test_default_tiers_values_are_the_spec_ones():
     assert DEFAULT_ADDUCT_TIERS["positive"] == [
         ["[M+H]+", "[M]+"],
-        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+"],
+        ["[M+Na]+", "[M+NH4]+", "[M+H-H2O]+", "[M+H-NH3]+", "[2M+H]+", "[M+2H]2+",
+         "[M+CH3OH+H]+", "[M+H-2H2O]+"],
     ]
     assert DEFAULT_ADDUCT_TIERS["negative"] == [
         ["[M-H]-"],
@@ -69,6 +71,16 @@ def test_negative_tiers_include_acetate():
     assert "[M+CH3COO]-" not in DEFAULT_ADDUCT_TIERS["positive"][0] + DEFAULT_ADDUCT_TIERS["positive"][1]
     flat = [a for tier in DEFAULT_ADDUCT_TIERS["negative"] for a in tier]
     assert "[M+HCOO]-" not in flat   # [M+FA-H]- と同じ質量
+
+
+def test_positive_tiers_include_methanol_and_double_dehydration():
+    """陽イオンの 2 層目にメタノール付加と二重の脱水を足した（Console の標準のメソッドが探す付加体）。"""
+    second = DEFAULT_ADDUCT_TIERS["positive"][1]
+    assert "[M+CH3OH+H]+" in second and "[M+H-2H2O]+" in second
+    [t] = normalize_targets([_gaba(polarity="positive")], dataset_polarity=None)
+    neutral = 103.0633285365   # C4H9NO2
+    assert t["theoretical_mz"]["[M+CH3OH+H]+"] == pytest.approx(neutral + 32.026215 + 1.007276, abs=1e-4)
+    assert t["theoretical_mz"]["[M+H-2H2O]+"] == pytest.approx(neutral - 36.021129 + 1.007276, abs=1e-4)
 
 
 def test_acetate_adduct_mass():
@@ -419,6 +431,45 @@ def test_identity_adduct_and_charge_must_match():
                              inchikey_block=block, adduct="[M+H]+")[0] == "contradicted"
 
 
+@pytest.mark.parametrize("sme_adduct, tier_adduct", [
+    # MS-DIAL 5 の mzTab はギ酸付加を `[M+HCOO]1-` と書き、研究室の MSP は `[M+CHO2]-` と書く
+    ("[M+HCOO]1-", "[M+FA-H]-"), ("[M+CHO2]1-", "[M+FA-H]-"), ("[M+HCOO]-", "[M+FA-H]-"),
+    ("[M+Hac-H]1-", "[M+CH3COO]-"), ("[M+C2H3O2]1-", "[M+CH3COO]-"),
+    ("[M-H-H2O]1-", "[M-H2O-H]-"), ("[M+H]1+", "[M+H]+"), ("[M+NH4]1+", "[M+NH4]+"),
+])
+def test_identity_compares_adducts_by_composition_not_spelling(sme_adduct, tier_adduct):
+    charge = -1 if sme_adduct.endswith("-") else 1
+    assert classify_identity([_candidate(adduct=sme_adduct, charge=charge)], None,
+                             inchikey_block=GABA_KEY[:14], adduct=tier_adduct) == ("sme_match", [], 1)
+
+
+@pytest.mark.parametrize("sme_adduct, tier_adduct", [
+    ("[M+Na-2H]1-", "[M-H]-"), ("[2M-H]1-", "[M-H]-"), ("[M+HCOO]1-", "[M+CH3COO]-"),
+    ("[M+H]1+", "[M]+"), ("[M]1-", "[M]+"), ("[M+2H]2+", "[M+H]+"),
+])
+def test_different_ions_stay_adduct_mismatches(sme_adduct, tier_adduct):
+    assert classify_identity([_candidate(adduct=sme_adduct)], None,
+                             inchikey_block=GABA_KEY[:14], adduct=tier_adduct) \
+        == ("contradicted", ["adduct_mismatch"], None)
+
+
+def test_formate_identification_from_msdial_resolves_the_negative_target():
+    """負イオンの脂質（PC は [M-H]- を作らない）。正しい特徴の SME 1 位が正しい InChIKey と `[M+HCOO]1-` を
+    持つ。綴りで比べると既定の層の `[M+FA-H]-` と食い違って `contradicted` になり、同定の無い特徴より下に落ちていた。"""
+    key = "WTJKGGKOPKCXLL-VYOBOKEXSA-N"
+    formula = "C42H82NO8P"
+    mz = theoretical_mz(formula, "[M+FA-H]-")
+    [target] = normalize_targets([{"target_id": "pc", "inchikey": key, "formula": formula,
+                                   "rt_min": 10.0}], dataset_polarity="negative")
+    sme = _candidate(adduct="[M+HCOO]1-", charge=-1, inchikey=key, chemical_name="PC 16:0_18:1",
+                     exp_mass_to_charge=mz, theoretical_mass_to_charge=mz)
+    out = match_target(_dataset({"1": {"mz": mz, "rt": 10.0, "candidates": [sme]}}), target,
+                       max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    assert out["selected_adduct"] == "[M+FA-H]-" and out["selected_evidence"] == "sme_match"
+    assert _row(out, "1", "[M+FA-H]-")["reasons"] == ""
+
+
 def test_sml_of_another_isomer_is_not_a_contradiction():
     ds = _dataset({"1": {"mz": MH, "rt": 1.2,
                          "annotation": {"sml_id": "9", "ambiguous": False,
@@ -716,7 +767,7 @@ def test_window_and_filters_are_anded_and_inclusive():
     assert [r["feature_id"] for r in rows] == ["4"]
     assert list(rows[0]) == ["feature_id", "mz", "rt", "evidence", "name", "inchikey",
                              "adduct", "n_sme", "ontology", "n_detected", "normalized",
-                             "msi_level"]
+                             "msi_level", "inchikey_ambiguity"]
 
 
 def test_window_evidence_name_inchikey_adduct_and_truncation():
@@ -732,7 +783,7 @@ def test_window_evidence_name_inchikey_adduct_and_truncation():
     assert by["1"] == {"feature_id": "1", "mz": 100.0, "rt": 1.0, "evidence": "sme",
                        "name": "Alpha", "inchikey": GABA_KEY, "adduct": "[M+H]1+", "n_sme": 2,
                        "ontology": None, "n_detected": None, "normalized": None,
-                       "msi_level": None}
+                       "msi_level": None, "inchikey_ambiguity": None}
     assert by["2"]["evidence"] == "sml" and by["2"]["name"] == "Beta"
     assert by["2"]["inchikey"] == OTHER_KEY and by["2"]["adduct"] == "[M+Na]+"
     assert by["2"]["n_sme"] == 0
@@ -741,7 +792,7 @@ def test_window_evidence_name_inchikey_adduct_and_truncation():
     assert by["4"] == {"feature_id": "4", "mz": 400.0, "rt": 4.0, "evidence": "none",
                        "name": None, "inchikey": None, "adduct": None, "n_sme": 0,
                        "ontology": None, "n_detected": None, "normalized": None,
-                       "msi_level": None}
+                       "msi_level": None, "inchikey_ambiguity": None}
     rows, truncated = _window(ds, min_mz=0, max_results=3)
     assert [r["feature_id"] for r in rows] == ["1", "2", "3"] and truncated == 1
 
@@ -766,7 +817,8 @@ def test_unannotated_feature_gets_its_statistics():
     assert (row["log2fc"], row["p"], row["q"]) == (-0.5, 0.2, 0.4)
     assert (row["mean_a"], row["mean_b"]) == (1.0, 2.0)
     assert list(row) == ["feature_id", "result_id", "status", "log2fc", "p", "q", "mean_a",
-                         "mean_b", "detected_a", "detected_b"]
+                         "mean_b", "detected_a", "detected_b", "detected_units_a", "detected_units_b",
+                         "presence_p", "detection_driven"]
     # 行は特徴が外側、結果が内側の順
     other = _two_group(ds, [_row_of("1")], result_id="diff_2")
     rows = feature_stats(ds, ["1", "3"], [result, other])
@@ -948,14 +1000,19 @@ def test_rule_hash_does_not_mutate_the_targets():
 
 # ---------- 割れたスポットのまとめと検定のやり直し（spec 2026-10-28 §4.3 (c)） ----------
 
-def _computed_ds():
-    """統計エンジンの 2 群比較を登録した DatasetState と、`select_results` が展開した 2 群の形。"""
+def _computed_ds(detected_mask=None):
+    """統計エンジンの 2 群比較を登録した DatasetState と、`select_results` が展開した 2 群の形。
+
+    ``detected_mask`` を渡せば、比較の前に検出の印として置く（検出の有無の検定を付ける）。
+    """
     from metabolomix.analysis.feature_search import select_results
     from tests.engine_chain import declare_groups, register_two_group
 
     rng = np.random.default_rng(7)
     ds = DatasetState()
     ds.feature_matrix = rng.random((12, 8)) * 1000.0 + 1.0
+    if detected_mask is not None:
+        ds.detected_mask = detected_mask
     ds.sample_names = [f"ctrl_{i}" for i in range(4)] + [f"treat_{i}" for i in range(4)]
     ds.feature_ids = [str(i) for i in range(12)]
     ds.feature_metadata = {str(i): {"mz": 100.0 + i, "rt": 1.0 + i} for i in range(12)}
@@ -1016,6 +1073,20 @@ def test_retest_without_the_source_record_refuses():
     assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
 
 
+def test_retest_with_an_analysis_id_missing_from_the_rerun_names_the_mismatch():
+    """記録の analysis_id がやり直しに無いのは記録と spec の食い違い（利用者に尋ねる前処理ではない）。"""
+    from metabolomix.analysis.feature_search import retest_merged
+
+    ds, result = _computed_ds()
+    rid = result["_source"]["result_id"]
+    ds.results[rid] = {**ds.results[rid], "analysis_id": "gone"}
+    with pytest.raises(DomainError) as excinfo:
+        retest_merged(ds, result, groups=[["3", "4"]])
+    assert excinfo.value.code == "FEATURE_MERGE_UNAVAILABLE"
+    assert excinfo.value.details["analysis_id"] == "gone"
+    assert "食い違う" in excinfo.value.message and "利用者" not in excinfo.value.message
+
+
 def test_match_target_counts_a_merged_pair_as_one_candidate():
     """組の 2 スポットが同じ箱にあれば残す ID で resolved、無関係の 2 スポットは needs_input のまま。"""
     from metabolomix.analysis.feature_search import merge_map
@@ -1063,3 +1134,153 @@ def test_include_false_sample_does_not_feed_n_detected_or_intensity_order():
     assert included_sample_indices(ds) == [1]
     best, counts = _detected_intensity(ds)
     assert best.tolist() == [20.0, 400.0] and counts.tolist() == [1, 1]
+
+
+# ---------- 検出の有無の Fisher の p と detection_driven（B5） ----------
+
+def test_stats_carry_presence_p_and_detection_driven_from_the_result():
+    ds = _stats_dataset()
+    result = _two_group(ds, [
+        _row_of("1", presence_p=0.03, detection_driven=True, detected_units_a=3, detected_units_b=0),
+        _row_of("2", p=None, q=None, presence_p=0.5, detection_driven=None, detected_units_a=1,
+                detected_units_b=2),
+    ])
+    rows = {r["feature_id"]: r for r in feature_stats(ds, ["1", "2", "4"], [result])}
+    assert (rows["1"]["presence_p"], rows["1"]["detection_driven"]) == (0.03, True)
+    # 個体単位の検出数（presence_p・detection_driven の分子）も写す
+    assert (rows["1"]["detected_units_a"], rows["1"]["detected_units_b"]) == (3, 0)
+    # 検定できない行も検出の有無の p と検出数は残す（検出の差で量を判定できないときこそ要る）。印は付けない
+    assert rows["2"]["status"] == "not_testable"
+    assert (rows["2"]["presence_p"], rows["2"]["detection_driven"]) == (0.5, None)
+    assert (rows["2"]["detected_units_a"], rows["2"]["detected_units_b"]) == (1, 2)
+    # 結果の行列に無い特徴は空
+    assert (rows["4"]["presence_p"], rows["4"]["detection_driven"]) == (None, None)
+    assert (rows["4"]["detected_units_a"], rows["4"]["detected_units_b"]) == (None, None)
+
+
+def test_engine_result_rows_carry_unit_detection_counts():
+    mask = np.ones((12, 8), dtype=bool)
+    mask[0, 4:] = False                                 # 特徴 0 は treat で 0/4
+    ds, result = _computed_ds(mask)
+    rows = {r["feature_id"]: r for r in feature_stats(ds, ["0", "1"], [result])}
+    assert (rows["0"]["detected_units_a"], rows["0"]["detected_units_b"]) == (4, 0)
+    assert (rows["1"]["detected_units_a"], rows["1"]["detected_units_b"]) == (4, 4)
+    assert rows["0"]["presence_p"] < rows["1"]["presence_p"]
+
+
+def test_engine_result_summary_carries_unit_counts():
+    ds, result = _computed_ds()
+    [summary] = result_summaries(ds, [result])
+    assert summary["n_units_a"] == result["n_units_a"] and summary["n_units_b"] == result["n_units_b"]
+
+
+# ---------- RT の窓の中心のずれ（rt_offset_min）と、ずれの推定（D3） ----------
+
+def test_rt_offset_min_shifts_the_window_center_only():
+    ds = _dataset({"1": {"mz": MH, "rt": 1.5, "candidates": [_candidate()]}})
+    plain = _target(rt_min=1.0)
+    out = match_target(ds, plain, max_results=20)
+    assert out["status"] == "needs_input"                     # 0.5 分ずれて窓（±0.3）の外
+    [shifted] = normalize_targets([_gaba(rt_min=1.0)], dataset_polarity="positive",
+                                  rt_offset_min=0.5)
+    assert shifted["rt_offset_min"] == 0.5
+    out = match_target(ds, shifted, max_results=20)
+    assert out["status"] == "resolved" and out["selected_feature_id"] == "1"
+    [row] = [r for r in out["candidates"] if r["adduct"] == "[M+H]+"]
+    assert row["delta_rt"] == pytest.approx(0.5)              # 列は RT − rt_min のまま
+    assert rule_hash([shifted]) != rule_hash([plain])
+
+
+def test_rt_offset_min_omitted_keeps_target_and_hash():
+    [plain] = normalize_targets([_gaba(rt_min=1.0)], dataset_polarity="positive")
+    [none] = normalize_targets([_gaba(rt_min=1.0)], dataset_polarity="positive", rt_offset_min=None)
+    assert none == plain and "rt_offset_min" not in plain
+    assert rule_hash([none]) == rule_hash([plain])
+    # rt_min の無い目標には足さない（効かないずれで規則を変えない）
+    [no_rt] = normalize_targets([_gaba()], dataset_polarity="positive", rt_offset_min=0.5)
+    assert "rt_offset_min" not in no_rt
+    with pytest.raises(DomainError) as exc:
+        normalize_targets([_gaba(rt_min=1.0)], dataset_polarity="positive", rt_offset_min=float("nan"))
+    assert exc.value.details["field"] == "rt_offset_min"
+
+
+def _offset_dataset(shift, n=12):
+    """n 個の目標（擬似の InChIKey）と、それぞれ目標の rt_min + shift に 1 つだけ溶出する特徴。"""
+    features, targets = {}, []
+    for i in range(n):
+        key = f"{chr(65 + i) * 14}-UHFFFAOYSA-N"
+        mz = MH + 20.0 * i
+        features[str(i)] = {"mz": mz, "rt": 2.0 + i + shift,
+                            "candidates": [_candidate(inchikey=key, exp_mass_to_charge=mz)]}
+        targets.append({"target_id": f"t{i}", "inchikey": key, "expected_mz": mz,
+                        "adduct": "[M+H]+", "rt_min": 2.0 + i})
+    return features, targets
+
+
+def test_rt_offset_is_estimated_from_unique_matches():
+    features, targets = _offset_dataset(0.5)
+    ds = _dataset(features)
+    out = estimate_rt_offset(ds, normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 12 and out["median_min"] == pytest.approx(0.5)
+    assert out["shift_min"] == pytest.approx(0.5) and "reason" not in out
+    assert out["criteria"] == {"window_min": 2.0, "min_pairs": 10, "min_abs_median_min": 0.2,
+                               "coelute_min": 0.05}
+
+
+def _multi_adduct_dataset(shift, n=12, *, na_shift=None):
+    """組成式の目標 n 個（既定の付加体の層）と、それぞれ [M+H]+ と [M+Na]+ の 2 つの特徴（RT は rt_min + shift。
+    [M+Na]+ だけ rt_min + na_shift にずらせる）。"""
+    features, targets = {}, []
+    for i in range(n):
+        key = f"{chr(65 + i) * 14}-UHFFFAOYSA-N"
+        formula = f"C{4 + i}H{9 + 2 * i}NO2"
+        for adduct, extra in (("[M+H]+", shift), ("[M+Na]+", shift if na_shift is None else na_shift)):
+            mz = theoretical_mz(formula, adduct)
+            features[f"{i}{adduct}"] = {"mz": mz, "rt": 2.0 + i + extra,
+                                        "candidates": [_candidate(inchikey=key, exp_mass_to_charge=mz,
+                                                                  adduct=adduct)]}
+        targets.append({"target_id": f"t{i}", "inchikey": key, "formula": formula, "rt_min": 2.0 + i})
+    return features, targets
+
+
+def test_rt_offset_counts_a_compound_seen_as_several_adducts_once():
+    # 同じ化合物の [M+H]+ と [M+Na]+ が同時溶出していれば 1 組（付加体の数だけ数えない）
+    features, targets = _multi_adduct_dataset(0.5)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 12 and out["shift_min"] == pytest.approx(0.5)
+    # 付加体どうしの RT が 0.05 分を超えて離れていれば、どちらが目標か決まらないので数えない
+    features, targets = _multi_adduct_dataset(0.5, na_shift=0.8)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 0 and out["reason"] == "too_few_pairs"
+    # 同じ付加体に 2 つの特徴があれば（ほかの付加体が 1 つでも）一意でない
+    features, targets = _multi_adduct_dataset(0.5)
+    features["dup"] = {**features["0[M+Na]+"], "rt": 3.5, "candidates": []}
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 11
+
+
+def test_rt_offset_needs_ten_pairs_and_a_large_enough_median():
+    features, targets = _offset_dataset(0.5, n=9)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 9 and out["shift_min"] is None and out["reason"] == "too_few_pairs"
+    features, targets = _offset_dataset(0.1)
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["median_min"] == pytest.approx(0.1)
+    assert out["shift_min"] is None and out["reason"] == "below_threshold"
+
+
+def test_rt_offset_skips_ambiguous_and_contradicted_matches():
+    features, targets = _offset_dataset(0.5)
+    # 目標 t0 には同じ質量の特徴がもう 1 つ（±2 分の内）→ 一意でないので数えない
+    features["dup"] = {"mz": features["0"]["mz"], "rt": 2.4}
+    # 目標 t1 の特徴は MS/MS が別物質 → 一致に数えない（t1 は一致 0 で数えない）
+    features["1"]["candidates"] = [_candidate(inchikey=OTHER_KEY)]
+    # 特徴 2 に合う目標がもう 1 つ（t2 と同じ質量・RT）→ 逆向きに一意でないので t2 も t2b も数えない
+    targets.append({**targets[2], "target_id": "t2b"})
+    out = estimate_rt_offset(_dataset(features), normalize_targets(targets, dataset_polarity="positive"))
+    assert out["n_pairs"] == 9 and out["reason"] == "too_few_pairs"
+    # rt_min の無い目標は使わない
+    no_rt = [{k: v for k, v in t.items() if k != "rt_min"} for t in _offset_dataset(0.5)[1]]
+    out = estimate_rt_offset(_dataset(_offset_dataset(0.5)[0]),
+                             normalize_targets(no_rt, dataset_polarity="positive"))
+    assert out["n_pairs"] == 0 and out["median_min"] is None

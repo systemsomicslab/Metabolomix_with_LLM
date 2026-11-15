@@ -1,7 +1,7 @@
 """analysis-spec.v2 の正規化と実行（統計エンジン spec §8・§12）。
 
-宣言的な入口: 前処理を 1 回だけ回し、spec の順に compare / composition / pca を実行して
-**全部**を載せて返す（選んだものだけにしない）。`primary` は報告の主役を指すだけ。
+宣言的な入口: 前処理を 1 回だけ回し、spec の順に compare / composition / pca / plsda を実行して
+**全部**を載せて返す（選んだものだけにしない）。`primary` は報告の主役を指すだけ（compare / composition）。
 丸めはここでは行わない（配線層の仕事）。v1（analysis_spec）とは独立で、v1 の schema は拒否する。
 """
 from __future__ import annotations
@@ -10,22 +10,33 @@ import copy
 import math
 import re
 
-from metabolomix.analysis.stats.compare import BH_POPULATIONS, EFFECT_SIZES, TESTS, compare
+from metabolomix.analysis.stats.compare import (BH_POPULATIONS, EFFECT_SIZES, P_ADJUST_METHODS, TESTS,
+                                                compare)
 from metabolomix.analysis.stats.composition import composition
 from metabolomix.analysis.stats.data import StudyData, from_dataset
 from metabolomix.analysis.stats.pca import pca
-from metabolomix.analysis.stats.preprocess import (NeedsInput, PreparedMatrix,
-                                                   normalize_preprocess_config, preprocess)
+from metabolomix.analysis.stats.plsda import IMPUTES as _PLSDA_IMPUTE
+from metabolomix.analysis.stats.plsda import SCALINGS as _PLSDA_SCALING
+from metabolomix.analysis.stats.plsda import plsda
+from metabolomix.analysis.stats.preprocess import (PreparedMatrix, normalize_preprocess_config,
+                                                   preprocess)
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 ANALYSIS_SCHEMA_V2 = "analysis-spec.v2"
 RESULT_SCHEMA_V2 = "analysis-result.v2"
 _INVALID = "ANALYSIS_SPEC_INVALID"
 _ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
-_KINDS = ("compare", "composition", "pca")
+_KINDS = ("compare", "composition", "pca", "plsda")
+#: primary に選べる解析（検定の行を持つもの）。pca / plsda は報告の主役にしない。
+_STAT_KINDS = ("compare", "composition")
 _PCA_SCALING = ("autoscale", "pareto")
 _PCA_IMPUTE = ("half_min", "knn", "none")
 _VERDICT_DEFAULT = {"q": 0.05, "equivalence_fc": 1.2}
+#: 補正の方法の既定。既定のときは正規化した spec に書かない（書けば rule_hash が変わり、補正の方法を
+#: 選べる前の spec と同じ規則なのに hash が食い違う）。読む側は無ければ BH（`stats_results.p_adjust_method`）。
+_P_ADJUST_DEFAULT = "bh"
+#: PLS-DA の並べ替え検定の回数の上限（超えた値はここまで下げて notes に書く。計算を止めない）。
+_MAX_PERMUTATIONS = 10000
 
 
 def _fail(message: str, **details) -> DomainError:
@@ -121,7 +132,7 @@ def _comparison(raw, i: int, factors: list[str]) -> dict:
     return out
 
 
-def _analysis(raw, i: int) -> dict:
+def _analysis(raw, i: int, notes: list[str]) -> dict:
     path = f"analyses[{i}]"
     if not isinstance(raw, dict):
         raise _fail(f"{path} は辞書で指定する", field=path)
@@ -142,13 +153,17 @@ def _analysis(raw, i: int) -> dict:
             raise _fail(f"{path}.n_components は 1 以上の整数", field=path + ".n_components")
         return {"analysis_id": aid, "kind": kind, "scaling": scaling, "n_components": n,
                 "impute": impute}
+    if kind == "plsda":
+        return _plsda_analysis(raw, aid, path, notes)
     a = _keys(raw, {"analysis_id", "kind", "test", "effect_size", "bh_population",
                     "reported_feature_ids", "verdict", "min_detected_fraction",
-                    "allow_confounded"}, {"analysis_id", "kind"}, path)
+                    "allow_confounded", "p_adjust"}, {"analysis_id", "kind"}, path)
     test, eff = a.get("test", "moderated_t"), a.get("effect_size", "log2_mean_difference")
     bh = a.get("bh_population", "matrix")
+    method = a.get("p_adjust", _P_ADJUST_DEFAULT)
     for name, val, allowed in (("test", test, TESTS), ("effect_size", eff, EFFECT_SIZES),
-                               ("bh_population", bh, BH_POPULATIONS)):
+                               ("bh_population", bh, BH_POPULATIONS),
+                               ("p_adjust", method, P_ADJUST_METHODS)):
         if val not in allowed:
             raise _fail(f"{path}.{name} は {list(allowed)} のどれか", field=f"{path}.{name}",
                         value=repr(val))
@@ -159,8 +174,10 @@ def _analysis(raw, i: int) -> dict:
             raise _fail(f"{path}: bh_population=reported には reported_feature_ids（文字列の"
                         "空でないリスト）が要る", field=path + ".reported_feature_ids")
     elif ids is not None:
-        raise _fail(f"{path}: reported_feature_ids は bh_population=reported のときだけ",
-                    field=path + ".reported_feature_ids")
+        # 効かない引数: 誤りにせず、使わずに notes に書く（正規化した spec にも書かない＝rule_hash は省いた spec と同じ）
+        notes.append(f"{path}.reported_feature_ids は bh_population={bh} では効かず、使っていない"
+                     "（bh_population=reported のときだけ補正の母集団に使う）")
+        ids = None
     verdict = _keys(a.get("verdict", {}), {"q", "equivalence_fc"}, set(), path + ".verdict")
     q = _number(verdict.get("q", _VERDICT_DEFAULT["q"]), path + ".verdict.q",
                 lambda v: 0 < v <= 1)
@@ -168,14 +185,58 @@ def _analysis(raw, i: int) -> dict:
                  path + ".verdict.equivalence_fc", lambda v: v > 1)
     mdf = _number(a.get("min_detected_fraction", 0.5), path + ".min_detected_fraction",
                   lambda v: 0 <= v <= 1)
-    conf = a.get("allow_confounded", False)
+    conf = a.get("allow_confounded", True)
     if not isinstance(conf, bool):
         raise _fail(f"{path}.allow_confounded は真偽値", field=path + ".allow_confounded")
+    # allow_confounded は既定（true）でも書く: 既定を false から true へ変えたのは規則の変更（完全交絡を
+    # 止めずに比べる）なので hash も変わるべきで、明示した true / false の spec の hash は前と同じに保つ。
     out = {"analysis_id": aid, "kind": kind, "test": test, "effect_size": eff,
            "bh_population": bh, "verdict": {"q": q, "equivalence_fc": fc},
            "min_detected_fraction": mdf, "allow_confounded": conf}
+    if method != _P_ADJUST_DEFAULT:
+        out["p_adjust"] = method
     if ids is not None:
         out["reported_feature_ids"] = list(ids)
+    return out
+
+
+def _int_at_least(value, low: int, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < low:
+        raise _fail(f"{path} は {low} 以上の整数", field=path, value=repr(value))
+    return value
+
+
+def _plsda_analysis(raw: dict, aid: str, path: str, notes: list[str]) -> dict:
+    """PLS-DA の解析（クラスは design.factors の水準の組。`classes` で cell を絞れる）。
+
+    `n_permutations` が `_MAX_PERMUTATIONS` を超えたら上限まで下げて notes に書く（正規化した spec と
+    rule_hash は実際に回した回数）。PLS-DA は spec v2 で新しく足した解析なので、既定の値も書く（PCA と同じ）。
+    """
+    a = _keys(raw, {"analysis_id", "kind", "classes", "n_components", "scaling", "impute",
+                    "cv_folds", "n_permutations", "seed"}, {"analysis_id", "kind"}, path)
+    scaling, impute = a.get("scaling", "autoscale"), a.get("impute", "half_min")
+    if scaling not in _PLSDA_SCALING:
+        raise _fail(f"{path}.scaling は {list(_PLSDA_SCALING)}", field=path + ".scaling")
+    if impute not in _PLSDA_IMPUTE:
+        raise _fail(f"{path}.impute は {list(_PLSDA_IMPUTE)}", field=path + ".impute")
+    out = {"analysis_id": aid, "kind": "plsda", "scaling": scaling, "impute": impute,
+           "n_components": _int_at_least(a.get("n_components", 2), 1, path + ".n_components"),
+           "cv_folds": _int_at_least(a.get("cv_folds", 7), 2, path + ".cv_folds"),
+           "n_permutations": _int_at_least(a.get("n_permutations", 200), 1,
+                                           path + ".n_permutations"),
+           "seed": _int_at_least(a.get("seed", 0), 0, path + ".seed")}
+    if out["n_permutations"] > _MAX_PERMUTATIONS:
+        notes.append(f"{path}.n_permutations={out['n_permutations']} は上限の {_MAX_PERMUTATIONS} に下げて"
+                     f"回した（並べ替えの p の最小は 1/{_MAX_PERMUTATIONS + 1}）")
+        out["n_permutations"] = _MAX_PERMUTATIONS
+    classes = a.get("classes")
+    if classes is not None:
+        if (not isinstance(classes, list) or len(classes) < 2
+                or any(not isinstance(c, str) or not c for c in classes)
+                or len(set(classes)) != len(classes)):
+            raise _fail(f"{path}.classes は重複のない 2 つ以上の cell 名（因子の水準を : で結ぶ）",
+                        field=path + ".classes")
+        out["classes"] = list(classes)
     return out
 
 
@@ -203,19 +264,27 @@ def _input(raw) -> dict:
     return out
 
 
-def normalize_spec_v2(spec) -> dict:
-    """spec を検証して既定を埋めた正準の dict にする。未知のキーは ANALYSIS_SPEC_INVALID。"""
+def normalize_spec_v2(spec, *, notes: list[str] | None = None) -> dict:
+    """spec を検証して既定を埋めた正準の dict にする。未知のキーは ANALYSIS_SPEC_INVALID。
+
+    書いても効かない設定（bh_population=reported 以外の `reported_feature_ids`・前処理の効かないキー）は
+    誤りにせず捨て、上限を超えた `n_permutations` は上限に下げて、`notes`（渡せば）に理由を足す。捨てた設定は
+    正規化した spec にも rule_hash にも入らない。後から足したキー（`p_adjust`）は既定の値なら書かない。
+    """
+    notes = [] if notes is None else notes
     spec = _keys(spec, {"schema", "input", "preprocess", "design", "comparisons", "analyses",
                         "primary"}, {"schema", "comparisons", "analyses"}, "spec")
     if spec["schema"] != ANALYSIS_SCHEMA_V2:
         raise _fail(f"schema は {ANALYSIS_SCHEMA_V2}（v1 は analysis_spec.run_spec の担当）",
                     field="schema", value=repr(spec["schema"]))
     inp = _input(spec.get("input"))
+    pre_notes: list[dict] = []
     try:
-        pre = normalize_preprocess_config(spec.get("preprocess"))
+        pre = normalize_preprocess_config(spec.get("preprocess"), notes=pre_notes)
     except DomainError as e:
         raise _fail(f"preprocess が不正: {e.message}",
                     **{**e.details, "field": "preprocess." + str(e.details.get("field", ""))}) from e
+    notes.extend(f"preprocess: {n['message']}" for n in pre_notes)
     design = _design(spec.get("design"))
     comps = spec["comparisons"]
     if not isinstance(comps, list) or not comps:
@@ -227,11 +296,11 @@ def normalize_spec_v2(spec) -> dict:
     alist = spec["analyses"]
     if not isinstance(alist, list) or not alist:
         raise _fail("analyses は 1 つ以上のリスト", field="analyses")
-    analyses = [_analysis(a, i) for i, a in enumerate(alist)]
+    analyses = [_analysis(a, i, notes) for i, a in enumerate(alist)]
     aids = [a["analysis_id"] for a in analyses]
     if len(set(aids)) != len(aids):
         raise _fail(f"analysis_id が重複している: {aids}", field="analyses")
-    stat_ids = [a["analysis_id"] for a in analyses if a["kind"] != "pca"]
+    stat_ids = [a["analysis_id"] for a in analyses if a["kind"] in _STAT_KINDS]
     primary = spec.get("primary")
     if primary is None:
         if len(stat_ids) >= 2:
@@ -256,7 +325,10 @@ def _sample_table_hash(study) -> str:
              "injection_order": s.injection_order, "subject_id": s.subject_id,
              "include": s.include, "attributes": dict(sorted(s.attributes.items()))}
             for s in study.samples]
-    return canonical_hash(rows)
+    if not study.polarity_runs:
+        return canonical_hash(rows)
+    # 陽陰を統合したデータセットは、陰イオンの測定（バッチ・注入順）も入力（前処理が極性ごとに読む）
+    return canonical_hash({"samples": rows, "polarity_runs": study.polarity_runs})
 
 
 def _study_of(normalized: dict, source) -> StudyData:
@@ -270,7 +342,7 @@ def _study_of(normalized: dict, source) -> StudyData:
                         group_overrides=inp["group_overrides"])
 
 
-def prepare_spec_v2(normalized: dict, source) -> PreparedMatrix | NeedsInput:
+def prepare_spec_v2(normalized: dict, source) -> PreparedMatrix:
     """StudyData を作り（`source` が DatasetState 相当のとき）、spec の前処理設定で前処理する。
 
     `source` が StudyData のときはそれをそのまま使い、spec の `input`（除外・群の上書き）は
@@ -285,17 +357,15 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
 
     `source` は DatasetState 相当か StudyData（`prepare_spec_v2` と同じ扱い）。`prepared` を渡すと
     前処理をやり直さずそれを使う（同じ spec・同じ source から `prepare_spec_v2` が返したものを
-    呼び出し側が保証する）。前処理が利用者への確認を要するときは `{"status": "needs_input", ...}`
-    を返す。どれかの解析が DomainError を出したら全体を失敗させる（一部だけ載せた
-    analysis-result.v2 は「全解析を報告する」契約を壊すので返さない）。
+    呼び出し側が保証する）。前処理は利用者に尋ねない（drift=auto が補正を当てなかったときは
+    `preprocess.warnings` の `drift_not_applied_by_default`）。どれかの解析が DomainError を出したら
+    全体を失敗させる（一部だけ載せた analysis-result.v2 は「全解析を報告する」契約を壊すので返さない）。
     """
     spec = copy.deepcopy(normalized)
     rule_hash = rule_hash_v2(spec)
     study = _study_of(spec, source)
     if prepared is None:
         prepared = preprocess(study, spec["preprocess"])
-    if isinstance(prepared, NeedsInput):
-        return {**prepared.to_envelope(), "spec": spec, "rule_hash": rule_hash}
     design = spec["design"]
     common = dict(factors=design["factors"], comparisons=spec["comparisons"])
     results = []
@@ -304,6 +374,11 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
         if kind == "pca":
             res = pca(prepared, scaling=a["scaling"], n_components=a["n_components"],
                       impute=a["impute"])
+        elif kind == "plsda":
+            res = plsda(prepared, factors=design["factors"], classes=a.get("classes"),
+                        n_components=a["n_components"], scaling=a["scaling"], impute=a["impute"],
+                        cv_folds=a["cv_folds"], n_permutations=a["n_permutations"], seed=a["seed"],
+                        block=design["block"])
         else:
             kw = dict(common, covariates=design["covariates"], block=design["block"],
                       test=a["test"], effect_size=a["effect_size"],
@@ -311,7 +386,8 @@ def run_spec_v2(normalized: dict, source, *, assay_kind: str = "unknown",
                       reported_feature_ids=a.get("reported_feature_ids"),
                       q_threshold=a["verdict"]["q"], equivalence_fc=a["verdict"]["equivalence_fc"],
                       min_detected_fraction=a["min_detected_fraction"],
-                      allow_confounded=a["allow_confounded"])
+                      allow_confounded=a["allow_confounded"],
+                      p_adjust=a.get("p_adjust", _P_ADJUST_DEFAULT))
             res = (compare(prepared, **kw) if kind == "compare"
                    else composition(prepared, assay_kind=assay_kind, **kw))
         results.append({"analysis_id": a["analysis_id"], "kind": kind, "result": res})

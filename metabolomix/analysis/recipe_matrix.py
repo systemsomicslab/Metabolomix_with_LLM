@@ -6,13 +6,19 @@
 
 **段の順序は recipe が決める**（`steps`）。論文によって「補完 → 正規化 → ドリフト補正」
 だったり「正規化 → 補完」だったりし、順序が違えば数字が違う。挙げた段だけを、挙げた順に
-走らせる。挙げない段の設定が recipe にあれば拒否する（書いたのに効かない設定を作らない）。
+走らせる。挙げない段の設定が recipe にあれば効かないので使わず、`notes` に書く
+（誤りにはしない。正規化した recipe にも残さないので `rule_hash` に入らない）。
 
 **標準の定義に合わせる。** KNN は R `impute::impute.knn`（`maxp` = 特徴数、すなわち
 2 段の分割をしない）と同じ規則、LOESS は `statsmodels.nonparametric.smoothers_lowess.lowess`。
 その場の実装の癖には合わせない。
 
 行列は（試料 × 特徴）。入力の配列は書き換えない。
+
+陽陰を統合したデータセット（`feature_polarity` を渡したとき）は、正規化の係数を**極性ごと**にその極性の
+特徴だけから求め、その極性の列だけを割る（陽イオンと陰イオンは別の注入なので、強度の大きい極性の総量が
+もう一方の係数を決めない。統計エンジンの前処理と同じ規則）。ドリフト補正も極性ごとに、その極性の注入順
+（`injection_order_by_polarity`。無い極性は `injection_order`）で LOESS を当てはめる。
 """
 from __future__ import annotations
 
@@ -101,8 +107,11 @@ def _normalize_step(step: str, raw) -> dict:
     return out
 
 
-def normalize_recipe(recipe) -> dict:
-    """recipe を検証して既定を埋める。`steps` に挙げた段の設定だけを残す。"""
+def normalize_recipe(recipe, *, notes: list[str] | None = None, label: str = "matrix") -> dict:
+    """recipe を検証して既定を埋める。`steps` に挙げた段の設定だけを残す。
+
+    `steps` に無い段の設定は効かないので捨て、`notes`（渡せば）にその旨を足す。`label` は注記に書く欄の名前。
+    """
     if recipe is None:
         recipe = {}
     if not isinstance(recipe, dict):
@@ -121,9 +130,9 @@ def normalize_recipe(recipe) -> dict:
     if len(set(steps)) != len(steps):
         raise _fail(f"steps に重複がある: {steps}", field="steps")
     orphan = sorted(set(recipe) & set(STEPS) - set(steps))
-    if orphan:
-        raise _fail(f"steps に無い段の設定がある（効かない設定は書かない）: {orphan}",
-                    field="steps", orphan=orphan)
+    if orphan and notes is not None:
+        notes.append(f"{label}: steps に無い段の設定 {orphan} は効かないので使っていない"
+                     "（その段を走らせるなら steps に足す）")
     out = {"schema": RECIPE_SCHEMA, "steps": list(steps)}
     for step in steps:
         out[step] = _normalize_step(step, recipe.get(step))
@@ -321,6 +330,26 @@ def _normalize(values, sample_ids, roles, config):
     return values / factors[:, None], report
 
 
+def _normalize_by_polarity(values, features, sample_ids, roles, config, feature_polarity):
+    """統合したデータセットの正規化: 極性ごとの列に `_normalize` を当てる（各極性の値と係数は、その極性だけを
+    正規化したものと同じ）。報告は `by_polarity`（極性 → `factors`・`unscaled_samples`）。"""
+    if config["method"] == "none":
+        return _normalize(values, sample_ids, roles, config)
+    labels = [feature_polarity.get(f, "(unknown)") for f in features]
+    out = values.copy()
+    by = {}
+    report = {"method": config["method"]}
+    for label in dict.fromkeys(labels):
+        cols = [j for j, lab in enumerate(labels) if lab == label]
+        sub, rep = _normalize(values[:, cols], sample_ids, roles, config)
+        out[:, cols] = sub
+        by[label] = {"factors": rep["factors"], "unscaled_samples": rep["unscaled_samples"]}
+    if config["method"] == "pqn":
+        report["reference"] = config["reference"]
+    report["by_polarity"] = by
+    return out, report
+
+
 def _drift_correct(values, sample_ids, roles, config, injection_order):
     from statsmodels.nonparametric.smoothers_lowess import lowess
 
@@ -349,6 +378,33 @@ def _drift_correct(values, sample_ids, roles, config, injection_order):
     return out, {"method": "loess", "n_qc": int(len(qc)), "uncorrected_features": uncorrected}
 
 
+def _drift_correct_by_polarity(values, features, sample_ids, roles, config, injection_order,
+                               feature_polarity, order_by_polarity):
+    """統合したデータセットのドリフト補正: 極性ごとの列に、その極性の注入順で `_drift_correct` を当てる
+    （各極性の値は、その極性だけを補正したものと同じ）。`order_by_polarity`（極性 → `{"order", "source"}`）に
+    無い極性は `injection_order`。報告は `by_polarity`（極性 → `uncorrected_features`・注入順の出所 `injection_order`）。
+    注入順の無い試料がある極性は、極性を添えて INJECTION_ORDER_MISSING。"""
+    labels = [feature_polarity.get(f, "(unknown)") for f in features]
+    out = values.copy()
+    by = {}
+    report = {"method": "loess", "n_qc": len(_role_rows(sample_ids, roles, "qc")), "uncorrected_features": 0}
+    for label in dict.fromkeys(labels):
+        cols = [j for j, lab in enumerate(labels) if lab == label]
+        plan = order_by_polarity.get(label) or {}
+        order = plan.get("order", injection_order)
+        try:
+            sub, rep = _drift_correct(values[:, cols], sample_ids, roles, config, order)
+        except DomainError as exc:
+            raise DomainError(exc.code, f"{label}: {exc.message}",
+                              {**(exc.details or {}), "polarity": label}) from None
+        out[:, cols] = sub
+        report["uncorrected_features"] += rep["uncorrected_features"]
+        by[label] = {"uncorrected_features": rep["uncorrected_features"],
+                     "injection_order": plan.get("source", "spec")}
+    report["by_polarity"] = by
+    return out, report
+
+
 def _qc_rsd_filter(values, keep, sample_ids, feature_ids, roles, config):
     rows = _role_rows(sample_ids, roles, "qc")
     if len(rows) < 2:
@@ -373,12 +429,21 @@ def _qc_rsd_filter(values, keep, sample_ids, feature_ids, roles, config):
 
 
 def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: dict[str, str],
-                 recipe: dict, *, detected=None, injection_order: dict | None = None) -> dict:
+                 recipe: dict, *, detected=None, injection_order: dict | None = None,
+                 feature_polarity: dict[str, str] | None = None,
+                 injection_order_by_polarity: dict[str, dict] | None = None) -> dict:
     """正規化済みの recipe を（試料 × 特徴）の行列に当てる。
 
     篩の段（detection_filter・qc_rsd_filter）で落とした特徴は、**その段の直後に列から外す**。
     後の段（KNN の近傍・PQN の参照・TIC の和）に落とした特徴を混ぜると、論文の方法と
-    違う数字になる。
+    違う数字になる。`feature_polarity`（陽陰を統合したデータセットの 特徴 ID → 極性）を渡すと、
+    正規化の係数を極性ごとに求め（`_normalize_by_polarity`）、ドリフト補正を極性ごとの注入順で当てる
+    （`_drift_correct_by_polarity`。`injection_order_by_polarity` は 極性 → `{"order": 試料 → 注入順,
+    "source": 出所}`、無い極性は `injection_order`）。
+
+    `imputed_values` は補完の段（`impute`）の直後の値（後の段の正規化・ドリフト補正の前。列は最後に残った特徴）。
+    補完の段が無ければ None。補完の埋め値は後の段の試料ごとの係数で値が散るので、片群一定の印
+    （analysis_spec の `constant_in_group`）はここで探す。
     """
     current = np.array(values, dtype=float, copy=True)
     if current.shape != (len(sample_ids), len(feature_ids)):
@@ -386,6 +451,7 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
                           {"shape": list(current.shape)})
     features = list(feature_ids)
     present = None if detected is None else np.asarray(detected, dtype=bool)
+    imputed = None
     reports = []
     for step in recipe["steps"]:
         config = recipe[step]
@@ -395,11 +461,21 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
                                                 sample_ids, features, roles, config, present)
         elif step == "impute":
             current, report = _impute(current, config)
+            imputed = current.copy()
         elif step == "normalize":
-            current, report = _normalize(current, sample_ids, roles, config)
+            if feature_polarity:
+                current, report = _normalize_by_polarity(current, features, sample_ids, roles, config,
+                                                         feature_polarity)
+            else:
+                current, report = _normalize(current, sample_ids, roles, config)
         elif step == "drift_correct":
-            current, report = _drift_correct(current, sample_ids, roles, config,
-                                             injection_order)
+            if feature_polarity:
+                current, report = _drift_correct_by_polarity(
+                    current, features, sample_ids, roles, config, injection_order, feature_polarity,
+                    injection_order_by_polarity or {})
+            else:
+                current, report = _drift_correct(current, sample_ids, roles, config,
+                                                 injection_order)
         else:
             keep, report = _qc_rsd_filter(current, np.ones(len(features), dtype=bool),
                                           sample_ids, features, roles, config)
@@ -407,6 +483,8 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
             columns = np.nonzero(keep)[0]
             current = current[:, columns]
             features = [features[j] for j in columns]
+            if imputed is not None:
+                imputed = imputed[:, columns]
             if present is not None:
                 present = present[:, columns]
         reports.append({"step": step, **report, "n_features_after": len(features)})
@@ -417,4 +495,5 @@ def build_matrix(values, sample_ids: list[str], feature_ids: list[str], roles: d
         "steps": reports,
         "n_features_in": len(feature_ids),
         "n_features_out": len(features),
+        "imputed_values": imputed,
     }

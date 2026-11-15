@@ -88,12 +88,12 @@ EIC（`.EIC.aef`）を m/z・RT の窓や強度で検索するツールは無い
 `plot_schema="lipidmix.eic.v1"` を返す。主要フィールドは `axes`、スポットの
 `rt`/`mz`、および各試料の `series[].x` / `series[].y` / `file_id` /
 `peak_left` / `peak_top` / `peak_right` である。Use-LLLMはこれをPlotlyへ変換し、
-Claude Desktop等は各クライアントのUI方式で描画できる。通常の描画ではファイルを
+Claude Desktop等は各クライアントのUI方式で描画できる。`output_path` を渡さない描画ではファイルを
 作らない。
 
-PNGが必要だとユーザーが明示した場合に限り、先に得たプロット情報を
-`save_figure(kind="eic", analysis_id=..., title=None)` で `reports/figures/` へ保存する。
-この保存は対話描画とは別の書き込み操作である。
+PNG ファイルは、先に得たプロット情報を `save_figure(kind="eic", analysis_id=..., title=None)` で
+`reports/figures/`（報告書に埋め込む図）へ保存するか、`dataset_plot(..., output_path=...)` で描くときに
+任意の場所へ書く。どちらも対話描画とは別の書き込み操作である。
 
 **データセット（ハンドル）の EIC は `dataset_plot(kind="eic")` で描く**（B-2b）。`.EIC.aef` は
 データセットが覚えているパス（`artifact_paths` の `eic`）から読み、`feature_id` は
@@ -137,7 +137,7 @@ PNGが必要だとユーザーが明示した場合に限り、先に得たプ�
   上位300件に予備選抜され、`candidates > candidates_evaluated` となり `caveats` にも残る。
   `selection.plotted` は実際に描画した数。
 
-PNGが必要だとユーザーが明示した場合に限り `save_figure(kind="eic", analysis_id=..., title=None)` で
-保存する。この保存ツールは `lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。
+PNG ファイルは `save_figure(kind="eic", analysis_id=..., title=None)`（報告書の `reports/figures/`）か
+`dataset_plot(..., output_path=...)`（任意の場所）で書く。この保存ツールは `lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。
 データセットの上では `dataset_plot(kind="eic_compounds", file_id=..., names=[...] / ontologies=[...])` が
 同じ契約（物質は `feature_metadata` の名前・クラスから選ぶ）で描き、保存は `save_figure(kind="eic_compounds")`。

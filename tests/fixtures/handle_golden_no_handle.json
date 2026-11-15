@@ -5,6 +5,7 @@
     "RA_vs_HC": 3
    },
    "name": "matrix",
+   "p_adjust_method": "bh",
    "q_interpretation": "discovery_fdr"
   },
   "ci_level": 0.95,
@@ -13,6 +14,12 @@
    "batch_table": {
     "HC": {},
     "RA": {}
+   },
+   "by_contrast": {
+    "RA_vs_HC": {
+     "batch_status": "not_evaluable",
+     "confounded": null
+    }
    },
    "warnings": [
     {
@@ -23,6 +30,8 @@
   },
   "contrasts": [
    {
+    "batch_status": "not_evaluable",
+    "confounded": null,
     "contrast_id": "RA_vs_HC",
     "large_changes": 0,
     "n_not_tested": 0,
@@ -43,23 +52,26 @@
   "effect_size_definition": {
    "name": "log2_mean_difference"
   },
+  "factorial": null,
   "group_n": {
    "HC": 3,
    "RA": 3
   },
   "matrix_id": "mx_X",
+  "matrix_source": "matrix_id",
   "next": "全行は result_id で保持した（直近の結果として書き出し・図の既定になる）。対比が複数の結果はdataset_export_differential・dataset_export_evidence_bundle・dataset_plot(kind=volcano)・dataset_feature_search には contrast_id を渡して対比を選ぶ（交互作用の対比は 2 群の形にならない）",
   "omnibus": null,
+  "p_adjust_method": "bh",
   "prior": {
    "df_prior": 219.289196,
    "s2_prior": 0.008115
   },
   "result_id": "cmp_X",
-  "rule_hash": "024b67ea0001ae69ba78acbc6e88c1ee2c318ec46fec1833f9bdaabca3ad912a",
+  "rule_hash": "5648d7cf64f271b2b24f7e251a2dbeaa3e41eab7fd5ae4871342dda7a20ae3c0",
   "status": "success",
   "subject_source": "injection",
   "test": "moderated_t",
-  "top": "contrast_id\tfeature_id\tname\tlog2fc\tci_low\tci_high\tq\tverdict\nRA_vs_HC\t1\tCholine\t0.8361\t0.6745\t0.9976\t2.89e-07\tchanged",
+  "top": "contrast_id\tfeature_id\tname\tid_level\tlog2fc\tci_low\tci_high\tq\tverdict\nRA_vs_HC\t1\tCholine\tmsms\t0.8361\t0.6745\t0.9976\t2.89e-07\tchanged",
   "verdict_rule": {
    "equivalence_fc": 1.2,
    "equivalence_log2": 0.263034,
@@ -82,7 +94,7 @@
   "n_features_before": 3,
   "n_qc": 2,
   "n_units": 6,
-  "next": "dataset_compare（2 群以上の比較）または dataset_pca を、この matrix_id を渡して（または省略して既定の前処理で）実行してください",
+  "next": "dataset_compare（2 群以上の比較）または dataset_pca を、この matrix_id を渡して実行してください（省略しても、このハンドルで最後に作ったこの行列を使う）",
   "quant": null,
   "status": "success",
   "steps": [
@@ -191,9 +203,25 @@
     "log2fc_sign": "positive means group_b is higher",
     "n_a": 3,
     "n_b": 3,
+    "n_units_a": 3,
+    "n_units_b": 3,
     "result_id": "cmp_X"
    }
   ],
+  "rt_offset": {
+   "criteria": {
+    "coelute_min": 0.05,
+    "min_abs_median_min": 0.2,
+    "min_pairs": 10,
+    "window_min": 2.0
+   },
+   "median_min": 0.0,
+   "n_pairs": 1,
+   "q1_min": null,
+   "q3_min": null,
+   "reason": "too_few_pairs",
+   "shift_min": null
+  },
   "rule": {
    "merge_groups_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
    "merge_split": true,
@@ -223,14 +251,14 @@
     }
    ]
   },
-  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t",
+  "stats": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tdetected_units_a\tdetected_units_b\tpresence_p\tdetection_driven\tmerged_from\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t\t\t",
   "stats_source": {
    "dataset_hash": "X",
    "result_ids": [
     "cmp_X"
    ]
   },
-  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t",
+  "stats_unmerged": "feature_id\tresult_id\tstatus\tlog2fc\tp\tq\tmean_a\tmean_b\tdetected_a\tdetected_b\tdetected_units_a\tdetected_units_b\tpresence_p\tdetection_driven\n1\tcmp_X\ttested\t0.8361\t9.643e-08\t2.893e-07\t11.1\t19.78\t\t\t\t\t\t",
   "targets": [
    {
     "adduct_tier_used": 1,
@@ -259,7 +287,7 @@
   ]
  },
  "search_window": {
-  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t",
+  "features": "feature_id\tmz\trt\tevidence\tname\tinchikey\tadduct\tn_sme\tontology\tn_detected\tnormalized\tmsi_level\tinchikey_ambiguity\n1\t104.107\t1.2\tsme\tCholine\tOEYIOHPDSNJKLS-UHFFFAOYSA-N\t[M]1+\t1\t\t\t\t\t\n2\t184.0733\t1.25\tnone\t\t\t\t0\t\t\t\t\t\n3\t500.2\t5.0\tnone\t\t\t\t0\t\t\t\t\t",
   "merge_split": {
    "alignment_qc_sha256": null,
    "bh_population": {},
@@ -282,6 +310,7 @@
   "stats_unmerged": ""
  },
  "status": {
+  "assay_kind": "unknown",
   "detection": {
    "available": false,
    "note": "mzTab-M の非ゼロ値には gap-fill による補間値が含まれ得ます。検出状態が取り込めていないため、検出率・欠測率は語れません。",

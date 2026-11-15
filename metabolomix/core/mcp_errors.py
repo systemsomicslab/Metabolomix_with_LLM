@@ -12,8 +12,8 @@ outputSchema を導出するため、`-> str` のツールが失敗時だけ dic
 機械可読なエラーはテキストに載せるしかない。
 
 もう 1 つの封筒 `needs_input`（`{"needs_input": {field, reason, options, argument?, retry_tools}}`）は
-**エラーではない**（`error` キーを持たない）。既定を決めずに利用者へ尋ねる問い（例: 内部標準で
-換算済みの値に QC のドリフト補正を重ねるか）で、クライアントは `options` を利用者に示し、選ばれた
+**エラーではない**（`error` キーを持たない）。既定を決めずに利用者へ尋ねる問い（例: 2 極性の run で
+読む極性・対比が複数ある結果のどの対比を読むか）で、クライアントは `options` を利用者に示し、選ばれた
 `value` を `argument`（無ければ spec の `field`）に入れて `retry_tools` のどれかを呼び直す。
 
 このモジュールは依存グラフの leaf（stdlib と同じく leaf の
@@ -61,15 +61,20 @@ NEEDS_INPUT = "needs_input"
 
 
 def needs_input(field: str, reason: str, options: list[dict], *, argument: str | None = None,
-                retry_tools: list[str]) -> str:
+                patch: bool = False, retry_tools: list[str]) -> str:
     """利用者に尋ねてから呼び直す封筒を返す（エラーではない）。
 
     引数:
-        field: 答えが入る設定の欄（spec の路。例 "preprocess.drift.mode"）。
+        field: 答えが入る設定の欄（引数名か spec の路。例 "contrast_id"・"statistics.result_id"）。
+            `patch=True` では問いの主題（答えは各選択肢の `value` が名指す引数に入る）。
         reason: なぜ尋ねるのか（LLM と人間が読む説明）。
         options: 選択肢 `[{"value", "label"}, ...]`。`value` を引数に入れて呼び直す。
-        argument: 呼び直すツールの引数名（例 "drift_mode"）。spec で答える経路
-            （`dataset_analysis_run` の v2）では渡さず、封筒にも載せない（`field` が答えの場所）。
+        argument: 呼び直すツールの引数名（例 "contrast_id"）。spec で答える経路
+            （`dataset_novel_candidates` の `statistics.result_id`）では渡さず、封筒にも載せない
+            （`field` が答えの場所）。
+        patch: True なら答えが 1 つの引数に収まらない問い（選択肢ごとに替える引数が違う）。各選択肢の
+            `value` は「引数名 → 値」の dict で、呼び直しはその dict のとおりに引数を置き換え（値が null の
+            引数は外す）、ほかの引数はそのまま渡す。封筒に `"patch": true` を載せ、`argument` は持たない。
         retry_tools: 答えを入れて呼び直せるツール名の候補（OR）。
 
     `missing_state` と同じく、復旧の手掛かりが欠けた封筒は出さない（ValueError）。
@@ -83,31 +88,19 @@ def needs_input(field: str, reason: str, options: list[dict], *, argument: str |
         raise ValueError("options は value と label を持つ選択肢の 1 つ以上のリストです。")
     if not retry_tools:
         raise ValueError("retry_tools は必須です（答えを入れて呼び直せるツールの候補）。")
+    if patch:
+        if argument:
+            raise ValueError("patch の封筒は argument を持たない（選択肢の value が替える引数を名指す）。")
+        if any(not isinstance(o["value"], dict) or not o["value"]
+               or any(not isinstance(k, str) or not k for k in o["value"]) for o in options):
+            raise ValueError("patch の選択肢の value は「引数名 → 値」の空でない dict です。")
     body: dict = {"field": field, "reason": reason, "options": [dict(o) for o in options]}
     if argument:
         body["argument"] = argument
+    if patch:
+        body["patch"] = True
     body["retry_tools"] = list(retry_tools)
     return json_payload({NEEDS_INPUT: body})
-
-
-#: `argument`（drift_mode）を受けて呼び直せるツール（`needs_input` の retry_tools の意味）と、その引数名。
-#: 受けるのは dataset_preprocess だけ。比較・PCA・パスウェイは返った matrix_id を渡して呼び直す。
-DRIFT_ARGUMENT = "drift_mode"
-DRIFT_RETRY_TOOLS = ["dataset_preprocess"]
-
-
-def default_matrix_needs_input(needs, tool: str) -> str:
-    """既定の前処理が利用者に尋ねたいとき（`needs` は前処理の `NeedsInput`）の封筒。
-
-    `tool` は drift_mode の引数を持たないツール（比較・PCA・パスウェイ）の名前で、理由に呼び直し先
-    （`dataset_preprocess(drift_mode=...)` で行列を作り、その matrix_id を渡す）を書く。
-    """
-    return needs_input(
-        needs.field,
-        f"{needs.reason} {tool} には drift_mode 引数がありません。"
-        f"dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-        f"{tool} に渡して呼び直してください。",
-        needs.options, argument=DRIFT_ARGUMENT, retry_tools=list(DRIFT_RETRY_TOOLS))
 
 
 CONSOLE_ERROR_CODES = frozenset({
@@ -133,6 +126,12 @@ CONSOLE_ERROR_CODES = frozenset({
     "LBM_AMBIGUOUS",
     # pipeline の library_mode="msp_then_lbm" で `[library] lbm` が未設定の場合（v8）。
     "LBM_NOT_CONFIGURED",
+    # console_method_candidates / console_method_template の polarity が positive / negative（pos・neg・+・- も可）
+    # として読めない（黙って「どの候補とも一致しない」・極性なしにしない）。
+    "POLARITY_INVALID",
+    # pipeline_run の受付・prepare_input で、mzML / mzXML が途中で切れている・小さすぎる・読めない
+    # （Console はそこで落ちるので先に名指しして断る。details.files / n_files / min_bytes / reasons）。
+    "PIPELINE_INPUT_INVALID",
 })
 
 
@@ -183,6 +182,29 @@ MZTAB_ERROR_CODES = frozenset({
     # `.arf` が大きすぎて読めない（伸長後の大きさの見積もりが空きメモリを超える、または読む途中で
     # メモリが尽きた）。details に path_name / estimated_bytes / available_bytes / remedy。
     "ARF_TOO_LARGE",
+    # dataset_plot(output_path=...) が指したファイルに書けない（書く段だけ。図の置き場は変えない）。
+    "FIGURE_SAVE_FAILED",
+    # save_figure が保存しようとした図が古い（試料の情報の更新後・元の結果が今の状態から出たものでない。除外・
+    # 試料の表の更新が図ごと捨てた図も。そのときは details.reason に変わったもの）。details.required_tools は
+    # dataset_plot（描き直す）。kind=species_pca で名指しした result_id が置き場の図の結果と違うときも
+    # （details.held_result_id と違いの種類 details.mismatch: settings / stale / input。名指しした結果の指定が
+    # 置き場の図と違うときだけ details.settings と required_tools。stale と input は描き直しても戻らない）。
+    "STALE_FIGURE",
+    # job_status: 知らない受付番号・走っている受付が上限・道具が DomainError 以外で止まった。
+    "JOB_NOT_FOUND",
+    "JOB_LIMIT",
+    "JOB_FAILED",
+    # ハンドルのロックが handle_dispatch.HANDLE_LOCK_WAIT 秒待っても空かなかった（長い仕事か別の呼び出しが
+    # 持っている）。何もしていない。`handle_busy` で返る（走っている仕事があれば details.job_id / tool と
+    # required_tools=["job_status"]）。
+    "HANDLE_BUSY",
+    # dataset_analysis_run（spec v2 の plsda）: 指定の誤り・欠測がある（補完しない）・値の変わる特徴が 2 未満。
+    "PLSDA_SPECIFICATION_INVALID",
+    "PLSDA_MISSING_VALUES",
+    "PLSDA_TOO_FEW_FEATURES",
+    # pipeline_sample_sheet: 試料の表・引数が読めない／合わない、同じ名前のシートが既にある（overwrite=False）。
+    "SAMPLE_TABLE_INVALID",
+    "SAMPLE_SHEET_EXISTS",
 })
 
 
@@ -201,11 +223,45 @@ def mztab_error(code: str, message: str, details: dict | None = None) -> str:
     return json_payload({"error": payload})
 
 
+HANDLE_BUSY = "HANDLE_BUSY"
+
+
+def handle_busy(dataset_handle: str, waited_s: float, job: dict | None = None) -> str:
+    """ハンドルのロックを待ちきれなかった呼び出しの封筒（何もしていない）。
+
+    `job` はそのハンドルのロックを持っている長い仕事（`{"job_id", "tool", "running_s"}`。分からなければ
+    None）。あれば `details` に載せ、`required_tools=["job_status"]`（その仕事の終わりを待てる）と
+    `details.next` を付ける。無ければ別の呼び出しがロックを持っているので、少し待って呼び直す。
+    """
+    waited = round(float(waited_s), 1)
+    details: dict = {"dataset_handle": dataset_handle, "waited_s": waited}
+    done_nothing = ("この呼び出しは何もしていません（待つのをやめたので、後からロックが空いても黙って"
+                    "効くことはありません）。")
+    if job and job.get("job_id"):
+        job_id, tool = job["job_id"], job.get("tool")
+        details.update({"job_id": job_id, **({"tool": tool} if tool else {}),
+                        **({"running_s": job["running_s"]} if job.get("running_s") is not None else {}),
+                        "next": f'job_status(job_id="{job_id}", wait_seconds=30)'})
+        message = (f"ハンドル {dataset_handle} では長い仕事（{tool or '道具'}、受付番号 {job_id}）が"
+                   f"ロックを持っていて、{waited:g} 秒待っても空きませんでした。{done_nothing}"
+                   f"job_status(job_id=\"{job_id}\") でその仕事が終わるのを待ってから、同じ呼び出しを"
+                   "し直してください。")
+        payload = {"code": HANDLE_BUSY, "message": message, "details": details,
+                   "required_tools": ["job_status"]}
+    else:
+        message = (f"ハンドル {dataset_handle} では別の呼び出しがロックを持っていて、{waited:g} 秒待っても"
+                   f"空きませんでした。{done_nothing}少し待ってから同じ呼び出しをし直してください。")
+        payload = {"code": HANDLE_BUSY, "message": message, "details": details}
+    return json_payload({"error": payload})
+
+
 PATHWAY_ERROR_CODES = frozenset({
     # [mslipidmapper] rscript が未設定、または指す先が無い（mslipidmapper_api_url も無いか使えないとき）。
     "MSLM_NOT_CONFIGURED",
     # MSLipidMapper（R パッケージ）か、その公開関数が無い。自動インストールはしない。
     "MSLM_R_PACKAGES_MISSING",
+    # MSLipidMapper は入っているが R が読み込めない（message に loadNamespace の本文）。
+    "MSLM_R_PACKAGE_LOAD_FAILED",
     # [mslipidmapper] mslipidmapper_api_url のサーバに届かない・生存確認が通らない・API が 404/5xx を返した
     # （ローカルの R も使えなかったときだけ表に出る。使えればそちらへ回る）。
     "MSLM_REMOTE_UNAVAILABLE",
@@ -217,7 +273,7 @@ PATHWAY_ERROR_CODES = frozenset({
     "MSLM_OUTPUT_INVALID",
     # PDF 描画だけが失敗した（ブラウザ不在・unpkg 不達）。pathway_project の結果は有効。
     "PATHWAY_RENDER_FAILED",
-    # 引数を直して呼び直すしかない誤り（未知のパスウェイ名・群が小さい・鎖がデータに無い）。
+    # 引数を直して呼び直すしかない誤り（未知のパスウェイ名・群が小さい）。データに無い鎖は誤りにせず missing_chains。
     "PATHWAY_BAD_REQUEST",
 })
 

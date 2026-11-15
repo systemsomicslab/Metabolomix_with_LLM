@@ -34,6 +34,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 #: - `int`: TOML の整数（bool は拒む）。
 SETTINGS: dict[str, str] = {
     "msdial.exe": "path",
+    # Console を起こす前の commit の空きの下限（GB。既定 8、0 で測らない）。下回っても止めず、
+    # 警告だけ残す（`console/machine_slot.check_commit_memory`）。
+    "msdial.min_free_commit_gb": "int",
     "library.msp_positive": "path",
     "library.msp_negative": "path",
     # 脂質ライブラリ（.lbm2）。Console の自動解決（設定の段）と pipeline の

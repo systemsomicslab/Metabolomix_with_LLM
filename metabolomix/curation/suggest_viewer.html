@@ -134,6 +134,11 @@ function candidateLabel(c) {
   const species = c.name && c.sum_name && c.name !== c.sum_name ? `（${c.name}）` : "";
   return `${base}${species} ${c.adduct || ""}`.trim();
 }
+// 関係の見出し。M+2 の候補が重なる（13C2・18O・34S・37Cl・81Br・41K のどれか決まらない）行は、そう書いて断定に見せない。
+function relationLabel(r) {
+  return `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` +
+    (r.ambiguous ? "（M+2 の候補が重なる）" : "") + (r.informational ? "（情報のみ）" : "");
+}
 // 詳細行。InChIKey の先頭 14 文字（骨格部分）でレコードを見分ける。
 function candidateDetail(c) {
   const extra = [...(c.soft || []), ...(c.info || [])];
@@ -216,8 +221,7 @@ function spotCard(spot) {
       (r.msdial_links.length ? ` / MS-DIAL: ${r.msdial_links.join(",")}` : "") +
       (r.isotope_ratio != null ? ` / 強度比 ${r.isotope_ratio}（期待 ${r.expected_ratio}）` : "") +
       (r.soft.length ? ` / ${r.soft.join(",")}` : "") + (r.strong ? " / 強い説明" : "");
-    const label = `#${r.of}（${r.of_name || "?"}）の別イオン: ${r.relation}` + (r.informational ? "（情報のみ）" : "");
-    const row = addRow(r.candidate_id, label, detail, () => {
+    const row = addRow(r.candidate_id, relationLabel(r), detail, () => {
       setChoice({candidate: r.candidate_id, flag: "redundant"}); restore();
     }, r.informational ? "info" : "");
     row.addEventListener("mouseenter", () => drawEic(eic, {...spot, ...overlayFor(spot, r)}));

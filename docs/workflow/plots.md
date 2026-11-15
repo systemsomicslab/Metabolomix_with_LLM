@@ -1,8 +1,9 @@
 # ワークフロー: 図（dataset_plot）・図の保存と payload 契約
 
-データセットの図は `dataset_plot` が描く（既定は画像。ファイルは書かない）。作った図の記録は
-`ds.figures[kind]`（kind ごとに最後の 1 つ。指紋に含めない）に置かれ、ユーザーが明示的に保存を
-求めたときだけ `save_figure` がそこから `reports/figures/<analysis_id>_<kind>.png` に書く。
+データセットの図は `dataset_plot` が描く（既定は画像。`output_path` を渡せば同じ図をそのファイルにも書く）。
+作った図の記録は `ds.figures[kind]`（kind ごとに最後の 1 つ。指紋に含めない）に置かれ、`save_figure` が
+そこから報告書用に `reports/figures/<analysis_id>_<kind>.png` へ書く。ファイルへの書き方は両者で
+`plot_tools.write_figure_files` 1 つを共有する。
 旧 ARF 系の描画ツール（`arf_plot_*` `dataset_plot(kind="species_pca")` `dataset_plot(kind="loadings")` `eic_plot_*`）は B-2b Task 8 で消えた。
 
 ## payload 契約の比較
@@ -19,7 +20,9 @@
 | `lipidmix.species_pca.v1` | `dataset_plot(kind="species_pca", output="payload")` | `save_figure(kind="species_pca")` | 選んだ分子種の PCA のスコア散布図（`fitted` が False の点は投影だけ）。ローディングの全行は結果（`ds.results[result_id]`）に持つ。PNG（dpi 300）と SVG |
 
 描画ツールの**既定は payload ではなく画像**（`output="image"`）。座標点列を LLM の文脈へ流すと
-実測で数万トークンかかるのに対し、サーバ側で描いた PNG は 300〜1,000 画像トークンに収まる。
+実測で数万トークンかかるのに対し、サーバ側で描いた PNG は数百画像トークンに収まる（返す PNG は
+`render_png` が画素数を `MAX_IMAGE_PIXELS`（40 万画素）に抑え、大きな図は dpi を `MIN_IMAGE_DPI`（72）まで下げる。
+ファイルに書く図（`render_files`）には上限を掛けない）。
 Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT_OUTPUT=payload` を置くか、
 呼び出しごとに `output="payload"` を渡す。判定は `plots/render.py resolve_plot_output()`。
 描画は `plots/` 側に置き、画像返しと保存が同じ関数を通る（画面の図とレポートの図がずれない）。
@@ -32,12 +35,14 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 
 ## dataset_plot
 
-前提: `kind` ごと——`volcano` は `dataset_compare`（対比を 2 群の形に読み替えて描く。対比が複数の結果は `contrast_id` か `result_id#contrast_id` が要り、
-交互作用の対比は描けない）、`pca` / `loadings` は `dataset_pca`、
+前提: `kind` ごと——`volcano` は `dataset_compare`（対比を 2 群の形に読み替えて描く。2 群の対比が複数の結果は `contrast_id` か `result_id#contrast_id` が要り、
+省くと `needs_input`（`tools/_contrast_choice.py` `contrast_envelope`。選択肢は対比の一覧）、交互作用の対比は描けない。題は `test vs reference` の並び）、`pca` / `loadings` は `dataset_pca`、
 `group_intensity` / `species` / `species_pca` は結果を要らない（`items` と `groups` を渡す。キュレーションの
 判断は `load_dataset` が読んだ `ds.curation_flags`）、`eic` / `eic_compounds` はデータセットの `.EIC.aef`（`artifact_paths` の `eic`）。無ければ
 `missing_state`（`dataset_pca` / `dataset_compare`）か `COMPANION_ARTIFACT_MISSING`（`.EIC.aef` が無い）。
-状態変更: `ds.figures[kind]` を更新（メモリ上。ファイルは書かない）。`species_pca` はさらに結果を
+状態変更: `ds.figures[kind]` を更新（メモリ上。描けた呼び出しだけ）。
+`output_path`（`.png`）を渡せば `write_figure_files` が同じ図をそのファイルに書く（親のフォルダは作り、書けなければ
+`FIGURE_SAVE_FAILED`。この符号はファイルに書く段だけで、図を組み立てる間の入力の読み取りの失敗には使わない）。`species_pca` はさらに結果を
 `ds.results` へ登録する（来歴の kind は `species_pca`。`loadings` の `result_id` には使え、分子種のローディングを描く。
 `pca` の `result_id` には使えない）。この結果は来歴に `metadata_revision` を持ち、試料の情報の更新・`dataset_exclude` で
 `is_current` が False になる（`STALE_ANALYSIS_RESULT`）。キュレーションの判断の更新では古くしない（旧 `dataset_plot(kind="species_pca")` と同じ）。
@@ -46,8 +51,11 @@ Plotly で描くクライアント（Use-LLLM）は起動 env に `LIPIDMIX_PLOT
 `STALE_ANALYSIS_RESULT`（`result_state.assert_current`）。無ければ直近（`ds.last_pca` /
 `ds.last_differential`）。`dataset_exclude` や前処理・群の変更で古くなった結果は
 `result_state.invalidate_results` が `last_*` と `ds.figures` の該当 kind を同時に捨てるので、
-古い図は最新として描かれず保存もされない。別の kind の引数が渡されたら `DATASET_BAD_REQUEST`
-（`_check_arguments`。どの kind の引数かを書く）。
+古い図は最新として描かれず保存もされない（捨てた kind には理由の印 `ds.discarded_figures` を残し、`save_figure` は
+`STALE_FIGURE` を返す。`dataset_plot` が同じ kind を描き直すと印は消える）。別の kind の引数が渡されても断らず、
+`_drop_unused_arguments` が外して注記を返し（どの kind の引数か）、説明の最後の `notes:` 行（payload は `notes` 欄、描けなかった
+誤りの封筒は `_with_notes` が `details.notes` に足す。引数の形の誤り・ハンドルの誤り・`missing_state`・`FIGURE_SAVE_FAILED`・図の
+組み立ての誤りのどれも。kind が未知の誤りと、誤りでない `needs_input` は持たない）に書く。図はその引数を渡さない呼び出しと同じで、置き場の図（`ds.figures[kind]`）に注記は混ぜない。
 
 `group_intensity` / `species` / `species_pca` の項目・行は `plots/dataset_rows.py` が `DatasetState` から選ぶ:
 値は `feature_matrix`、gap-fill の印は `detected_mask`、群は試料の対応表（`sample_metadata_rows`）の
@@ -65,8 +73,8 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 試料（`included_sample_indices`）を外す。
 
 1. metabolomix/tools/plot_tools.py  dataset_plot()
-2. ├─ metabolomix/tools/_holder.py  resolve_holder()
-3. ├─ metabolomix/tools/plot_tools.py  _check_arguments()
+2. ├─ metabolomix/tools/plot_tools.py  _drop_unused_arguments()
+3. ├─ metabolomix/tools/_holder.py  resolve_holder()
 4. ├─ [kind=volcano] metabolomix/tools/plot_tools.py  _volcano()
 5. │  ├─ metabolomix/analysis/stats_results.py  split_result_ref()
 6. │  ├─ metabolomix/tools/plot_tools.py  _pick_result()
@@ -99,20 +107,30 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 33.│  ├─ metabolomix/eic/identity_map.py  select_identity_candidates()
 34.│  ├─ metabolomix/eic/reader.py  read_eic_spots_css1()
 35.│  └─ metabolomix/plots/eic.py  build_multi_compound_plot_payload()
-36.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
-37.└─ [output=image] metabolomix/tools/plot_tools.py  _png()
-38.   └─ metabolomix/plots/render.py  render_png()
+36.├─ [output_path 指定] metabolomix/tools/plot_tools.py  write_figure_files()
+37.├─ [output=payload] metabolomix/core/serialization.py  json_payload()
+38.├─ [output=image] metabolomix/tools/plot_tools.py  _png()
+39.│  └─ metabolomix/plots/render.py  render_png()
+40.│     └─ metabolomix/plots/render.py  image_dpi()
+41.├─ [DomainError] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+42.└─ [誤りの封筒で、使わなかった引数がある] metabolomix/tools/plot_tools.py  _with_notes()
 
 ## save_figure
 
 前提: `dataset_plot` で図を作ってある（`ds.figures[kind]`）か、`result_id` で登録済みの結果を名指しする
-（pca / volcano / loadings）。無ければ `missing_state`（`required_tools` は `dataset_plot`、データセットが
-無ければ `load_dataset`）。結果から作った図は、その結果が現在のものでなければ（`_stale_figure`）保存しない。
+（pca / volcano / loadings。volcano は `contrast_id` でも対比を選んで描き直せる）。一度も描いていなければ `missing_state`
+（`required_tools` は `dataset_plot`、データセットが無ければ `load_dataset`）。置き場の図が古ければ（`_stale_figure`）
+保存せず `STALE_FIGURE`（`details.required_tools` は `dataset_plot`）。除外・試料の表の更新で
+`result_state.invalidate_results` が捨てた図も、捨てた kind に残る印（`ds.discarded_figures`。`dataset_plot` が同じ kind を
+描き直すと消える）から `STALE_FIGURE`（`details.reason` に実際に変わったもの。因子の列だけの更新は `invalidate_results` の
+`reason` に広げる前の列を渡すので、群を挙げない。文言は `_discarded_message`）。
 状態変更: `reports/figures/` に PNG（`loadings` `group_intensity` `species` `species_pca` は SVG も）を書く。
 
-`kind` は `dataset_plot` の kind（`FIGURE_KINDS`）。`source` 引数と ARF の候補は無い。未知の `kind` と、
-`result_id` を使わない `kind`（`group_intensity` `species` `species_pca` `eic` 系）への指定は
-`{"status": "error"}`。`pca` / `volcano` は
+`kind` は `dataset_plot` の kind（`FIGURE_KINDS`）。`source` 引数と ARF の候補は無い。未知の `kind` は
+`{"status": "error"}`。`result_id` を使わない `kind`（`group_intensity` `species` `eic` 系）への `result_id` と
+volcano 以外への `contrast_id` は断らずに使わず、置き場の図を保存して戻り値の `notes:` 行に書く（`_save_record`）。
+`species_pca` の `result_id` は描き直しに使わず（項目の指定から作る結果）、置き場の図（先に `_stale_figure` で今のものと確かめる）の結果と照らす: 同じなら保存し、同じ計算（データセット・入力の行列の指紋・指定・試料の情報の版が同じ。`_same_species_pca`）の別の結果なら置き場の図を保存して `notes:` 行に書き、分子種の PCA の結果でなければ `DATASET_BAD_REQUEST`（このハンドルの結果に無い ID は、開いているほかのハンドルの分子種の PCA の結果なら `details.result_handle` にそのハンドル、別の種類の結果なら分子種の PCA の結果ではないと言ってそのハンドルを文で名指す。呼び直しは案内しない）、ほかは保存せず `STALE_FIGURE`（`details.held_result_id` と、違いの種類 `details.mismatch`。`_other_species_pca`）。`mismatch` は先に決める: 名指しした結果が `is_current` でなければ `stale`、今の結果で指定が置き場の図と同じなら `input`（キュレーションの判断の更新などで入力の行列が違う）、指定が違えば `settings`。`stale` と `input` はその結果の図をもう描けないので置き場の図の結果（か省くこと）を案内し、同じ指定の描き直しは案内しない（描き直しても新しい結果になり、名指しした結果には戻らない）。名指しした結果の指定が置き場の図と違うときだけ `details.settings`（その指定。`dataset_plot` にそのまま渡せる）と `details.required_tools=["dataset_plot"]` を付ける。`contrast_id` と `result_id#contrast_id` が食い違えば `DATASET_BAD_REQUEST`
+（`split_result_ref`）、2 群の対比が複数で選ばなければ `needs_input`（`contrast_envelope`）。`pca` / `volcano` は
 `save_result_figure()`（探索専用データセットから描いた図には図の中に但し書きが入る）、`loadings` と
 `group_intensity` `species` `species_pca` は dpi 300 の PNG と SVG、`eic` 系は dpi 120 の PNG。
 `group_intensity` `species` `species_pca` は群を焼き込んだ図なので `metadata_revision` が変わると拒み、
@@ -121,13 +139,18 @@ EIC は特徴 ID（= `.arf2` の MasterAlignmentID）をそのまま `.EIC.aef` 
 
 1. metabolomix/tools/reports.py  save_figure()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
-3. ├─ [result_id 指定] metabolomix/tools/plot_tools.py  build_figure()
-4. ├─ [result_id 省略] metabolomix/tools/reports.py  _stale_figure()
-5. └─ metabolomix/tools/reports.py  _save_record()
-6.    ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
-7.    │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
-8.    ├─ [kind=loadings] metabolomix/tools/reports.py  _write_png_and_svg()
-9.    │  └─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
-10.   ├─ [kind=group_intensity / species / species_pca] metabolomix/tools/reports.py  _write_png_and_svg()
-11.   │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-12.   └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()
+3. ├─ [result_id（pca / volcano / loadings）/ contrast_id 指定] metabolomix/tools/plot_tools.py  build_figure()
+4. ├─ [どちらも省略・置き場に無く、捨てた印がある] metabolomix/tools/reports.py  _discarded_message()
+5. ├─ [どちらも省略] metabolomix/tools/reports.py  _stale_figure()
+6. ├─ [kind=species_pca で result_id が置き場の図の結果と違う] metabolomix/tools/reports.py  _other_species_pca()
+7. │  ├─ metabolomix/tools/reports.py  _same_species_pca()
+8. │  └─ metabolomix/analysis/result_state.py  is_current()
+9. ├─ [DomainError] metabolomix/tools/_contrast_choice.py  contrast_envelope()
+10.└─ metabolomix/tools/reports.py  _save_record()
+11.   └─ metabolomix/tools/plot_tools.py  write_figure_files()
+12.      ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
+13.      │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
+14.      ├─ [kind=loadings / group_intensity / species / species_pca] metabolomix/plots/render.py  render_files()
+15.      │  ├─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
+16.      │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+17.      └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()

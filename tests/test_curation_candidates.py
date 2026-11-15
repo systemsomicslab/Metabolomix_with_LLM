@@ -131,3 +131,13 @@ def test_dmz_out_is_hard():
         ion_mode="Negative", measured=[[1.0, 1.0]], scores={"matched_peaks_count": 1}, trend_entry=None,
         th=TH)
     assert "dmz_out" in reasons["hard"]
+
+
+@pytest.mark.parametrize("adduct", ["[M+HCOO]-", "[M+FA-H]-", "[M+CHO2]-"])
+def test_formate_spellings_are_typical_for_pc(adduct):
+    """クラスの典型のアダクトとは組成で比べる（最終検証 F28）: PC の [M+FA-H]-・[M+CHO2]- は [M+HCOO]- と同じ。"""
+    reasons = candidates.constraint_reasons(
+        {"adduct": adduct, "ontology": "PC", "precursor_mz": 804.5760}, rep_mz=804.5762,
+        ion_mode="Negative", measured=[[1.0, 1.0]], scores={"matched_peaks_count": 1}, trend_entry=None,
+        th=TH)
+    assert "adduct_atypical" not in reasons["soft"] and reasons["hard"] == []

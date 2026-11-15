@@ -108,11 +108,13 @@ def test_unknown_feature_is_an_error(tmp_path):
     assert "999" in json.dumps(out["error"]["details"])
 
 
-def test_more_than_200_features_is_an_error(tmp_path):
-    _open_folder(tmp_path)
-    out = json.loads(R.dataset_sample_peaks([str(i) for i in range(201)]))
-    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert "200" in out["error"]["message"]
+def test_more_than_200_features_is_not_refused(tmp_path):
+    # 特徴の数の上限は無い（行が多ければ戻り値を切るだけ。output_path なら全量を書く）
+    ds = _open_folder(tmp_path)
+    _widen(ds, 250, 2)
+    out = json.loads(R.dataset_sample_peaks([str(i) for i in range(250)]))
+    assert "error" not in out and out["n_features"] == 250 and out["n_rows"] == 500
+    assert out["truncated"] is False and len(_parse_tsv(out["rows"])) == 500
 
 
 def test_exactly_200_features_succeeds(tmp_path):
@@ -151,25 +153,25 @@ def test_exactly_1000_rows_is_returned_inline(tmp_path):
     assert len(_parse_tsv(out["rows"])) == 1000
 
 
-def test_over_1000_rows_without_output_path_is_an_error_with_numbers(tmp_path):
+def test_over_1000_rows_without_output_path_is_truncated_by_whole_features(tmp_path):
     ds = _open_folder(tmp_path)
     _widen(ds, 200, 6)   # 200 x 6 = 1200 行
     out = json.loads(R.dataset_sample_peaks([str(i) for i in range(200)]))
-    assert out["error"]["code"] == "DATASET_BAD_REQUEST"
-    details = out["error"]["details"]
-    assert details["n_samples"] == 6 and details["max_rows"] == 1000
-    assert details["max_features_per_call"] == 166   # floor(1000 / 6)
-    assert details["n_rows"] == 1200
-    assert "166" in out["error"]["message"] and "1000" in out["error"]["message"]
-    assert "output_path" in out["error"]["message"]
+    assert "error" not in out and out["truncated"] is True
+    assert (out["n_rows"], out["n_features"], out["n_samples"]) == (1200, 200, 6)
+    assert out["n_features_shown"] == 166 and out["n_rows_shown"] == 996   # floor(1000 / 6) 特徴
+    rows = _parse_tsv(out["rows"])
+    assert len(rows) == 996 and rows[-1]["feature_id"] == "165"
+    assert "output_path" in out["notes"][0]
 
 
-def test_1001_rows_is_an_error_and_per_call_features_is_at_least_1(tmp_path):
+def test_more_samples_than_the_limit_shows_the_first_1000_rows_of_one_feature(tmp_path):
     ds = _open_folder(tmp_path)
-    _widen(ds, 1, 1001)
-    err = json.loads(R.dataset_sample_peaks(["0"]))
-    assert err["error"]["code"] == "DATASET_BAD_REQUEST"
-    assert err["error"]["details"]["max_features_per_call"] == 1
+    _widen(ds, 2, 1001)
+    out = json.loads(R.dataset_sample_peaks(["0", "1"]))
+    assert out["truncated"] is True and out["n_rows"] == 2002
+    assert out["n_features_shown"] == 1 and out["n_rows_shown"] == 1000
+    assert len(_parse_tsv(out["rows"])) == 1000
 
 
 def test_over_limit_with_output_path_writes_full_tsv(tmp_path):
@@ -208,6 +210,19 @@ def test_mztab_dataset_reports_per_sample_rt_unavailable(tmp_path):
     out = json.loads(R.dataset_sample_peaks(["0"]))
     assert out["error"]["code"] == "DATASET_BAD_REQUEST"
     assert "per_sample_rt" in out["error"]["message"]
+
+
+def test_mztab_next_to_its_arf_has_per_sample_rt(tmp_path):
+    """mzTab-M でも、隣の `.arf` と同じアラインメントだと照合できれば試料ごとの RT を持つ（棚卸し B6-G09）。"""
+    write_msdial_folder(tmp_path, **_spec())
+    write_matching_mztab(tmp_path / "x.mzTab", _spec())
+    ds = open_dataset(mztab_path=str(tmp_path / "x.mzTab")).dataset
+    assert ds.detected_mask is not None
+    assert ds.per_sample_rt.shape == ds.feature_matrix.shape
+    session_state.session.dataset = ds
+    rows = _rows(R.dataset_sample_peaks(["1"]))
+    assert [(r["sample"], r["rt"]) for r in rows] == [
+        ("s0", pytest.approx(3.30)), ("s1", pytest.approx(3.31)), ("s2", pytest.approx(3.35))]
 
 
 def test_no_dataset_is_a_missing_state_envelope():

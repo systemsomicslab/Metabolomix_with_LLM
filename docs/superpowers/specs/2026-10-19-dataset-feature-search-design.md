@@ -143,6 +143,8 @@ InChIKey を必須にするのは、名前や分子式だけでは同定の一�
 - 陽: 第 1 層 `[M+H]+` `[M]+` ／ 第 2 層 `[M+Na]+` `[M+NH4]+` `[M+H-H2O]+` `[M+H-NH3]+` `[2M+H]+` `[M+2H]2+`
 - 陰: 第 1 層 `[M-H]-` ／ 第 2 層 `[M-H2O-H]-` `[M+Cl]-` `[M+FA-H]-` `[2M-H]-` `[M+Na-2H]-`
 
+（2026-11-14 追記: 陽の第 2 層に `[M+CH3OH+H]+` と `[M+H-2H2O]+` を足した。陰の第 2 層には後に `[M+CH3COO]-` が入っている。今の既定の正準はコードの `feature_search.DEFAULT_ADDUCT_TIERS` で、この表は設計時の記録）
+
 極性が決まらないときに `adduct_tiers` も `expected_mz`+`adduct` も無ければ、その目標はエラー（`POLARITY_UNKNOWN`）。
 
 ### 4.2 戻り値（`json_payload`）

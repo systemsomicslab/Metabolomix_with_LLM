@@ -1,7 +1,7 @@
 """dataset_plot（volcano・pca・loadings・eic・eic_compounds）と図の置き場（B-2b Task 6）。
 
 純粋な組み立て（`plots/*`）は各々のテストが固定している。ここでは `DatasetState` を入力に、
-ツール層の仕事——結果の選び方（古い結果は描かない）・引数の取り違えの拒否・`.EIC.aef` の出所・
+ツール層の仕事——結果の選び方（古い結果は描かない）・別の kind の引数の扱い（断らずに notes）・`.EIC.aef` の出所・
 形式名・`save_figure` が `ds.figures` から描くこと——を見る。fixture はテスト自身が作る。
 """
 import json
@@ -221,20 +221,76 @@ def test_payload_format_names_are_kept(tmp_path):
                     dataset_handle=handle_id)["plot_schema"] == "lipidmix.species_pca.v1"
 
 
-def test_irrelevant_argument_rejected():
-    _analysed()
-    err = json.loads(plot_tools.dataset_plot(kind="volcano", top_n=5))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST"
-    assert "top_n" in err["message"] and "loadings" in err["message"]
-    err = json.loads(plot_tools.dataset_plot(kind="pca", feature_id="1"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "eic" in err["message"]
-    err = json.loads(plot_tools.dataset_plot(kind="loadings", color_by="batch"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "pca" in err["message"]
+def test_irrelevant_argument_is_ignored_with_a_note():
+    """別の kind の引数は断らずに使わず、図を描いて説明の `notes:` 行（payload は `notes`）にどの kind の引数かを
+    書く（save_figure と同じ扱い。レビュー V4）。図はその引数を渡さない呼び出しと同じもの。未知の kind は誤り。"""
+    ds = _analysed()
+    body = plot_tools.dataset_plot(kind="volcano", top_n=5)
+    assert isinstance(body, list) and isinstance(body[1], Image)
+    assert "\nnotes: top_n は kind=loadings の引数なので使っていない（kind='volcano'）。" in body[0]
+    caption = plot_tools.dataset_plot(kind="pca", feature_id="1")[0]
+    assert "notes: feature_id は kind=eic の引数" in caption
+    caption = plot_tools.dataset_plot(kind="loadings", color_by="batch")[0]
+    assert "notes: color_by は kind=pca の引数" in caption
+    # payload は notes 欄（形式名は変えない）。図は引数を渡さない呼び出しと同じ
+    plain = _payload(kind="pca")
+    noted = _payload(kind="pca", top_n=5, contrast_id="treat_vs_ctrl")
+    assert noted.pop("notes") == ["contrast_id は kind=volcano の引数なので使っていない（kind='pca'）。",
+                                  "top_n は kind=loadings の引数なので使っていない（kind='pca'）。"]
+    assert noted == plain and noted["plot_schema"] == "lipidmix.pca_scores.v1"
+    assert "notes" not in plain
+    assert ds.figures["pca"]["payload"] == plain       # 置き場の図にも notes を混ぜない
+    # 描けない呼び出しの誤りにも、使わなかった引数を添える（ここは .EIC.aef が無い）
     err = json.loads(plot_tools.dataset_plot(kind="eic", result_id="res_x", feature_id="0"))["error"]
-    assert err["code"] == "DATASET_BAD_REQUEST" and "result_id" in err["message"]
+    assert err["code"] == "COMPANION_ARTIFACT_MISSING"
+    assert err["details"]["notes"] == [
+        "result_id は kind=volcano / pca / loadings の引数なので使っていない（kind='eic'）。"]
     err = json.loads(plot_tools.dataset_plot(kind="heatmap"))["error"]
     assert err["code"] == "DATASET_BAD_REQUEST"
     assert all(kind in err["message"] for kind in plot_tools._KINDS)
+
+
+def test_every_error_envelope_carries_the_unused_argument_notes(tmp_path, monkeypatch):
+    """kind が分かれば、描けなかったどの誤りの封筒（引数の形の誤り・ハンドルの誤り・データセットや結果の無い
+    `missing_state`・書けない `FIGURE_SAVE_FAILED`・図の組み立ての誤り）も `details.notes` に使わなかった引数を書く
+    （直して呼び直す前に、その引数が効かないと分かる）。ほかの欄は注記の無い呼び出しと同じ。"""
+    top_n = ["top_n は kind=loadings の引数なので使っていない（kind='pca'）。"]
+    items = ["items は kind=group_intensity / species / species_pca の引数なので使っていない（kind='eic'）。"]
+
+    def error(**kwargs):
+        body = json.loads(plot_tools.dataset_plot(**kwargs))
+        assert "error" in body, body
+        return body["error"]
+
+    # データセットが無い（missing_state も details.notes を持つ。state / required_tools はそのまま）
+    err = error(kind="pca", top_n=5)
+    assert err["code"] == "missing_state" and err["required_tools"] == ["load_dataset"]
+    assert err["details"] == {"notes": top_n}
+    plain = error(kind="pca")
+    assert "details" not in plain and {k: v for k, v in err.items() if k != "details"} == plain
+
+    _synthetic()                                     # 結果の無いデータセット
+    err = error(kind="volcano", top_n=5)
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_compare"]
+    assert err["details"]["notes"] == ["top_n は kind=loadings の引数なので使っていない（kind='volcano'）。"]
+    for kwargs, field in (({"output": "svg"}, "output"), ({"output_path": "x.svg"}, "output_path")):
+        err = error(kind="pca", top_n=5, **kwargs)
+        assert err["code"] == "DATASET_BAD_REQUEST"
+        assert err["details"] == {field: kwargs[field], "notes": top_n}
+    err = error(kind="eic", feature_id="0", items=["PC"], output_path=str(tmp_path / "fig.svg"))
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["notes"] == items
+    err = error(kind="pca", top_n=5, dataset_handle="dh_nope")
+    assert err["code"] == "DATASET_HANDLE_NOT_FOUND"
+    assert err["details"]["notes"] == top_n and err["details"]["dataset_handle"] == "dh_nope"
+
+    _analysed()
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")         # 親のフォルダがファイルなので書けない
+    err = error(kind="pca", top_n=5, output_path=str(blocker / "sub" / "fig.png"))
+    assert err["code"] == "FIGURE_SAVE_FAILED" and err["details"]["notes"] == top_n
+    # 図の組み立ての誤り（DomainError・ValueError）は今までどおり
+    err = error(kind="pca", top_n=5, result_id="res_nope")
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["notes"] == top_n
 
 
 def test_plot_output_env_is_honoured(monkeypatch):
@@ -278,9 +334,10 @@ def test_stale_result_not_drawn_as_current():
                        ("volcano", "dataset_compare")):
         err = json.loads(plot_tools.dataset_plot(kind=kind))["error"]
         assert err["code"] == "missing_state" and tool in err["required_tools"], kind
-    # 古い図は save_figure からも保存できない
+    # 古い図は save_figure からも保存できない。除外が捨てた図は「描いていない」ではなく STALE_FIGURE（理由つき）
     err = json.loads(reports.save_figure("pca", "stale-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
+    assert err["details"]["reason"] == ["exclusion"] and "dataset_exclude" in err["message"]
 
 
 def test_metadata_change_drops_group_dependent_figure_only():
@@ -323,12 +380,83 @@ def test_group_change_makes_the_pca_figure_refuse_to_save(tmp_path):
     assert json.loads(dataset_set_sample_metadata(str(manifest)))["status"] == "success"
 
     err = json.loads(reports.save_figure("pca", "meta-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    # 試料の表の更新が図ごと捨てた図も、描いたことの無い図（missing_state）と見分けて STALE_FIGURE
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
+    assert "group" in err["details"]["reason"] and "試料の表の更新" in err["message"]
     assert not (tmp_path / "reports" / "figures" / "meta-1_pca.png").exists()
     dataset_pca(n_components=3)
     payload = _payload(kind="pca")                    # 解析と図をやり直せば新しい群で保存できる
     assert {p["group"] for p in payload["points"]} == {"NEW"}
     assert "meta-1_pca.png" in reports.save_figure("pca", "meta-1")
+
+
+def test_figures_discarded_by_exclusion_are_stale_not_missing(tmp_path):
+    """`dataset_exclude` が捨てた図（pca / loadings / volcano）は、save_figure で STALE_FIGURE と理由を返す
+    （描いたことの無い図の missing_state と見分ける）。描き直せば印は消え、保存できる。"""
+    ds = _analysed()
+    for kind, args in (("pca", {}), ("loadings", {"top_n": 3}), ("volcano", {})):
+        plot_tools.dataset_plot(kind=kind, **args)
+    assert json.loads(sample_tools.dataset_exclude(features=["f0"], reason="noise"))["changed"] is True
+    assert not ({"pca", "loadings", "volcano"} & set(ds.figures))
+    figures = tmp_path / "reports" / "figures"
+    for kind in ("pca", "loadings", "volcano"):
+        err = json.loads(reports.save_figure(kind, "ex-1"))["error"]
+        assert err["code"] == "STALE_FIGURE", kind
+        assert err["details"] == {"kind": kind, "reason": ["exclusion"], "required_tools": ["dataset_plot"]}
+        assert "除外" in err["message"] and f'dataset_plot(kind="{kind}")' in err["message"]
+        assert not (figures / f"ex-1_{kind}.png").exists()
+    # 描いたことの無い図は今までどおり missing_state
+    err = json.loads(reports.save_figure("group_intensity", "ex-1"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_plot"]
+
+    # 解析と図をやり直せば印は消え、保存できる（ほかの捨てた図の印は残る）
+    from metabolomix.tools.stats_tools import dataset_compare, dataset_preprocess
+
+    prepared = json.loads(dataset_preprocess())
+    dataset_pca(n_components=3, matrix_id=prepared["matrix_id"])
+    plot_tools.dataset_plot(kind="pca")
+    assert "pca" not in ds.discarded_figures and "volcano" in ds.discarded_figures
+    assert "ex-1_pca.png" in reports.save_figure("pca", "ex-1")
+    err = json.loads(reports.save_figure("volcano", "ex-1"))["error"]
+    assert err["code"] == "STALE_FIGURE"
+    dataset_compare(reference_group="ctrl", test_group="treat", matrix_id=prepared["matrix_id"],
+                    allow_confounded=True)
+    plot_tools.dataset_plot(kind="volcano")
+    assert "ex-1_volcano.png" in reports.save_figure("volcano", "ex-1")
+    assert ds.discarded_figures == {"loadings": ["exclusion"]}
+
+
+def test_only_held_figures_get_the_discard_mark():
+    """置かれていなかった kind には印を残さない（捨てたのではなく、描いていない）。群だけの変更は volcano だけ。"""
+    from metabolomix.analysis.result_state import invalidate_results
+
+    ds = _analysed()
+    _payload(kind="pca")
+    _payload(kind="volcano")
+    invalidate_results(ds, {"group"})
+    assert ds.discarded_figures == {"volcano": ["group"]} and "pca" in ds.figures
+    invalidate_results(ds, {"role", "batch"})
+    assert ds.discarded_figures == {"volcano": ["group"], "pca": ["batch", "role"]}
+    err = json.loads(reports.save_figure("pca", "m-1"))["error"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["reason"] == ["batch", "role"]
+    assert "batch, role" in err["message"]
+
+
+def test_factor_only_change_names_only_the_changed_column():
+    """足した因子の列だけが変わった試料の表の更新は、群と同じく差次的解析を古くする（volcano を捨てる）が、
+    捨てた理由に挙げるのは実際に変わった列だけ（群・biological_sample_id は変わっていない。レビュー V2）。"""
+    ds = _analysed()
+    _payload(kind="pca")
+    _payload(kind="volcano")
+    rows = [dict(row, dose="hi" if i % 2 else "lo") for i, row in enumerate(ds.sample_metadata_rows)]
+    out = sample_manifest.apply_metadata(ds, rows)
+    assert out["changed_fields"] == ["dose"]
+    assert "volcano" not in ds.figures and "pca" in ds.figures     # 捨てる範囲は群の変更と同じ
+    assert ds.discarded_figures == {"volcano": ["dose"]}
+    err = json.loads(reports.save_figure("volcano", "f-1"))["error"]
+    assert err["code"] == "STALE_FIGURE"
+    assert err["details"] == {"kind": "volcano", "reason": ["dose"], "required_tools": ["dataset_plot"]}
+    assert "変わった列: dose）" in err["message"] and "group" not in err["message"]
 
 
 def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_path):
@@ -343,12 +471,12 @@ def test_pca_figure_with_baked_metadata_is_stale_when_the_revision_moves(tmp_pat
     ds.metadata_revision += 1                         # 情報の更新（apply_metadata が進める版）
     assert not is_current(ds, ds.last_pca) and "pca" in ds.figures   # 統計エンジンの PCA は版が動けば古い
     err = json.loads(reports.save_figure("pca", "rev-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
-    assert "作り直" in err["message"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
+    assert "作り直" in err["message"] and err["details"]["kind"] == "pca"
     assert not (tmp_path / "reports" / "figures" / "rev-1_pca.png").exists()
     # 試料の情報を焼き込まない図（loadings）も、元の結果が古ければ保存できない（統計エンジンの PCA は版に縛られる）
     err = json.loads(reports.save_figure("loadings", "rev-1"))["error"]
-    assert err["code"] == "missing_state" and "dataset_plot" in err["required_tools"]
+    assert err["code"] == "STALE_FIGURE" and err["details"]["required_tools"] == ["dataset_plot"]
     assert not (tmp_path / "reports" / "figures" / "rev-1_loadings.png").exists()
 
 
@@ -421,12 +549,38 @@ def test_save_figure_rejects_old_arguments_and_kinds():
     import inspect
 
     params = inspect.signature(reports.save_figure).parameters
-    assert list(params) == ["kind", "analysis_id", "title", "result_id", "dataset_handle"]
+    assert list(params) == ["kind", "analysis_id", "title", "result_id", "dataset_handle", "contrast_id"]
     out = json.loads(reports.save_figure("heatmap", "x"))
     assert out["status"] == "error" and "pca" in out["message"]
     assert "pca_loadings" not in out["message"]
-    err = json.loads(reports.save_figure("eic", "x", result_id="r1"))
-    assert err["status"] == "error" and "result_id" in err["message"]
+    # 使わない引数は断らない（データセットが無いので、図の前提の missing_state まで進む）
+    err = json.loads(reports.save_figure("eic", "x", result_id="r1"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["load_dataset"]
+    err = json.loads(reports.save_figure("pca", "x", contrast_id="T_vs_C"))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["load_dataset"]
+    # 説明文に「明示的なユーザー要求時だけ」の縛りは無い（報告書に埋め込む図を保存する）
+    assert "明示的" not in reports.save_figure.__doc__
+
+
+def test_save_figure_ignores_arguments_its_kind_does_not_use(tmp_path):
+    """kind が使わない `result_id` / `contrast_id` は断らずに使わず、図を保存して `notes:` 行に書く。"""
+    ds, pca_id, diff_id = _analysed_engine()
+    figures = tmp_path / "reports" / "figures"
+    plot_tools.dataset_plot(kind="pca")
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    msg = reports.save_figure("loadings", "n-1", contrast_id="treat_vs_ctrl")
+    assert (figures / "n-1_loadings.png").is_file() and (figures / "n-1_loadings.svg").is_file()
+    assert "notes:" in msg and "contrast_id='treat_vs_ctrl'" in msg and "volcano" in msg
+    # result_id は pca に効く（名指しの結果から描く）。contrast_id だけを使わない
+    msg = reports.save_figure("pca", "n-2", result_id=pca_id, contrast_id="treat_vs_ctrl")
+    assert (figures / "n-2_pca.png").is_file() and pca_id in msg and "contrast_id" in msg
+    # 効く引数だけなら notes は付かない
+    assert "notes:" not in reports.save_figure("pca", "n-4", result_id=pca_id)
+    # result_id を使わない kind（eic 系・group_intensity・species 系）では置き場の図を保存する
+    handle = _folder_handle(tmp_path / "f")
+    plot_tools.dataset_plot(kind="eic", feature_id="0", dataset_handle=handle.handle_id)
+    msg = reports.save_figure("eic", "n-3", result_id=diff_id, dataset_handle=handle.handle_id)
+    assert "n-3_eic.png" in msg and "notes:" in msg and f"result_id='{diff_id}'" in msg
 
 
 def test_save_figure_reads_the_chosen_handle(tmp_path):
@@ -439,6 +593,42 @@ def test_save_figure_reads_the_chosen_handle(tmp_path):
     assert "x_eic.png" in msg
     missing = json.loads(reports.save_figure("eic", "x", dataset_handle="dh_nope"))
     assert missing["error"]["code"] == "DATASET_HANDLE_NOT_FOUND"
+
+
+def test_derived_handle_has_no_figures_or_discard_marks_of_its_parent(tmp_path):
+    """定量の派生（`dataset_quant_apply` などの `derive`）は親の図も捨てた図の印も持ち越さない。
+
+    親の図は親の行列から描いたもの（正規化の前の値）で、派生の図ではない。派生でまだ描いていない図は、親が
+    持つ図（保存すれば親の値が派生の図として出る）でも、親の除外が捨てた図（STALE_FIGURE・理由 exclusion）でもなく
+    missing_state。親の図と印はそのまま。"""
+    from metabolomix.quant import tools as quant_tools
+
+    parent = _folder_handle(tmp_path / "f")
+    pid = parent.handle_id
+    _payload(kind="species_pca", items=["PC"], groups=["g1", "g2"], dataset_handle=pid)
+    assert json.loads(sample_tools.dataset_exclude(features=["2"], reason="noise",
+                                                   dataset_handle=pid))["changed"] is True
+    assert parent.dataset.discarded_figures == {"species_pca": ["exclusion"]}
+    _payload(kind="group_intensity", items=["PC"], groups=["g1", "g2"], dataset_handle=pid)
+    assert "group_intensity" in parent.dataset.figures
+
+    out = json.loads(quant_tools.dataset_quant_apply(skip=True, dataset_handle=pid))
+    assert out["status"] == "skipped", out
+    did = out["dataset_handle"]
+    derived = handles.registry.get(did).dataset
+    assert derived.figures == {} and derived.discarded_figures == {}
+    figures = tmp_path / "reports" / "figures"
+    for kind in ("group_intensity", "species_pca"):
+        err = json.loads(reports.save_figure(kind, "d-1", dataset_handle=did))["error"]
+        assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_plot"], (kind, err)
+        assert not (figures / f"d-1_{kind}.png").exists()
+    # 親の図と印は変わらない
+    assert "group_intensity" in parent.dataset.figures
+    assert parent.dataset.discarded_figures == {"species_pca": ["exclusion"]}
+    assert "p-1_group_intensity.png" in reports.save_figure("group_intensity", "p-1", dataset_handle=pid)
+    # 派生で描けば派生の図として保存できる
+    _payload(kind="group_intensity", items=["PC"], groups=["g1", "g2"], dataset_handle=did)
+    assert "d-1_group_intensity.png" in reports.save_figure("group_intensity", "d-1", dataset_handle=did)
 
 
 # ---------- save_figure の振る舞い ----------
@@ -538,3 +728,78 @@ def test_feature_search_accepts_int_ids_through_fastmcp(tmp_path):
             "feature_ids": ids, "dataset_handle": handle.handle_id})
         by_type[label] = json.loads(_content_text(out))
     assert by_type["int"]["features"] == by_type["str"]["features"]
+
+# ---------- dataset_plot(output_path=...) ----------
+
+def test_output_path_writes_the_drawn_figure(tmp_path):
+    ds = _analysed()
+    out = tmp_path / "out" / "deep" / "scores.png"
+    body = plot_tools.dataset_plot(kind="pca", output_path=str(out))
+    assert isinstance(body, list) and str(out) in body[0]
+    assert out.is_file() and out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert ds.figures["pca"]["kind"] == "pca"
+    # loadings は報告書用と同じく dpi 300 の PNG と同名の SVG
+    load = tmp_path / "load.png"
+    payload = json.loads(plot_tools.dataset_plot(kind="loadings", top_n=3, output="payload",
+                                                 output_path=str(load)))
+    assert payload["saved_files"] == [str(load), str(load.with_suffix(".svg"))]
+    assert load.is_file() and load.with_suffix(".svg").is_file()
+    assert payload["plot_schema"] == "lipidmix.pca_loadings.v1"
+    # 同じパスは上書き
+    assert plot_tools.dataset_plot(kind="pca", output_path=str(out))
+
+
+def test_output_path_must_be_a_png_and_writable(tmp_path):
+    ds = _analysed()
+    err = json.loads(plot_tools.dataset_plot(kind="pca", output_path=str(tmp_path / "x.svg")))["error"]
+    assert err["code"] == "DATASET_BAD_REQUEST" and err["details"]["output_path"].endswith("x.svg")
+    plot_tools.dataset_plot(kind="pca")
+    before = ds.figures["pca"]
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")                  # 親のフォルダの位置にファイルがある
+    err = json.loads(plot_tools.dataset_plot(kind="pca", output_path=str(blocker / "x.png")))["error"]
+    assert err["code"] == "FIGURE_SAVE_FAILED"
+    assert ds.figures["pca"] is before                         # 書けなければ図の置き場は変えない
+    # output_path はどの kind の引数でもある（kind の引数の取り違えにしない）
+    assert plot_tools.dataset_plot(kind="volcano", output_path=str(tmp_path / "v.png"))
+    assert (tmp_path / "v.png").is_file()
+
+
+def test_input_read_errors_are_not_reported_as_save_failures(tmp_path, monkeypatch):
+    """図を組み立てる間の OSError（`.EIC.aef` が読めない等）は FIGURE_SAVE_FAILED にしない（書くときだけ）。"""
+    ds = _analysed()
+
+    def locked(_ds, _request):
+        raise PermissionError(13, "The process cannot access the file", "x.EIC.aef")
+
+    before = ds.figures.get("pca")
+    monkeypatch.setitem(plot_tools._KINDS, "pca", locked)
+    for kwargs in ({}, {"output_path": str(tmp_path / "never.png")}):
+        with pytest.raises(PermissionError):
+            plot_tools.dataset_plot(kind="pca", **kwargs)
+    assert not (tmp_path / "never.png").exists() and ds.figures.get("pca") is before
+
+
+def test_dataset_plot_png_is_capped_in_pixels(tmp_path):
+    import io
+
+    from PIL import Image as PILImage
+
+    from metabolomix.plots import render
+
+    _analysed()
+    body = plot_tools.dataset_plot(kind="pca")
+    with PILImage.open(io.BytesIO(body[1].data)) as image:
+        width, height = image.size
+    assert width * height <= render.MAX_IMAGE_PIXELS * 1.05
+
+
+def test_failed_loadings_call_keeps_the_previous_figure():
+    """失敗した呼び出しは図の置き場を変えない（前回の図が残り、save_figure はそれを保存する）。"""
+    ds = _analysed()
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    before = ds.figures["loadings"]
+    for kwargs in ({"pcs": [1, 9]}, {"value": "nope"}):
+        err = json.loads(plot_tools.dataset_plot(kind="loadings", **kwargs))["error"]
+        assert err["code"] == "DATASET_BAD_REQUEST", kwargs
+        assert ds.figures["loadings"] is before, kwargs

@@ -30,7 +30,7 @@ def load_summary_lines(ds, opened) -> list[str]:
                         or opened.path or "").name or "mzTab-M"
         lines = _summary_text(ds, filename).splitlines()
     lines.append(f"- 出所の裏取り: {ds.source_verification}"
-                 + ("（探索専用: 2 群比較と差次的エクスポートは拒否されます）"
+                 + ("（探索専用: 書き出し・図・概観の比較の段に探索専用の印が付きます）"
                     if ds.exploratory_only else ""))
     if ds.artifact_paths:
         lines.append("- 付随アーティファクト: "
@@ -54,20 +54,40 @@ def sample_group_role_counts(ds) -> dict:
     """試料の群（Class ID）ごと・役割ごとの件数。`load_dataset` の戻り値と `dataset_status` の要約が共有する。
 
     群と役割は試料の対応表（`_metadata_rows`）から数える。群の宣言が無い試料は `n_ungrouped`。
+    `groups` と `n_ungrouped` は統計に入る試料（`included_sample_indices` と同じ集合）だけを数え、外す
+    試料は外した理由ごとに分ける（どちらも群 → 件数。群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）:
+    実験情報シートの `include=false`（`pipeline_sample_sheet` の群 `unassigned` など。`include` の読み方は
+    統計エンジンの `_include` と同じ）は `excluded_by_sheet`、`dataset_exclude` で外した試料
+    （`ds.excluded_samples`）は `excluded_by_dataset_exclude`（シートでも外した試料はシートの側だけに数える）。
+    `groups` に並ぶ群名は dataset_compare にそのまま渡せる。`roles` は全試料を数える。
     """
     rows = _metadata_rows(ds)
+    names = list(ds.sample_names)
+    dropped = getattr(ds, "excluded_samples", None) or {}
     groups: dict[str, int] = {}
     roles: dict[str, int] = {}
+    by_sheet: dict[str, int] = {}
+    by_exclude: dict[str, int] = {}
     n_ungrouped = 0
-    for row in rows:
+    for index, row in enumerate(rows):
+        role = row.get("role") or "sample"
+        roles[role] = roles.get(role, 0) + 1
         group = row.get("group")
-        if group:
+        name = names[index] if index < len(names) else None
+        if not bool(row.get("include", True)):
+            by_sheet[group or "(群なし)"] = by_sheet.get(group or "(群なし)", 0) + 1
+        elif name is not None and name in dropped:
+            by_exclude[group or "(群なし)"] = by_exclude.get(group or "(群なし)", 0) + 1
+        elif group:
             groups[group] = groups.get(group, 0) + 1
         else:
             n_ungrouped += 1
-        role = row.get("role") or "sample"
-        roles[role] = roles.get(role, 0) + 1
-    return {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
+    out = {"groups": groups, "roles": roles, "n_ungrouped": n_ungrouped}
+    if by_sheet:
+        out["excluded_by_sheet"] = by_sheet
+    if by_exclude:
+        out["excluded_by_dataset_exclude"] = by_exclude
+    return out
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
@@ -79,15 +99,29 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
       - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入る。群（Class ID）ごとの件数 `groups` に
         dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
         役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
-        除外の件数 `excluded`（`dataset_exclude`）を含む。
-      - `"samples"`: 試料の TSV（name・group・role・batch・injection_order・subject_id・excluded。
-        `excluded` は除外の理由、除外していなければ空）。`query` で絞れる。
+        除外の件数 `excluded`（`dataset_exclude`）を含む。`groups` と `n_ungrouped` は統計に入る試料だけを
+        数え、外した試料は群 → 件数で分ける: 実験情報シートの include=false の試料（群 `unassigned` など）は
+        `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した
+        試料はシートの側だけ。どちらも 1 件も無ければ鍵ごと出さない）。
+      - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
+        injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
+        raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）
+        （シートの空欄を .mddata・mzTab-M で埋めた値もその出所で示す）。バッチが空で試料名に 8 桁があれば
+        batch_source は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は除外の理由、
+        除外していなければ空）。`query` で絞れる。
       - `"tags"`: タグごとの特徴 ID（各タグ先頭 50 件まで。`n_features` は全件数）。`query` に
         タグ名を渡すとそのタグだけ。
+      - `"results"`: このハンドルの統計の行列と結果の一覧（TSV 2 本）。`matrices` は
+        `matrix_id current drift filters normalize n_features n_units excluded_samples excluded_features
+        group_overrides`（`current` は今の除外・試料の表で作った行列か。古い行列 ID はツールが
+        missing_state で断る）、`results` は `result_id kind matrix_id contrasts origin current last`
+        （`contrasts` は compare の対比 ID、`origin` は overview なら最初の概観が回したもの、`last` は
+        図・書き出しの既定の直近の結果か）。掘るときは `result_id`（と `contrast_id`）を渡す。
     query: `view="samples"` では因子トークン。`_` 区切りで全トークンを含む試料に一致（順不同の AND）し、
         `,` で区切った複数の指定は OR。トークンは試料名・群（Class ID）から取る（日付や拡張子の
         処理タイムスタンプは除く）。QC・ブランクも落とさない（role 列で見分ける）。例 `"ILG_6h"`、
         `"ILG_6h,control_6h"`。1 件も一致しなければ使えるトークンの語彙を添えて拒む。
+        `view="summary"` / `"results"` では効かないので、使わずにその旨を `notes` に書く（断らない）。
 
     load_dataset を先に実行しておくこと。
     未実行の場合は missing_state エンベロープを返す。
@@ -111,14 +145,15 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
     if view not in VIEWS:
         return mztab_error("DATASET_BAD_REQUEST",
                            f"view は {list(VIEWS)} のどれかです: {view!r}", {"view": view})
-    if query is not None and view == "summary":
-        return mztab_error("DATASET_BAD_REQUEST",
-                           "query は view=samples（因子トークン）か view=tags（タグ名）で使います。",
-                           {"view": view})
+    # query は samples（因子トークン）と tags（タグ名）でだけ効く。ほかの view では使わずに notes に書く
+    notes = ([f"query は view=samples（因子トークン）か view=tags（タグ名）でだけ効きます。view={view} では"
+              "使わずに返しました。"] if query is not None and view in ("summary", "results") else [])
     if view == "samples":
         return _samples_view(ds, query)
     if view == "tags":
         return _tags_view(ds, query)
+    if view == "results":
+        return _results_view(ds, notes)
 
     from metabolomix.core import version
     update = version.update_status()
@@ -129,6 +164,8 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         # 最新なら鍵ごと出さない（戻り値は LLM の文脈をそのまま食う）。
         **({"update_available": update} if update else {}),
         "source_format": ds.source_format,
+        # 解釈規則の種別（ハンドルごと。`record_objective(assay_kind=...)` で確定）。
+        "assay_kind": getattr(holder, "assay_kind", None) or "unknown",
         "source_files": list(ds.source_files.keys()),
         "quantification_measure": ds.quantification_measure,
         "quantification_confidence": ds.quantification_confidence,
@@ -157,12 +194,14 @@ def dataset_status(dataset_handle: str | None = None, view: str = "summary",
         payload["job_path"] = ds.job_path
     if ds.artifact_paths:
         payload["artifact_roles"] = {role: len(paths) for role, paths in ds.artifact_paths.items()}
+    if notes:
+        payload["notes"] = notes
     return json_payload(payload)
 
 
 # ---------- 内部ヘルパ ----------
 
-VIEWS = ("summary", "samples", "tags")
+VIEWS = ("summary", "samples", "tags", "results")
 
 #: `view="tags"` がタグごとに返す特徴 ID の上限。
 _TAG_FEATURE_CAP = 50
@@ -205,6 +244,18 @@ def _excluded_cell(ds, name: str, row: dict) -> str:
     return "include=false（実験情報シート）" if not row.get("include", True) else ""
 
 
+def _source_cell(row: dict, field: str) -> str:
+    """値の出所（sheet / mddata / mzTab / raw_acquisition_time / filename）。値が無いバッチは試料名の 8 桁の候補
+    （`candidate:<値>`）。"""
+    from metabolomix.analysis import sample_manifest
+
+    prov = (row.get("provenance") or {}).get(field) or {}
+    if row.get(field) is None:
+        candidate = prov.get("candidate") or {}
+        return _tsv_cell(f"candidate:{candidate['value']}") if candidate.get("value") else ""
+    return _tsv_cell(sample_manifest.order_provenance_label(prov))
+
+
 def _samples_view(ds, query: str | None) -> str:
     """試料の TSV。`query` は因子トークン（`msdial/sample_factors.py` の文法。旧 ARF 経路の試料検索と同じ）。"""
     from metabolomix.analysis import sample_manifest
@@ -233,14 +284,16 @@ def _samples_view(ds, query: str | None) -> str:
 
     # 足した因子の列（sample_manifest の因子の列。名前の順）を後ろに並べる。無ければ列を足さない。
     factor_columns = sorted(sample_manifest._factor_columns_of(rows))
-    lines = ["\t".join(["name", "group", "role", "batch", "injection_order", "subject_id",
-                       "excluded", *map(_tsv_cell, factor_columns)])]
+    lines = ["\t".join(["name", "group", "role", "batch", "batch_source", "injection_order",
+                       "injection_order_source", "subject_id", "excluded",
+                       *map(_tsv_cell, factor_columns)])]
     for name in selected:
         row = by_name[name]
         subject = (ds.sample_meta.get(name) or {}).get("subject_id", row.get("subject_id"))
         lines.append("\t".join([
             _tsv_cell(name), _tsv_cell(row.get("group")), _tsv_cell(row.get("role")),
-            _tsv_cell(row.get("batch")), _tsv_cell(row.get("injection_order")),
+            _tsv_cell(row.get("batch")), _source_cell(row, "batch"),
+            _tsv_cell(row.get("injection_order")), _source_cell(row, "injection_order"),
             _tsv_cell(subject), _excluded_cell(ds, name, row),
             *(_tsv_cell(row.get(column)) for column in factor_columns)]))
     return json_payload({"view": "samples", "query": query, "n_total": len(names),
@@ -277,16 +330,85 @@ def _detection_summary(ds) -> dict:
 def _samples_tsv(ds) -> str:
     """サンプル名と役割を TSV で返す（列名 1 回 + 1 行 1 サンプル）。
 
-    前処理済みなら ds.roles を、まだなら同じ判定関数（detect_sample_roles）を
-    その場で適用する。旧 ARF 経路の役割判定と同じ判定を使うので、
-    どちらの経路でも同じ試料が同じ役割になる。
+    役割は試料の表（`_metadata_rows`。`view="samples"`・`sample_counts`・統計エンジンと同じ正準）から
+    読む。試料の表で役割を直した（`dataset_set_sample_metadata`）なら、その役割がここにも出る。
     """
-    from metabolomix.analysis import preprocessing
     names = list(ds.sample_names)
-    roles = ds.roles or preprocessing.detect_sample_roles(names)
+    rows = _metadata_rows(ds)
     lines = ["name\trole"]
-    lines += [f"{n}\t{roles.get(n, 'sample')}" for n in names]
+    lines += [f"{_tsv_cell(n)}\t{_tsv_cell(row.get('role') or 'sample')}"
+              for n, row in zip(names, rows)]
     return "\n".join(lines)
+
+
+def _matrix_recipe(prepared) -> tuple[str, str, str]:
+    """行列の作り方の要約（ドリフト補正の状態・効いた足切り・正規化）。"""
+    steps = {step.get("step"): step for step in (getattr(prepared, "steps", None) or [])}
+    filters = (steps.get("filter") or {}).get("filters") or {}
+    applied = [name for name, value in filters.items()
+               if isinstance(value, dict) and value.get("status") == "applied"]
+    return ((steps.get("drift") or {}).get("status") or "",
+            "/".join(applied),
+            (steps.get("normalize") or {}).get("method") or "")
+
+
+def _results_view(ds, notes: list[str] | None = None) -> str:
+    """`view="results"`: ハンドルの統計の行列と結果の一覧（TSV 2 本）。"""
+    from metabolomix.analysis import stats_results
+    from metabolomix.analysis.result_state import dataset_fingerprint, is_current, is_stats_current
+    from metabolomix.arf2.reader import format_spots_as_table
+
+    fingerprint = dataset_fingerprint(ds)
+    revision = getattr(ds, "metadata_revision", 0)
+    matrix_rows = []
+    for matrix_id, entry in (getattr(ds, "stat_matrices", None) or {}).items():
+        prepared = entry.get("prepared")
+        drift, filters, normalize = _matrix_recipe(prepared)
+        exclusions = entry.get("exclusions") or {}
+        matrix_rows.append({
+            "matrix_id": matrix_id,
+            "current": (entry.get("dataset_hash") == fingerprint
+                        and entry.get("metadata_revision") == revision),
+            "drift": drift, "filters": filters, "normalize": normalize,
+            "n_features": len(getattr(prepared, "feature_ids", None) or []),
+            "n_units": len(getattr(prepared, "units", None) or []),
+            "excluded_samples": len(exclusions.get("samples") or []),
+            "excluded_features": len(exclusions.get("features") or []),
+            "group_overrides": len(entry.get("group_overrides") or {}),
+        })
+    last = {record.get("result_id")
+            for record in (getattr(ds, "last_differential", None), getattr(ds, "last_pca", None))
+            if isinstance(record, dict)}
+    result_rows = []
+    for result_id, record in (getattr(ds, "results", None) or {}).items():
+        if not isinstance(record, dict):
+            continue
+        prov = record.get("provenance") or {}
+        current = (is_stats_current(ds, record, dataset_hash=fingerprint)
+                   if prov.get("dataset_hash") is not None
+                   else is_current(ds, record, dataset_hash=fingerprint))
+        result_rows.append({
+            "result_id": result_id,
+            "kind": record.get("kind") or prov.get("kind"),
+            "matrix_id": record.get("matrix_id"),
+            "contrasts": ",".join(stats_results.contrast_ids(record)),
+            "origin": record.get("origin"),
+            "current": current,
+            "last": result_id in last,
+        })
+    matrix_columns = ["matrix_id", "current", "drift", "filters", "normalize", "n_features",
+                      "n_units", "excluded_samples", "excluded_features", "group_overrides"]
+    result_columns = ["result_id", "kind", "matrix_id", "contrasts", "origin", "current", "last"]
+    return json_payload({
+        "view": "results",
+        "n_matrices": len(matrix_rows),
+        "matrices": format_spots_as_table(matrix_rows, columns=matrix_columns) if matrix_rows else "",
+        "n_results": len(result_rows),
+        "results": format_spots_as_table(result_rows, columns=result_columns) if result_rows else "",
+        "note": ("current=false の行列・結果は除外・試料の表の更新・データの入れ替えの前に作ったもの"
+                 "（作り直す）。結果を掘るときは result_id（と contrast_id）を渡す。"),
+        **({"notes": list(notes)} if notes else {}),
+    })
 
 
 def _describe(entries) -> list[dict]:
@@ -349,6 +471,9 @@ def _summary_text(ds, filename: str) -> str:
     if ds.validation_result.get("warnings"):
         lines.append(f"- 警告 {len(ds.validation_result['warnings'])} 件: " +
                      "; ".join(ds.validation_result["warnings"][:3]))
+    # 読み込みの注記（pipeline の run の試料の対応表を結べず当てなかった旨など）。解析フォルダの要約と同じ行。
+    if ds.load_notes:
+        lines.append(f"- 読み込みの注記 {len(ds.load_notes)} 件: " + "; ".join(ds.load_notes[:3]))
     return "\n".join(lines)
 
 

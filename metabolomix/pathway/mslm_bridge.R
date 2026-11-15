@@ -28,9 +28,19 @@ fail <- function(code, message) {
   quit(status = 2, save = "no")
 }
 
-if (!requireNamespace("MSLipidMapper", quietly = TRUE)) {
+# 未導入（ライブラリに無い）と、入っているのに読み込めない（依存の DLL・壊れた導入・ほかの R が
+# ファイルを掴んでいる等）を分ける。requireNamespace は理由を飲み込むので、loadNamespace の本文を返す。
+if (!length(find.package("MSLipidMapper", quiet = TRUE))) {
   fail("MSLM_R_PACKAGES_MISSING",
        "R の仮想環境に MSLipidMapper がありません。リポジトリ直下で `Rscript r/setup.R` を実行してください。")
+}
+load_error <- tryCatch({
+  loadNamespace("MSLipidMapper")
+  NULL
+}, error = function(e) conditionMessage(e))
+if (!is.null(load_error)) {
+  fail("MSLM_R_PACKAGE_LOAD_FAILED",
+       paste0("R の仮想環境の MSLipidMapper は入っていますが、読み込めませんでした: ", load_error))
 }
 needed <- c("mztab_pathway_measurements", "render_pathway_from_config")
 missing_fns <- needed[!needed %in% getNamespaceExports("MSLipidMapper")]

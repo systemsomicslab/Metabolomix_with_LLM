@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import math
 import threading
 import time
 import uuid
@@ -70,6 +71,8 @@ class OpenedDataset:
         解析フォルダで読んだとき。基の指紋が今の `.arf` の候補を数えるのに使う）
     polarity: `pipeline_path` で開いた run の極性の単位（`polarity` を省いて 1 単位に決まったときも）。
         他の入口は None
+    run_root: `directory` で開いた解析フォルダが pipeline の run の中にあり、その run の試料の対応表と
+        ライブラリの記録を当てたときの run の根（基の指紋が run の記録と受領を数えるのに使う）
     """
 
     dataset: DatasetState
@@ -81,6 +84,7 @@ class OpenedDataset:
     reused_base: bool = False
     mztab_path: str | None = None
     polarity: str | None = None
+    run_root: str | None = None
 
 
 def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_path=None,
@@ -259,6 +263,11 @@ def _dependencies(base: OpenedDataset) -> set[str]:
         paths.update(_folder_listing(base.selection.arf.parent))
     if getattr(ds, "job_path", None):
         paths.update(_job_files(Path(ds.job_path)))
+    if base.run_root:
+        from metabolomix.pipeline.receipt import RECEIPT_RELATIVE_PATH
+
+        paths.add(str(Path(base.run_root) / "pipeline-run.json"))
+        paths.add(str(Path(base.run_root) / RECEIPT_RELATIVE_PATH))
     if base.kind == "pipeline_path":
         from metabolomix.pipeline.receipt import RECEIPT_RELATIVE_PATH
         from metabolomix.pipeline.recovery import normalize_pipeline_root
@@ -358,6 +367,12 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
 
         selection = select_alignment(Path(raw).expanduser())
         ds = load_msdial_folder(selection, measure=measure)
+        # mzTab-M と照合しないので、SME の理論 m/z は注釈の組成式と付加体から計算する。
+        _fill_formula_theoretical_mz(ds)
+        # pipeline の run の中の解析フォルダなら、run の試料の対応表（実験情報シートと受領）を当てる。
+        unit = _enclosing_run_unit(Path(selection.arf).parent)
+        if unit is not None:
+            notes.extend(_apply_run_rows(ds, unit))
     elif kind == "job_path":
         ds, selection, gate = _folder_via_job(Path(raw).expanduser(), measure=measure,
                                               allow_incomplete=allow_incomplete)
@@ -370,6 +385,11 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
 
     if kind == "directory":
         record = library_memory.remember_from_folder(selection)
+        if unit is not None:
+            # run の中の解析フォルダは、run が固定したライブラリ（sha256 つき）を先に使う。
+            run_record = library_memory.remember_from_run(unit.pipeline_root, unit.polarity)
+            if run_record.get("status") in ("known", "lbm_only"):
+                record = run_record
     elif kind == "job_path":
         record = library_memory.remember_from_job(Path(raw).expanduser())
     elif kind == "pipeline_path":
@@ -383,13 +403,120 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
         ds.analysis_dir = str(Path(selection.arf).parent)
     elif mztab_path:
         ds.analysis_dir = str(Path(mztab_path).parent)
+    if unit is not None:
+        # 探索専用の印は単位の状態を見る。`directory` が run の中の解析フォルダを開いたときも、その単位の
+        # 試料の対応表とライブラリを当てるので、検証を通っていない単位なら同じ印を付ける（断らない。
+        # 理由には run の名前も書く——どの run の単位かは入口からは分からないため）。
+        _mark_unvalidated_unit(ds, unit, name_run=kind == "directory")
     if unit is not None and adapter == "mztab":
         notes.extend(unit.notes)
-    if unit is not None and unit.legacy:
+    if unit is not None and unit.legacy and kind == "pipeline_path":
         notes.append("旧 v1 の run なので、run が計算した差次的結果は戻していない（比較は dataset_compare でやり直す）。")
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path,
-                         polarity=polarity)
+                         polarity=polarity,
+                         run_root=str(unit.pipeline_root) if unit is not None else None)
+
+
+#: 解析フォルダから pipeline の run の根（`pipeline-run.json` のあるフォルダ）を探す深さ
+#: （`<run>/<単位>/input/` と旧 v1 の `<run>/input/`）。
+_RUN_SEARCH_DEPTH = 3
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
+
+
+def _enclosing_run_unit(folder: Path):
+    """解析フォルダを含む pipeline の run の極性の単位（`session_handoff.UnitRun`）。無ければ None。
+
+    フォルダから上へ `_RUN_SEARCH_DEPTH` 段まで `pipeline-run.json` を探し、run の単位のうち解析フォルダが
+    このフォルダのものを選ぶ（検証を通っていない単位も、試料の対応表を当てるためだけに読む）。
+    run の記録が読めない・どの単位とも合わないときは None（解析フォルダだけで開く）。
+    """
+    from metabolomix.pipeline import session_handoff, store
+
+    folder = Path(folder)
+    for root in [folder, *folder.parents][:_RUN_SEARCH_DEPTH + 1]:
+        if not (root / "pipeline-run.json").is_file():
+            continue
+        try:
+            units = store.run_units(store.load_run(root))
+        except (DomainError, OSError, ValueError):
+            return None
+        for polarity in units:
+            try:
+                unit = session_handoff.resolve_unit(root, polarity, allow_incomplete=True)
+            except (DomainError, OSError, ValueError):
+                continue
+            if _same_dir(unit.analysis_dir, folder):
+                return unit
+        return None
+    return None
+
+
+def _apply_run_rows(ds, unit) -> list[str]:
+    """run の試料の対応表を、解析フォルダで読んだデータセットへ当てる。注記を返す。
+
+    試料は対応表の行の `source_file`（raw）の名前（拡張子を除く）か `sample_id` で結ぶ。全試料が結べた
+    ときだけ当てる（読み込みの一部なので `metadata_revision` は進めない）。
+    """
+    from metabolomix.analysis import sample_manifest
+
+    rows = unit.manifest_rows
+    where = f"pipeline の run（{unit.pipeline_root.name}・{unit.polarity}）"
+    if not rows:
+        return [f"解析フォルダは {where} の中にあるが、run の受領に試料の対応表が無いので当てていない"
+                "（群は dataset_set_sample_metadata で与える）。"]
+    by_key: dict[str, dict] = {}
+    for row in rows:
+        source = row.get("source_file")
+        for key in (Path(str(source)).stem if source else None, row.get("sample_id")):
+            if key:
+                by_key.setdefault(str(key).strip().casefold(), row)
+    matched = [by_key.get(str(name or "").strip().casefold()) for name in ds.sample_names]
+    missing = [name for name, row in zip(ds.sample_names, matched) if row is None]
+    if missing:
+        return [f"解析フォルダは {where} の中にあるが、試料 {missing[:5]} を run の試料の対応表と"
+                "結べないので、対応表は当てていない（群は dataset_set_sample_metadata で与える）。"]
+    previous = ds.sample_raw_paths
+    ds.sample_raw_paths = [row.get("source_file") for row in matched]
+    revision = ds.metadata_revision
+    try:
+        sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
+    except DomainError as exc:
+        ds.sample_raw_paths = previous
+        return [f"解析フォルダは {where} の中にあるが、run の試料の対応表を当てられなかった"
+                f"（{exc.code}）。群は dataset_set_sample_metadata で与える。"]
+    ds.metadata_revision = revision
+    return [f"解析フォルダは {where} の中にあるので、群と役割は run の試料の対応表（実験情報シートと"
+            "受領）から当てた（.mddata の宣言より先）。"]
+
+
+def _mark_unvalidated_unit(ds, unit, *, name_run: bool = False) -> None:
+    """検証を通っていない pipeline の単位を探索専用にする。
+
+    `pipeline_path`（`allow_incomplete=True`）で開いた単位と、`directory` が run の中の解析フォルダを
+    開いたときに引いた単位（`_enclosing_run_unit`）の両方に当てる。ジョブが completed でも、単位の検証
+    （`validate_outputs`）が済んでいなければ出力は確かめられていない。印はジョブの status だけでなく
+    単位の状態も見る（理由は書き出しのメタ行に載る）。印は情報で、何も断らない。
+    `name_run` なら理由に run のフォルダの名前も書く（`directory` の入口は run を名指ししないため）。
+    """
+    from metabolomix.pipeline import store
+
+    if unit.legacy:
+        return
+    status = store.unit_status(unit.record, unit.polarity)
+    if status == "validated":
+        return
+    ds.exploratory_only = True
+    where = (f"pipeline の run {unit.pipeline_root.name} の単位 {unit.polarity}" if name_run
+             else f"pipeline の単位 {unit.polarity}")
+    reason = f"{where} が検証を通っていない（{status}）"
+    ds.exploratory_reason = "; ".join(r for r in (getattr(ds, "exploratory_reason", None), reason) if r)
 
 
 def _load(kind: str, path: str, allow_incomplete: bool, polarity: str | None = None):
@@ -448,6 +575,7 @@ def _folder_via_job(job_path: Path, *, measure: str, allow_incomplete: bool,
         known.extend(p for p in paths if p not in known)
     ds.job_path = str(job_path)
     ds.exploratory_only = gate.exploratory_only
+    ds.exploratory_reason = gate.exploratory_reason
     ds.source_verification = "verified" if gate.verified else "legacy_unverified"
     if gate.incomplete_warning:
         ds.load_notes.insert(0, gate.incomplete_warning)
@@ -472,6 +600,45 @@ def _fill_theoretical_mz(ds, theo_by_fid: dict[str, float]) -> None:
         for candidate in candidates or []:
             if candidate.get("rank") == 1 and candidate.get("theoretical_mass_to_charge") is None:
                 candidate["theoretical_mass_to_charge"] = theo
+
+
+def _fill_formula_theoretical_mz(ds) -> dict[str, int]:
+    """mzTab-M と照合しない解析フォルダ（`directory` の入口）の SME（rank 1）に、理論 m/z を計算して入れる。
+
+    `.arf2` は上流の Reference m/z を持たず、この入口は正準 mzTab-M も読まないので、写す値が無い
+    （空のままだと質量精度と新しい知見の候補が 0 件になる）。注釈の組成式（`.arf2` の Formula。
+    `feature_metadata` の `formula`）と付加体（AdductType。SME の `adduct`）のモノアイソトピックの m/z
+    （特徴検索と同じ `feature_search.theoretical_mz`）を入れる。値は注釈が表す m/z で、ライブラリの記録の
+    プリカーサー m/z ではない。既に値のある候補（mzTab-M から写したもの）は触らない。組成式か付加体が無い・
+    読めない（未知の元素を含む）候補は None のまま。出所は `ds.theoretical_mz_source`（`formula_adduct`）と
+    読み込みの注記（件数）に残す——SME の候補のキーは mzTab-M の経路と同じ集合のまま（欄を足さない）。
+    計算して入れた特徴 ID は `ds.theoretical_mz_computed` に足す（根拠バンドルはその値を写さない）。
+
+    戻り値は {"computed": 入れた数, "not_computable": 入れられなかった数}。
+    """
+    from metabolomix.analysis.feature_search import theoretical_mz
+
+    computed = not_computable = 0
+    metadata = ds.feature_metadata or {}
+    for fid, candidates in (ds.feature_candidates or {}).items():
+        formula = (metadata.get(fid) or {}).get("formula")
+        for candidate in candidates or []:
+            if candidate.get("rank") != 1 or candidate.get("theoretical_mass_to_charge") is not None:
+                continue
+            value = theoretical_mz(formula, candidate.get("adduct"))
+            if value is not None and math.isfinite(value) and value > 0:
+                candidate["theoretical_mass_to_charge"] = value
+                ds.theoretical_mz_computed.add(fid)
+                computed += 1
+            else:
+                not_computable += 1
+    ds.theoretical_mz_source = "formula_adduct"
+    if computed or not_computable:
+        ds.load_notes.append(
+            f"SME の理論 m/z は、mzTab-M と照合しない解析フォルダなので注釈の組成式と付加体から計算した"
+            f"（{computed} 件。組成式か付加体が無い・読めない {not_computable} 件は空のままで、質量精度と"
+            "新しい知見の候補に入らない）。ライブラリの記録のプリカーサー m/z ではない。")
+    return {"computed": computed, "not_computable": not_computable}
 
 
 def _matching_arf(gate, artifact_paths: dict[str, list[str]],
@@ -580,16 +747,18 @@ def _with_hint(exc: DomainError) -> DomainError:
 
 def _folder_via_run(unit, *, measure: str, allow_incomplete: bool):
     """pipeline の run の極性の単位（`session_handoff.UnitRun`）を解析フォルダで読む。
-    run から引き継ぐのは解決済みの試料対応表だけ。"""
-    from metabolomix.analysis import sample_manifest
+    run から引き継ぐのは解決済みの試料対応表だけ。
+
+    対応表の行は mzTab-M のアダプタと同じ `session_handoff.bind_manifest_rows` で試料へ結んで当てる
+    （raw のパス、結べなければ raw の名前か sample_id。roles / sample_meta も組み直す）。全試料を結べ
+    なければ読み込みは止めず、当てずに `ds.load_notes` に注記を残す。"""
+    from metabolomix.pipeline import session_handoff
 
     ds, selection, gate = _folder_via_job(unit.job_path, measure=measure,
                                           allow_incomplete=allow_incomplete,
                                           analysis_dir=unit.analysis_dir)
-    rows = unit.manifest_rows
-    if rows is not None:
-        # roles / sample_meta も組み直す（run の試料対応表の役割を、前処理の前から見せる）。
-        sample_manifest.apply_defaults_and_inputs(ds, sample_manifest.resolve_metadata(ds, rows))
+    if unit.manifest_rows is not None:
+        session_handoff.bind_manifest_rows(ds, unit.manifest_rows)
     notes = [*unit.notes, _folder_note(gate, "run"),
              "run の解析行列は読んでいない（解析フォルダのアダプタが run から引き継ぐのは"
              "解決済みの試料対応表だけ）。"]

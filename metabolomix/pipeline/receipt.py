@@ -48,6 +48,7 @@ __all__ = [
     "build_receipt",
     "persist_result",
     "read_receipt",
+    "stage_error_summary",
     "write_receipt",
 ]
 
@@ -70,6 +71,44 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+#: 工程の誤りの要約（`stage_error_summary`）に載せる文面の上限（字）と、疑わしいファイルの上限。
+_MAX_ERROR_MESSAGE_CHARS = 600
+_MAX_SUSPECT_FILES = 10
+
+
+def stage_error_summary(error: dict) -> dict:
+    """失敗した工程の誤りの短い要約: `{"code", "message", "cause"?, "suspect_files"?}`。
+
+    `pipeline_status` の `errors`（`recovery.read_status`）と受領の単位の `error` が使う。
+    Console が完了しなかったときの見立て（`MSDIAL_EXECUTION_FAILED` の `details.cause` と
+    `details.diagnosis.suspect_files`）と、配置の工程で切れた計測ファイル（`PIPELINE_INPUT_INVALID`
+    の `details.files`）を `cause` / `suspect_files`（`[{"name", "reason"}]`。ファイル名だけ）に
+    そろえる。ログの行（`details.diagnosis.log_lines`）は載せない（`include_details=True` の
+    記録にある）。
+    """
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    message = error.get("message")
+    if isinstance(message, str) and len(message) > _MAX_ERROR_MESSAGE_CHARS:
+        message = message[:_MAX_ERROR_MESSAGE_CHARS] + "…"
+    out: dict = {"code": error.get("code"), "message": message}
+    if details.get("cause"):
+        out["cause"] = details["cause"]
+    diagnosis = details.get("diagnosis") if isinstance(details.get("diagnosis"), dict) else {}
+    suspects = diagnosis.get("suspect_files") or []
+    total = 0
+    if not suspects and error.get("code") == "PIPELINE_INPUT_INVALID":
+        suspects = details.get("files") or []
+        total = details.get("n_files") if isinstance(details.get("n_files"), int) else 0
+    suspects = [{"name": entry.get("name"), "reason": entry.get("reason")}
+                for entry in suspects if isinstance(entry, dict) and entry.get("name")]
+    if suspects:
+        out["suspect_files"] = suspects[:_MAX_SUSPECT_FILES]
+        total = max(total, len(suspects))
+        if total > _MAX_SUSPECT_FILES:
+            out["n_suspect_files"] = total
+    return out
 
 
 # ---------- 成果物の登録 ----------
@@ -293,8 +332,7 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
             stage_warnings.append({"code": w.get("code"), "stage_id": sid,
                                    "message": w.get("message")})
         if error is None and stage.get("status") in ("failed", "cancelled") and stage.get("error"):
-            error = {"code": stage["error"].get("code"), "message": stage["error"].get("message"),
-                     "stage_id": sid}
+            error = {**stage_error_summary(stage["error"]), "stage_id": sid}
 
     return {
         "status": {"validated": "validated", "failed": "failed"}.get(status, "not_run"),

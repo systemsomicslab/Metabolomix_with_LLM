@@ -54,13 +54,30 @@ def formula_index(ds) -> dict:
     return out
 
 
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value.strip() not in ("", "null") else None
+
+
 def _partner(ds, index: int, formulas: dict) -> dict:
+    """関係の相手 1 つ。同定は SME rank 1、無ければ（曖昧でない）SML 注釈（MS1 だけの同定）。
+
+    組成式は SME 行の `chemical_formula`、無ければ SML 注釈の `chemical_formula`、それも無ければ
+    特徴の `formula`（解析フォルダの `.arf2` のスポットの組成式）。解析フォルダから開いたデータセットは
+    SME 行を持たないので、後の 2 つが同位体の期待比の材料になる。
+    """
     fid = ds.feature_ids[index]
     meta = ds.feature_metadata.get(fid) or {}
     top = _top_candidate(ds, fid)
+    annotation = (getattr(ds, "feature_annotations", None) or {}).get(fid) or {}
+    if annotation.get("ambiguous"):
+        annotation = {}
+    named = bool(top) or bool(annotation)
+    formula = (_text(formulas.get(top.get("sme_id"))) or _text(annotation.get("chemical_formula"))
+               or (_text(meta.get("formula")) if named else None))
     return {"spot_id": fid, "mz": meta.get("mz"), "rt": meta.get("rt"),
-            "name": top.get("chemical_name"), "adduct": top.get("adduct"),
-            "formula": formulas.get(top.get("sme_id")), "heights": _heights(ds, index)}
+            "name": top.get("chemical_name") or annotation.get("name"),
+            "adduct": top.get("adduct") or annotation.get("adduct"),
+            "formula": formula, "heights": _heights(ds, index)}
 
 
 def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, min_r: float,
@@ -69,7 +86,9 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 
     `as_ion_of`: この特徴が、相手の（付加体・同位体・源内断片の）イオンとして説明できる関係。
     `ions_of_this`: 相手が、この特徴のイオンとして説明できる関係。
-    MS-DIAL のリンク（`.arf2`）は使わないので、裏付けは試料間の強度の相関だけ。
+    MS-DIAL のリンク（`.arf2`）は使わないので、裏付けは試料間の強度の相関だけ。強い説明（`strong`）は
+    付加体・源内断片なら相関 r ≥ min_r（Δm/z と同時溶出に加えて）、同位体なら加えて強度比が組成式の
+    期待比に合うこと（`curation.relations`）。
     """
     from metabolomix.curation.relations import find_relations, profile_correlation
 
@@ -110,9 +129,31 @@ def feature_relations(ds, feature_id: str, *, rt_window: float, mz_tol: float, m
 
 # ---------- 証拠の束 ----------
 
-def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
+def _rt_offset_min(spec: dict, raw_target: dict, notes: list[str] | None) -> float | None:
+    """spec の `rt_offset_min`（RT の窓の中心のずれ、分。任意）。形の誤りは `CLAIM_SPEC_INVALID`。
+
+    目標に `rt_min` が無ければ RT の窓が無く効かないので、誤りにせず捨てて `notes` に書く（規則にも
+    `rule_hash` にも入れない）。省けば None（規則は従来のまま）。
+    """
+    value = spec.get("rt_offset_min")
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value)):
+        raise _fail(f"rt_offset_min は有限の数（分）: {value!r}", field="rt_offset_min")
+    if raw_target.get("rt_min") is None:
+        if notes is not None:
+            notes.append("rt_offset_min は target に rt_min が無い（RT の窓が無い）ので効かず、使っていない"
+                         "（規則にも rule_hash にも入れていない）。")
+        return None
+    return float(value)
+
+
+def normalize_claim_spec(spec, *, dataset_polarity: str | None,
+                         notes: list[str] | None = None) -> dict:
+    """claim-evidence-spec.v1 を正規化する。効かない設定は捨てて理由を `notes` に足す（渡したとき）。"""
     allowed = {"schema", "claim_id", "target", "scan", "msms", "relations", "max_candidates",
-               "merge_split", "ppm_offset"}
+               "merge_split", "ppm_offset", "rt_offset_min"}
     if not isinstance(spec, dict) or set(spec) - allowed:
         raise _fail(f"spec の未知のキー: {sorted(set(spec or {}) - allowed)}")
     if spec.get("schema", SPEC_SCHEMA) != SPEC_SCHEMA:
@@ -126,8 +167,11 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     raw_target = {"target_id": claim_id.strip(), **raw_target}
     # 質量の窓の中心のずれ（任意）。既定の目標と走査の全変種に同じ spec を渡す（幅は変えない）
     offset = mass_accuracy.normalize_ppm_offset(spec.get("ppm_offset"), code="CLAIM_SPEC_INVALID")
+    # RT の窓の中心のずれ（任意。dataset_feature_search の rt_offset_min と同じ意味）。既定の目標と
+    # 走査の全変種に同じ値を渡す（幅 rt_tol_min と delta_rt は変えない）
+    rt_offset = _rt_offset_min(spec, raw_target, notes)
     target = feature_search.normalize_targets([raw_target], dataset_polarity=dataset_polarity,
-                                              ppm_offset=offset)[0]
+                                              ppm_offset=offset, rt_offset_min=rt_offset)[0]
 
     scan = spec.get("scan") or {}
     if not isinstance(scan, dict) or set(scan) - {"ppm", "rt_tol_min", "adduct_tiers"}:
@@ -151,16 +195,20 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
         # 検証は目標の正規化に任せる（読めない付加体・極性の食い違いを同じ規則で落とす）
         feature_search.normalize_targets(
             [{**raw_target, "adduct_tiers": out_scan["adduct_tiers"]}],
-            dataset_polarity=dataset_polarity, ppm_offset=offset)
+            dataset_polarity=dataset_polarity, ppm_offset=offset, rt_offset_min=rt_offset)
 
     msms = spec.get("msms")
     out_msms = None
     if msms is not None:
-        if not isinstance(msms, dict) or set(msms) - {"top_n", "rules"}:
-            raise _fail("msms は {top_n, rules}", field="msms")
+        if not isinstance(msms, dict) or set(msms) - {"top_n", "rules", "mz_tol_ppm"}:
+            raise _fail("msms は {top_n, rules, mz_tol_ppm}", field="msms")
         top_n = msms.get("top_n", 10)
         if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 1:
             raise _fail("msms.top_n は 1 以上の整数", field="msms.top_n")
+        ppm = msms.get("mz_tol_ppm")
+        if ppm is not None and (isinstance(ppm, bool) or not isinstance(ppm, (int, float))
+                                or not math.isfinite(ppm) or ppm <= 0):
+            raise _fail("msms.mz_tol_ppm は 0 より大きい有限の数（省略可）", field="msms.mz_tol_ppm")
         rules = msms.get("rules") or {}
         if "target" in rules:
             raise _fail("msms.rules.target は書かない（主張の target から決まる）",
@@ -170,6 +218,9 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
                       else {"inchikey": raw_target.get("inchikey")})
         out_msms = {"top_n": top_n, "rules": msms_rules.normalize_rules(
             rules, target={**identifier, "formula": target["formula"]})}
+        if ppm is not None:
+            # 渡したときだけ規則に載せる（省けば前駆体の窓は library_match_feature の既定と同じ）
+            out_msms["mz_tol_ppm"] = float(ppm)
 
     relations = spec.get("relations")
     out_relations = None
@@ -193,6 +244,9 @@ def normalize_claim_spec(spec, *, dataset_polarity: str | None) -> dict:
     if offset is not None:
         # 渡したときだけ規則に載せる（省けば v8 と同じ spec・同じ rule_hash）
         out["ppm_offset"] = offset
+    if rt_offset is not None:
+        # 効くときだけ規則に載せる（省けば従来と同じ spec・同じ rule_hash。目標の rt_offset_min にも入る）
+        out["rt_offset_min"] = rt_offset
     return out
 
 
@@ -299,7 +353,9 @@ def _spectrum_available(spot: dict) -> bool | None:
 
 def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
               lbm_only: bool = False) -> dict:
-    from metabolomix.analysis.spectral_match import fragment_matches_excluding_precursor
+    """候補 1 つの照合（`library_msms_qualify` と同じ芯）。`window` は使った前駆体の窓、`top` の行は
+    `msms_rules.candidate_rows`（`delta_ppm`・下限つきの断片の本数・`.dbs` の足切り・種の経路）。
+    スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` を足す。"""
     from metabolomix.library import matching
 
     try:
@@ -320,25 +376,22 @@ def _msms_for(fid, *, store, spot_query, arf2_path, dcl_path, msms_spec,
         return {"status": spot.get("status"), "message": spot.get("message"),
                 "spectrum_available": available}
     matched = matching.score_candidates(store, precursor_mz=spot["precursor_mz"], rt=spot["rt"],
-                                        ion_mode=spot["ion_mode"], measured=spot["measured"])
+                                        ion_mode=spot["ion_mode"], measured=spot["measured"],
+                                        mz_tol_ppm=msms_spec.get("mz_tol_ppm"))
     ms2_tol = matched["query"]["ms2_tol"]
-    tol = msms_spec["rules"]["precursor_exclusion_tol"] or ms2_tol
-    top = []
-    for rank, (record, result) in enumerate(matched["scored"][: msms_spec["top_n"]], start=1):
-        top.append({"rank": rank, "name": record.get("name"), "formula": record.get("formula"),
-                    "inchikey": record.get("inchikey"), "adduct": record.get("adduct"),
-                    "total_score": result["total_score"],
-                    "matched_peaks_count": result["matched_peaks_count"],
-                    "fragment_matches_excl_precursor": fragment_matches_excluding_precursor(
-                        result["alignment"], spot["precursor_mz"], tol)})
+    top = msms_rules.candidate_rows(matched["scored"], spot["precursor_mz"], msms_spec["rules"],
+                              ms2_tol=ms2_tol, cutoffs=matched["dbs_cutoffs"],
+                              top_n=msms_spec["top_n"])
     if matched["status"] == "no_candidates":
         qualify = {"verdict": "not_evaluable", "checks": [], "target_rank": None,
-                   "reason": "no_library_candidates"}
+                   "top1_is_target": False, "reason": "no_library_candidates"}
     else:
         qualify = msms_rules.qualify(matched["scored"], spot["measured"], spot["precursor_mz"],
                                      msms_spec["rules"], ms2_tol=ms2_tol)
     return {"status": matched["status"], "precursor_mz": spot["precursor_mz"],
+            "window": msms_rules.query_window(matched["query"]),
             "n_measured_peaks": len(spot["measured"]), "n_candidates": matched["n_candidates"],
+            **matching.msdial_agreement(matched["scored"], spot.get("msdial_annotation")),
             "top": top, "qualify": qualify, "spectrum_available": available}
 
 
@@ -393,7 +446,8 @@ def build(ds, normalized: dict, *, store, spot_query, arf2_path, dcl_path,
             if normalized["scan"]["adduct_tiers"] is not None:
                 variant["adduct_tiers"] = normalized["scan"]["adduct_tiers"]
             target = feature_search.normalize_targets([variant], dataset_polarity=dataset_polarity,
-                                                      ppm_offset=normalized.get("ppm_offset"))[0]
+                                                      ppm_offset=normalized.get("ppm_offset"),
+                                                      rt_offset_min=normalized.get("rt_offset_min"))[0]
             match = feature_search.match_target(ds, target, max_results=unlimited,
                                                 mz_array=mz_array, merged_from=merged_map)
             label = f"ppm={ppm:g},rt_tol_min={rt_tol:g}"

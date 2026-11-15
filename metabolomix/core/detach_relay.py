@@ -12,9 +12,12 @@ NULだけ（`process_control._create_process`が絞る）。
 
 要求は`{"command", "cwd", "log_path", "launcher", "result_path"}`（`command`は
 `resolve_python_launch`を通した後のもの。`launcher`はvenvの印`__PYVENV_LAUNCHER__`の値か
-null）。結果は`result_path`へJSONで書く: 起こせたら`{"pid", "identity", "breakaway"}`
-（pidとidentityはワーカーのもの）、`DomainError`なら`{"error": {"code", "message",
-"details"}}`。書いたらすぐ終わる。それ以外の失敗はstderr（中継のログ）へ出して0以外で終わる。
+null）。結果は`result_path`へJSONで書く: 起こせたら`{"pid", "identity", "breakaway",
+"worker_in_job"}`（pidとidentityはワーカーのもの。`breakaway`は中継の直近のJobから見た値、
+`worker_in_job`は起こしたワーカーが何段目かを問わずJobに残っているか——中継がワーカーの
+ハンドルで`IsProcessInJob(ワーカー, NULL)`を問う）、`DomainError`なら`{"error": {"code",
+"message", "details"}}`。書いたらすぐ終わる。それ以外の失敗はstderr（中継のログ）へ出して
+0以外で終わる。
 
 依存はstdlibと`metabolomix.core`のleaf（`atomic_io`・`process_control`）だけ。
 """

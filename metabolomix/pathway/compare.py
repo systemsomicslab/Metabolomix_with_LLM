@@ -1,10 +1,12 @@
 # metabolomix/pathway/compare.py
 """JSON-LD のスコープ値で 2 群比較し、隣接ノードの逆向きを拾う（純ロジック）。
 
-検定は統計エンジン（`analysis.stats.compare`）の moderated t: スコープ種別（whole / 鎖ごと）ごとに
-試料 × スコープの log2 行列（正の有限値の log2、それ以外は欠測）を作り、`subject_of` で同じ個体の
-注入を log2 の上で平均してから比べる。BH はパスウェイ（＝1 グラフ）× スコープ種別の単位
-（エンジンの母集団 `matrix` ＝その種別のスコープ全部）でかかる。判定（verdict）は q ≤ 閾値と CI で決まる。
+検定は統計エンジン（`analysis.stats.compare`。既定は moderated t、`test` で dataset_compare と同じ検定を
+選べる）: スコープ種別（whole / 鎖ごと）ごとに試料 × スコープの log2 行列（正の有限値の log2、それ以外は
+欠測）を作り、`subject_of`（試料 → 行列の単位）で同じ単位の注入を log2 の上で平均してから比べる。
+BH はパスウェイ（＝1 グラフ）× スコープ種別の単位（エンジンの母集団 `matrix` ＝その種別のスコープ全部）で
+かかる。判定（verdict）は q ≤ 閾値と CI で決まる。moderated t は種別のスコープが 3 未満だと事前分布を
+推定できず縮小が効かない（プールした分散の t と同じ）。
 """
 from __future__ import annotations
 
@@ -45,12 +47,13 @@ def _call(row: dict) -> str:
 
 
 def compare_scopes(graph: PathwayGraph, group_a: str, group_b: str, q_threshold: float,
-                   *, subject_of: dict[str, str] | None = None) -> list[dict]:
-    """スコープ種別ごとに 1 回、エンジンの moderated t で group_a（基準）と group_b を比べる。
+                   *, subject_of: dict[str, str] | None = None, test: str = "moderated_t") -> list[dict]:
+    """スコープ種別ごとに 1 回、エンジンの検定（`test`。既定 moderated t）で group_a（基準）と group_b を比べる。
 
-    `subject_of`: 試料（JSON-LD の注入）→ 個体。同じ個体の注入は log2 の有限な値の平均で 1 個体にまとまる
-    （前処理と同じ規則）。無い・載っていない試料はその注入だけで 1 個体。log2fc は正なら group_b が高い。
-    各群の個体数が 2 未満なら `DomainError(STATISTIC_GROUP_TOO_SMALL)`。
+    `subject_of`: 試料（JSON-LD の注入）→ 単位（行列の units。まとめた行列なら個体、まとめない行列なら注入）。
+    同じ単位の注入は log2 の有限な値の平均で 1 単位にまとまる（前処理と同じ規則）。無い・載っていない試料は
+    その注入だけで 1 単位。log2fc は正なら group_b が高い。
+    各群の単位数が 2 未満なら `DomainError(STATISTIC_GROUP_TOO_SMALL)`。
     """
     subject_of = subject_of or {}
     samples = [s for s, g in graph.sample_groups.items() if g in (group_a, group_b)]
@@ -77,7 +80,7 @@ def compare_scopes(graph: PathwayGraph, group_a: str, group_b: str, q_threshold:
             subject_ids=[subject_of.get(name) for name in samples],
             feature_ids=[s.id for s in scopes], matrix_id=f"pathway:{kind}")
         result = engine_compare(prepared, factors=["group"], comparisons=[comparison],
-                                test="moderated_t", q_threshold=q_threshold)
+                                test=test, q_threshold=q_threshold)
         for scope, r in zip(scopes, result["rows"]):
             out.append({"node": graph.node_labels.get(scope.node_id, ""),
                         "scope": kind, "node_id": scope.node_id,

@@ -35,22 +35,22 @@
 
 | 文書 | 対象 | ツール数 |
 |---|---|---|
-| [dataset.md](dataset.md) | データセット投入の入口 — ファイルの一覧・読み込み（`load_dataset`）と受付番号（`dataset_load_status`）・一覧と閉じる・試料の状態と除外 | 7 |
+| [dataset.md](dataset.md) | データセット投入の入口 — ファイルの一覧・読み込み（`load_dataset`）と受付番号（`dataset_load_status`・長い道具の `job_status`）・一覧と閉じる・試料の状態と除外 | 8 |
 | [dcl.md](dcl.md) | `.dcl` — デコンボリューション済み MS/MS | 3 |
 | [plots.md](plots.md) | 図（dataset_plot）と図の保存（save_figure）と payload 契約の比較 | 2 |
 | [dataset_analysis.md](dataset_analysis.md) | DatasetState — 前処理・PCA・差次的解析・エクスポート・実験情報訂正・特徴検索 | 8 |
-| [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — Console の実行・解析フォルダの検証・受領までと、メソッドファイルを選ぶ・作る 2 ツール | 7 |
+| [pipeline.md](pipeline.md) | 生データフォルダ起点の統括(pipeline) — Console の実行・解析フォルダの検証・受領までと、メソッドファイルを選ぶ・作る 2 ツール・試料の表を ISA / mwTab から作る 1 ツール | 8 |
 | [library.md](library.md) | 参照ライブラリ（`.dbs`/`.msp`）— MS/MS スペクトル照合と対向プロット・ライブラリの検索 | 4 |
 | [curation.md](curation.md) | アラインメントのキュレーション — 注釈の一覧確認・機械判別・フラグ記録・候補付け | 5 |
 | [pathway.md](pathway.md) | パスウェイ投影（MSLipidMapper）— サブクラスのノード集計・2 群比較・図 | 2 |
 | [reanalysis.md](reanalysis.md) | 再解析 — spec で呼ぶツール（ハンドルの一覧・クローズは dataset.md） | 9 |
 | [quant.md](quant.md) | 定量 — 内部標準の正規化・極性の統合・特徴の選別（規則プラグインが要る） | 4 |
 
-合計 51 ツール。対象外は 5 ツール——レポート記録系 3
+合計 53 ツール。対象外は 5 ツール——レポート記録系 3
 （`record_objective` `write_report` `read_report`）＋
 サーバ自身の保守 1（`server_update`。解析の流れに現れず、配布先クローンの更新だけを行う）＋
 出力の意味の文書を読む 1（`docs_read`。リソースと同じ本文を返すだけで、解析のツールではない）。
-登録ツール総数は 56（51 + 5）。
+登録ツール総数は 58（53 + 5）。
 
 ## 一気通貫の順序
 

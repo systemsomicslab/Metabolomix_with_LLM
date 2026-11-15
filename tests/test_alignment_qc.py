@@ -367,6 +367,18 @@ def test_single_sample_spot_is_not_an_injection_block():
     assert Q.find_split_pairs(ds)["pairs"][0]["type"] == "injection_block"
 
 
+@pytest.mark.parametrize("adduct_a, adduct_b", [
+    ("[M+HCOO]-", "[M+CHO2]-"),           # 2 つの半分を別のライブラリ（LBM と MSP）の綴りで注釈した
+    ("[M+H]1+", "[M+H]+"),                # mzTab-M の価数 1 の書き方
+    ("[M-H2O-H]-", "[M-H-H2O]-"),
+])
+def test_same_adduct_in_another_spelling_is_paired(adduct_a, adduct_b):
+    ds = _make_ds([("1265", 650.6000, 20.00, ALL - FIRST_TWO, "CE 18:2", adduct_a),
+                   ("1266", 650.6050, 20.61, FIRST_TWO, None, adduct_b)])
+    (pair,) = Q.find_split_pairs(ds)["pairs"]
+    assert pair["features"] == ["1265", "1266"] and pair["type"] == "injection_block"
+
+
 def test_unknown_adduct_is_not_paired():
     ds = _make_ds([("1", 650.6000, 20.0, ALL - FIRST_TWO, None, None),
                    ("2", 650.6050, 20.6, FIRST_TWO, None, None)])

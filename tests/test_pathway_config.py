@@ -58,6 +58,6 @@ def test_pathway_error_rejects_unknown_code():
 
 def test_pathway_error_codes_are_the_spec_set():
     assert mcp_errors.PATHWAY_ERROR_CODES == frozenset({
-        "MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING", "MSLM_RUN_FAILED",
+        "MSLM_NOT_CONFIGURED", "MSLM_R_PACKAGES_MISSING", "MSLM_R_PACKAGE_LOAD_FAILED", "MSLM_RUN_FAILED",
         "MSLM_TIMEOUT", "MSLM_OUTPUT_INVALID", "PATHWAY_RENDER_FAILED",
         "PATHWAY_BAD_REQUEST", "MSLM_REMOTE_UNAVAILABLE"})

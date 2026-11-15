@@ -180,7 +180,8 @@ def test_cell_without_values_matches_limma_na_coefficients():
         assert rows[f]["status"] == "not_tested" and rows[f]["reason"] == "insufficient_units"
         assert rows[f]["n_reference"] == 4 and rows[f]["n_test"] == n_test
     om = {o["feature_id"]: o for o in res["omnibus"]}
-    assert om["f05"] == {"feature_id": "f05", "f": None, "f_p": None, "f_q": None}
+    assert om["f05"] == {"feature_id": "f05", "f": None, "f_p": None, "f_q": None,
+                         "df1": None, "df2": None}
     assert om["f12"]["f"] is None
     others = [i for i, f in enumerate(exp["features"]) if f not in ("f05", "f12")]
     assert [om[exp["features"][i]]["f"] for i in others] == approx([exp["F"][i] for i in others], rel=1e-6)
@@ -525,14 +526,38 @@ def test_two_by_two_interaction_contrast_runs():
 
 # --- 交絡 ----------------------------------------------------------------------
 
-def test_complete_confounding_raises_unless_allowed():
+def test_complete_confounding_is_marked_and_stops_only_when_disallowed():
+    """C4-M23: 既定では完全交絡でも止めず、交絡の表と対比ごとの印で示す。`allow_confounded=False` の明示で止まる。"""
     prep, _ = _two_groups(4, 4, 6, batches=["b1"] * 4 + ["b2"] * 4)
-    with pytest.raises(DomainError) as e:
-        compare(prep, factors=["group"], comparisons=BVA)
-    assert e.value.code == "STATISTIC_CONFOUNDED"
-    res = compare(prep, factors=["group"], comparisons=BVA, allow_confounded=True)
+    res = compare(prep, factors=["group"], comparisons=BVA)
     assert res["confounding"]["batch_status"] == "complete"
+    assert res["confounding"]["by_contrast"] == {"BvsA": {"batch_status": "complete", "confounded": True}}
     assert any(w["code"] == "batch_group_complete_confounding" for w in res["warnings"])
+    assert all(r["confounded"] is True for r in res["rows"])
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=BVA, allow_confounded=False)
+    assert e.value.code == "STATISTIC_CONFOUNDED"
+    assert e.value.details["contrasts"] == ["BvsA"]
+
+
+def test_contrast_level_complete_confounding_in_multi_group():
+    """A=b1・B=b2・C=両方: まとめた表は partial でも、B 対 A の対比だけは完全交絡の印が付く。"""
+    rng = np.random.default_rng(3)
+    groups = ["A"] * 4 + ["B"] * 4 + ["C"] * 4
+    batches = ["b1"] * 4 + ["b2"] * 4 + ["b1", "b2"] * 2
+    prep = _prepared(rng.normal(10, 0.3, (12, 5)), groups, batches=batches)
+    comps = [{"id": "BvsA", "factor": "group", "reference": "A", "test": "B"},
+             {"id": "CvsA", "factor": "group", "reference": "A", "test": "C"}]
+    res = compare(prep, factors=["group"], comparisons=comps)
+    assert res["confounding"]["batch_status"] == "partial"
+    assert res["confounding"]["by_contrast"]["BvsA"]["confounded"] is True
+    assert res["confounding"]["by_contrast"]["CvsA"]["confounded"] is False
+    assert any(w["code"] == "contrast_complete_confounding" and w["contrasts"] == ["BvsA"]
+               for w in res["warnings"])
+    assert {r["contrast_id"]: r["confounded"] for r in res["rows"]} == {"BvsA": True, "CvsA": False}
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=comps, allow_confounded=False)
+    assert e.value.code == "STATISTIC_CONFOUNDED" and e.value.details["contrasts"] == ["BvsA"]
 
 
 def test_result_always_has_batch_table():
@@ -566,10 +591,10 @@ def test_result_states_definitions():
     assert EFFECT_SIZES == ("log2_mean_difference", "arithmetic_mean_ratio")
     assert BH_POPULATIONS == ("matrix", "annotated", "reported")
     keys = {"feature_id", "contrast_id", "reference", "test", "status", "reason", "n_reference",
-            "n_test", "detected_reference", "detected_test", "quantity_judgeable", "log2fc",
+            "n_test", "detected_reference", "detected_test", "quantity_judgeable", "log2fc", "se",
             "ci_low", "ci_high", "ci_unavailable_reason", "statistic", "df", "p", "q",
             "presence_p", "presence_q", "verdict", "verdict_reason", "mean_reference",
-            "mean_test"}
+            "mean_test", "constant_in_group", "confounded"}
     assert all(set(r) == keys for r in res["rows"])
     assert res["rows"][0]["reference"] == "A" and res["rows"][0]["test"] == "B"
 
@@ -651,12 +676,12 @@ def test_lm_fit_value_error_becomes_design_rank_deficient(monkeypatch):
 
 
 def test_group_spanning_batches_is_complete_confounding_in_compare():
-    """A は b1 だけ、B は b2・b3: compare は allow_confounded なしで STATISTIC_CONFOUNDED。"""
+    """A は b1 だけ、B は b2・b3: 完全交絡。allow_confounded=False の明示でだけ STATISTIC_CONFOUNDED。"""
     prep, _ = _two_groups(4, 4, 5, batches=["b1"] * 4 + ["b2", "b2", "b3", "b3"])
     with pytest.raises(DomainError) as e:
-        compare(prep, factors=["group"], comparisons=BVA)
+        compare(prep, factors=["group"], comparisons=BVA, allow_confounded=False)
     assert e.value.code == "STATISTIC_CONFOUNDED"
-    res = compare(prep, factors=["group"], comparisons=BVA, allow_confounded=True)
+    res = compare(prep, factors=["group"], comparisons=BVA)
     assert res["confounding"]["batch_status"] == "complete"
 
 
@@ -718,3 +743,243 @@ def test_reported_ids_not_in_matrix_warn():
                   reported_feature_ids=["f00", "nope", "zzz"])
     w = next(w for w in res["warnings"] if w["code"] == "reported_features_not_in_matrix")
     assert w["n_reported"] == 3 and w["n_not_in_matrix"] == 2 and w["examples"] == ["nope", "zzz"]
+
+
+# --- 補正の方法・SE・片群一定・要因の F（仕分けの一覧 2026-11-13） ----------------------------
+
+@pytest.mark.parametrize("method,sm", [("holm", "holm"), ("bonferroni", "bonferroni"), ("bh", "fdr_bh")])
+def test_adjust_p_values_matches_r_p_adjust(method, sm):
+    from statsmodels.stats.multitest import multipletests
+
+    from metabolomix.analysis.stats.compare import adjust_p_values
+    p = [0.01, None, 0.04, 0.03, float("nan"), 0.2, 0.001]
+    finite = [x for x in p if x is not None and math.isfinite(x)]
+    expected = iter(multipletests(finite, method=sm)[1])
+    got = adjust_p_values(p, method)
+    for x, q in zip(p, got):
+        if x is None or not math.isfinite(x):
+            assert q is None
+        else:
+            assert q == approx(next(expected))
+    assert adjust_p_values(p, "none")[0] == 0.01 and adjust_p_values(p, "none")[1] is None
+
+
+@pytest.mark.parametrize("method,interp", [("bh", "discovery_fdr"), ("holm", "fwer"),
+                                           ("bonferroni", "fwer"), ("none", "unadjusted")])
+def test_p_adjust_method_reaches_q_and_result(method, interp):
+    from metabolomix.analysis.stats.compare import adjust_p_values
+    prep, _ = _two_groups(4, 4, 8, shift={0: 3.0, 1: 2.0})
+    res = compare(prep, factors=["group"], comparisons=BVA, p_adjust=method)
+    assert res["p_adjust_method"] == method and res["bh_population"]["p_adjust_method"] == method
+    assert res["bh_population"]["q_interpretation"] == interp
+    rows = res["rows"]
+    assert [r["q"] for r in rows] == approx(adjust_p_values([r["p"] for r in rows], method))
+    reported = compare(prep, factors=["group"], comparisons=BVA, p_adjust=method,
+                       bh_population="reported", reported_feature_ids=["f00", "f01"])
+    assert reported["bh_population"]["q_interpretation"] == "reproduction_only"
+
+
+def test_p_adjust_invalid_is_specification_error():
+    prep, _ = _two_groups(4, 4, 5)
+    with pytest.raises(DomainError) as e:
+        compare(prep, factors=["group"], comparisons=BVA, p_adjust="fdr")
+    assert e.value.code == "STATISTIC_SPECIFICATION_INVALID" and e.value.details["field"] == "p_adjust"
+
+
+def test_se_defined_per_test():
+    prep, x = _two_groups(4, 5, 4, shift={0: 1.0})
+    mod = _rows(compare(prep, factors=["group"], comparisons=BVA))
+    for r in mod.values():
+        assert r["se"] == approx(r["log2fc"] / r["statistic"])
+        half = r["ci_high"] - r["log2fc"]
+        assert half == approx(stats.t.ppf(0.975, r["df"]) * r["se"])
+    welch = _rows(compare(prep, factors=["group"], comparisons=BVA, test="welch"))
+    a, b = x[:4, 0], x[4:, 0]
+    assert welch["f00"]["se"] == approx(math.sqrt(a.var(ddof=1) / 4 + b.var(ddof=1) / 5))
+    student = _rows(compare(prep, factors=["group"], comparisons=BVA, test="student"))
+    assert student["f00"]["se"] == approx(abs(student["f00"]["log2fc"] / student["f00"]["statistic"]))
+    rank = _rows(compare(prep, factors=["group"], comparisons=BVA, test="mannwhitney"))
+    assert all(r["se"] is None for r in rank.values())
+    ratio = _rows(compare(prep, factors=["group"], comparisons=BVA,
+                          effect_size="arithmetic_mean_ratio"))
+    assert all(r["se"] is None for r in ratio.values())
+
+
+def test_constant_in_group_marks_one_sided_fill_values(monkeypatch):
+    """D4: 片方の群の値がすべて同じ（埋め値）の特徴に印を付け、件数を警告で返す。判定は変えない。"""
+    from metabolomix.analysis.stats import compare as compare_mod
+    rng = np.random.default_rng(1)
+    x = rng.normal(20.0, 0.3, (8, 4))
+    x[:4, 1] = 12.0                                    # A だけ一定（埋め値）
+    x[:, 2] = 15.0                                     # 両群とも一定
+    prep = _prepared(x, ["A"] * 4 + ["B"] * 4)
+    res = compare(prep, factors=["group"], comparisons=BVA)
+    rows = _rows(res)
+    assert rows["f00"]["constant_in_group"] is None
+    assert rows["f01"]["constant_in_group"] == ["A"] and rows["f01"]["status"] == "tested"
+    assert rows["f02"]["constant_in_group"] == ["A", "B"]     # moderated t は事前分布で縮めて検定はする
+    w = next(w for w in res["warnings"] if w["code"] == "constant_in_group")
+    assert w["n_rows"] == 2 and w["n_features"] == 2 and w["by_contrast"] == {"BvsA": 2}
+    assert w["examples"] == ["f01", "f02"]
+    # 判定は変えない: 印を付ける検査を止めた（どの cell も一定でないとみなす）実行と、判定・q・区間が同じ
+    monkeypatch.setattr(compare_mod, "_constant_cells",
+                        lambda log2, cell_idx, cells, *raw: {c: np.zeros(log2.shape[1], bool) for c in cells})
+    unmarked = compare(_prepared(x, ["A"] * 4 + ["B"] * 4), factors=["group"], comparisons=BVA)
+    assert all(r["constant_in_group"] is None for r in unmarked["rows"])
+    assert not any(w["code"] == "constant_in_group" for w in unmarked["warnings"])
+    for key in ("verdict", "verdict_reason", "q", "ci_low", "ci_high"):
+        assert [r[key] for r in unmarked["rows"]] == [r[key] for r in res["rows"]], key
+
+
+def _study(values, rows, feature_ids=None):
+    """rows: (sample_id, role, group, subject_id) のタプル列（統計エンジンの StudyData）。"""
+    from metabolomix.analysis.stats.data import SampleInfo, StudyData
+
+    values = np.asarray(values, dtype=float)
+    samples = [SampleInfo(sample_id=r[0], role=r[1], group=r[2], batch="b1", injection_order=None,
+                          subject_id=r[3], include=True, attributes={}) for r in rows]
+    return StudyData(values=values, detected=None, sample_ids=[s.sample_id for s in samples],
+                     feature_ids=feature_ids or [f"f{j}" for j in range(values.shape[1])],
+                     samples=samples, quant=None, dataset_hash="h")
+
+
+_NO_FILTERS = {"drift": {"mode": "off"},
+               "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None}}
+
+
+def test_constant_in_group_reads_raw_injections_under_default_normalization():
+    """D4 は読んだ値（正規化の前）で探す: 既定の正規化（auto → PQN）は試料ごとの係数で埋め値を散らす。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(7)
+    values = rng.lognormal(10.0, 0.4, (10, 6))
+    values[:5, 0] = 1000.0                                  # A の 5 試料を同じ値で埋めた
+    rows = [(f"s{i}", "sample", "A" if i < 5 else "B", None) for i in range(10)]
+    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"]})
+    assert next(s for s in prep.steps if s["step"] == "normalize")["method"] == "pqn"
+    assert np.ptp(prep.log2[:5, 0]) > 0.05                  # 検定する log2 では A の f0 はもう一定でない
+    assert np.array_equal(prep.sample_raw_values, values)   # 読んだ値（注入 × 特徴）
+    res = compare(prep, factors=["group"], comparisons=BVA)
+    rows_ = _rows(res)
+    assert rows_["f0"]["constant_in_group"] == ["A"]
+    assert all(rows_[f"f{j}"]["constant_in_group"] is None for j in range(1, 6))
+    w = next(w for w in res["warnings"] if w["code"] == "constant_in_group")
+    assert w["examples"] == ["f0"] and w["n_rows"] == 1
+
+
+def test_constant_in_group_ignores_values_made_equal_by_normalization():
+    """特徴の少ない PQN は試料ごとに中央の特徴を参照の値にそろえる。読んだ値が違えば印を付けない。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    values = np.array([[10, 5, 100], [12, 6, 110], [11, 5, 90], [20, 5, 100], [22, 6, 105],
+                       [21, 5, 95], [15, 5, 100], [16, 5, 101]], dtype=float)
+    rows = [(f"HC{i}", "sample", "HC", None) for i in range(3)]
+    rows += [(f"RA{i}", "sample", "RA", None) for i in range(3)]
+    rows += [("QC1", "qc", None, None), ("QC2", "qc", None, None)]
+    prep = preprocess(_study(values, rows), {**_NO_FILTERS, "normalize": {"method": "pqn"}})
+    flat = [j for j in range(3) for cell in (slice(0, 3), slice(3, 6))
+            if np.ptp(prep.log2[cell, j]) < 1e-9]
+    assert flat                                             # 正規化の後の log2 は一定に見える
+    res = compare(prep, factors=["group"],
+                  comparisons=[{"id": "RA_vs_HC", "factor": "group", "reference": "HC", "test": "RA"}])
+    assert all(r["constant_in_group"] is None for r in res["rows"])
+    assert not any(w["code"] == "constant_in_group" for w in res["warnings"])
+
+
+def test_constant_in_group_looks_at_injections_before_replicate_collapsing():
+    """反復注入をまとめる前の注入ごとの値で探す: 注入が同じ値なら印、注入は違い個体の平均だけ同じなら印なし。"""
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(3)
+    rows, values = [], []
+    for group in ("A", "B"):
+        for k in range(3):
+            for r in range(2):
+                rows.append((f"{group}{k}_r{r}", "sample", group, f"{group}{k}"))
+                row = rng.lognormal(10.0, 0.3, 3)
+                if group == "A":
+                    row[0] = 500.0                          # f0: A の全注入を同じ値で埋めた
+                    row[1] = (900.0, 1100.0)[r]              # f1: 注入は違い、どの個体も同じ 2 値
+                values.append(row)
+    prep = preprocess(_study(np.array(values), rows), {**_NO_FILTERS, "normalize": {"method": "none"}})
+    assert len(prep.units) == 6 and all(u.n_injections == 2 for u in prep.units)
+    assert np.ptp(prep.log2[[i for i, u in enumerate(prep.units) if u.group == "A"], 1]) < 1e-12
+    res = _rows(compare(prep, factors=["group"], comparisons=BVA))
+    assert res["f0"]["constant_in_group"] == ["A"]
+    assert res["f1"]["constant_in_group"] is None           # 個体の値だけで見れば一定に見える
+    assert res["f2"]["constant_in_group"] is None
+
+
+def test_constant_in_group_class_totals_use_raw_member_sums():
+    """組成の絶対量（クラスの合計）も、注入ごとの読んだ値のクラスの合計で探す。"""
+    import dataclasses
+
+    from metabolomix.analysis.stats.composition import composition
+    from metabolomix.analysis.stats.preprocess import preprocess
+
+    rng = np.random.default_rng(5)
+    values = rng.lognormal(10.0, 0.4, (10, 4))
+    values[:5, 0], values[:5, 1] = 300.0, 700.0             # クラス X の 2 メンバーが A で埋め値
+    rows = [(f"s{i}", "sample", "A" if i < 5 else "B", None) for i in range(10)]
+    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"]})
+    prep = dataclasses.replace(prep, feature_classes={"f0": "X", "f1": "X", "f2": "Y", "f3": "Y"})
+    res = composition(prep, assay_kind="metabolite", factors=["group"], comparisons=BVA)
+    absolute = {r["feature_id"]: r for r in res["absolute"]["rows"]}
+    assert absolute["X"]["constant_in_group"] == ["A"] and absolute["Y"]["constant_in_group"] is None
+
+
+def _factorial_data(n_per=3, seed=4, levels_a=("a1", "a2", "a3"), levels_b=("b1", "b2"), g=2,
+                    unbalanced=False):
+    rng = np.random.default_rng(seed)
+    attrs, groups, cells = [], [], []
+    for i, la in enumerate(levels_a):
+        for k, lb in enumerate(levels_b):
+            n = n_per + (1 if unbalanced and (i + k) % 2 == 0 else 0)
+            for _ in range(n):
+                groups.append(la)
+                attrs.append({"B": lb})
+                cells.append((i, k))
+    x = rng.normal(10.0, 0.5, (len(groups), g))
+    for r, (i, k) in enumerate(cells):
+        x[r, 0] += 0.8 * i + 0.6 * k + (1.0 if (i, k) == (2, 1) else 0.0)
+    return _prepared(x, groups, attributes=attrs), x, groups, [a["B"] for a in attrs]
+
+
+@pytest.mark.parametrize("unbalanced", [False, True])
+def test_factorial_f_matches_type3_anova_without_shrinkage(unbalanced):
+    """B3/E1-T07: 特徴が 2 つ（事前分布の自由度 0＝縮めない）なら、moderated F は二元配置分散分析の
+    Type III の F（和が 0 の対比）と一致する。主効果は多水準、交互作用は (3−1)×(2−1)=2 自由度。"""
+    import pandas as pd
+    import statsmodels.formula.api as smf
+    from statsmodels.stats.anova import anova_lm
+
+    prep, x, groups, bs = _factorial_data(unbalanced=unbalanced)
+    comps = [{"id": "a2_vs_a1_b1", "factor": "group", "reference": "a1", "test": "a2", "at": {"B": "b1"}}]
+    res = compare(prep, factors=["group", "B"], comparisons=comps)
+    assert res["prior"]["df_prior"] == 0.0
+    fac = res["factorial"]
+    assert fac["effects"] == {"group": {"factors": ["group"], "df1": 2}, "B": {"factors": ["B"], "df1": 1},
+                              "group:B": {"factors": ["group", "B"], "df1": 2}}
+    rows = {(r["effect"], r["feature_id"]): r for r in fac["rows"]}
+    df = pd.DataFrame({"y": x[:, 0], "A": groups, "B": bs})
+    table = anova_lm(smf.ols("y ~ C(A, Sum) * C(B, Sum)", data=df).fit(), typ=3)
+    for effect, term in (("group", "C(A, Sum)"), ("B", "C(B, Sum)"), ("group:B", "C(A, Sum):C(B, Sum)")):
+        r = rows[(effect, "f00")]
+        assert r["f"] == approx(table.loc[term, "F"], rel=1e-8)
+        assert r["f_p"] == approx(table.loc[term, "PR(>F)"], rel=1e-6)
+        assert r["df1"] == table.loc[term, "df"] and r["df2"] == approx(table.loc["Residual", "df"])
+        fq = [rows[(effect, f)]["f_p"] for f in ("f00", "f01")]
+        assert [rows[(effect, f)]["f_q"] for f in ("f00", "f01")] == approx(spec_statistics.bh(fq))
+
+
+def test_factorial_absent_for_one_factor_and_pairwise_tests():
+    prep, _ = _two_groups(4, 4, 5)
+    assert compare(prep, factors=["group"], comparisons=BVA)["factorial"] is None
+    prep2, *_ = _factorial_data()
+    comps = [{"id": "c", "factor": "group", "reference": "a1", "test": "a2", "at": {"B": "b1"}}]
+    with pytest.raises(DomainError):          # welch は 1 因子だけ
+        compare(prep2, factors=["group", "B"], comparisons=comps, test="welch")
+    with_cov = compare(prep2, factors=["group", "B"], comparisons=comps,
+                       covariates=[], p_adjust="holm")
+    assert with_cov["factorial"] is not None
+    assert all(r["f_q"] is None or r["f_q"] >= r["f_p"] for r in with_cov["factorial"]["rows"])

@@ -3,7 +3,8 @@
 数値・ドメイン層の純ロジックで、MCP にもセッションにも依存しない。
 
 - 質量精度: SME（MS/MS の照合で付いた同定）の実測 m/z と理論 m/z の差（ppm）の分布。
-  許容幅の決定はしない（再解析の規則で決める）。四分位は `statistics.quantiles(n=4)`
+  許容幅は決めないが、材料として測った誤差から勧める `mz_tol_ppm`（|中央値| + 3×MAD を切り上げ。
+  `recommended_tolerance`）を添える。四分位は `statistics.quantiles(n=4)`
   （exclusive 法）。`subset="msms_matched"` は、その特徴の MS/MS が参照スペクトルに照合された
   同定（SML の `opt_global_spectrum_matched` が真。研究室 MSP と LBM は区別しない）に絞る。
   注入順の傾向（`injection_trend`）は、試料ごとの実測 m/z（`ds.per_sample_mz`）の誤差の中央値と
@@ -22,13 +23,17 @@ import statistics
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 
 __all__ = ["NOVEL_SCHEMA", "SUBSETS", "band_summary", "has_match_information", "injection_trend",
-           "normalize_novel_spec", "novel_candidates", "sme_ppm", "summarize"]
+           "normalize_novel_spec", "novel_candidates", "recommended_tolerance", "sme_ppm", "summarize"]
 
 NOVEL_SCHEMA = "novel-candidates.v1"
 #: `sme_ppm` の絞り込み。rank1 = rank の SME すべて、msms_matched = そのうち MS/MS が照合されたもの。
 SUBSETS = ("rank1", "msms_matched")
 #: 注入順との Spearman 相関を出す最小の試料数（これ未満は rho を None にする）。
 MIN_INJECTIONS_FOR_RHO = 5
+#: 勧める許容幅を出す最小の同定の数（これ未満は値を出さない。MAD が数個の値で決まってしまうため）。
+MIN_N_FOR_TOLERANCE = 10
+#: 勧める許容幅の MAD の倍数（尺度の補正 1.4826 は掛けない素の MAD。正規分布なら約 2σ）。
+TOLERANCE_MAD_FACTOR = 3.0
 _INVALID = "NOVEL_SPEC_INVALID"
 
 
@@ -91,8 +96,11 @@ def injection_trend(ds, rows: list[dict]) -> dict:
     実測 m/z（`ds.per_sample_mz`）と理論 m/z の差。注入順は割れの組の判定と同じ規則
     （`alignment_qc.sample_injection_order`。出所を `injection_order_source` に書く）。
     試料ごとの m/z が無ければ `{"status": "unavailable"}`。rho は、注入順の出所が
-    `filename`（採取時刻が読めない）か、データのある試料が `MIN_INJECTIONS_FOR_RHO` 未満なら
+    `filename`（採取時刻が読めない・試料の表が宣言でファイル名の順と書いた）か、データのある試料が
+    `MIN_INJECTIONS_FOR_RHO` 未満なら
     None で、理由を `rho_unavailable_reason`（`filename_order` / `too_few_samples`）に書く。
+    注入順が MS-DIAL の振った値（.mddata / mzTab-M）でファイル名の順と一致するなら、rho は出すが
+    `warnings` に `injection_order_may_be_file_order` を添える（MS-DIAL の既定はファイルの順）。
     """
     per_sample = getattr(ds, "per_sample_mz", None)
     if per_sample is None:
@@ -125,9 +133,34 @@ def injection_trend(ds, rows: list[dict]) -> dict:
         value = float(spearmanr([p["injection_order"] for p in per_injection],
                                 [p["median_ppm"] for p in per_injection]).statistic)
         rho = value if math.isfinite(value) else None      # 片方が定数なら相関は定義できない
+    warnings = []
+    if source != "filename":
+        from metabolomix.analysis.sample_manifest import injection_order_file_order_warning
+        flag = injection_order_file_order_warning(ds)
+        if flag is not None:
+            warnings.append(flag)
     return {"per_injection": per_injection, "spearman_rho": rho,
             **({"rho_unavailable_reason": reason} if reason else {}),
-            "n_samples": len(per_injection), "injection_order_source": source}
+            "n_samples": len(per_injection), "injection_order_source": source,
+            **({"warnings": warnings} if warnings else {})}
+
+
+def recommended_tolerance(values: list[float]) -> dict:
+    """測った質量誤差（ppm）から勧める `mz_tol_ppm`（材料。ここでは当てない）。
+
+    値は ``ceil(|中央値| + 3 × MAD)``（MAD は中央値からの絶対偏差の中央値。尺度の補正は掛けない）。
+    中心を 0 に置いた ±窓が、系統的なずれ（中央値）と散らばりの両方を覆う幅。中心をずらすなら
+    ``ppm_offset``（中央値）と ``3 × MAD`` の幅に分けて渡す。同定が ``MIN_N_FOR_TOLERANCE`` 未満なら
+    ``mz_tol_ppm`` は None で ``reason: too_few``。誤差がすべて同じ値でも 1 ppm を下回らせない。
+    """
+    n = len(values)
+    out = {"n": n, "basis": "ceil(|median| + 3*MAD)"}
+    if n < MIN_N_FOR_TOLERANCE:
+        return {**out, "mz_tol_ppm": None, "reason": "too_few", "min_n": MIN_N_FOR_TOLERANCE}
+    center = statistics.median(values)
+    mad = statistics.median(abs(v - center) for v in values)
+    width = math.ceil(abs(center) + TOLERANCE_MAD_FACTOR * mad - 1e-9)   # 浮動小数の端数で 1 上げない
+    return {**out, "mz_tol_ppm": float(max(1, width)), "median_ppm": center, "mad_ppm": mad}
 
 
 def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
@@ -138,11 +171,38 @@ def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
         chosen = [r["ppm"] for r in rows
                   if (low is None or r["theoretical_mz"] >= low)
                   and (high is None or r["theoretical_mz"] < high)]
-        bands.append({"min_mz": low, "max_mz": high, **summarize(chosen)})
-    return {"overall": summarize([r["ppm"] for r in rows]), "bands": bands}
+        bands.append({"min_mz": low, "max_mz": high, **summarize(chosen),
+                      "recommended_mz_tol_ppm": recommended_tolerance(chosen)["mz_tol_ppm"]})
+    values = [r["ppm"] for r in rows]
+    return {"overall": summarize(values), "bands": bands,
+            "recommended_tolerance": recommended_tolerance(values)}
 
 
 # ---------- 新しい知見の候補 ----------
+
+_STATISTICS_SHAPE = ("statistics は {result_id[, contrast_id, merge_split, alignment_qc]}（対比は "
+                     "result_id#contrast_id の形でも選べる）か {analysis_spec, analysis_id}")
+
+
+def _result_ref(stats_spec: dict) -> str:
+    """`statistics.result_id` と任意の `statistics.contrast_id` を `result_id[#contrast_id]` の 1 つの形にする。
+
+    `contrast_id` を書かない spec は `result_id` をそのまま（正規化した spec と `rule_hash` は前と同じ）。
+    書けば `result_id#contrast_id` の形と同じ文字列にする（同じ対比なら同じ `rule_hash`）。`result_id` の `#` の
+    後ろと食い違えば `DATASET_BAD_REQUEST`（`stats_results.split_result_ref`。ほかの対比を選ぶツールと同じ）。
+    """
+    result_id = str(stats_spec["result_id"])
+    contrast_id = stats_spec.get("contrast_id")
+    if contrast_id is None:
+        return result_id
+    if not isinstance(contrast_id, str) or not contrast_id.strip():
+        raise DomainError(_INVALID, "statistics.contrast_id は空でない文字列（省略可）",
+                          {"field": "statistics.contrast_id"})
+    from metabolomix.analysis.stats_results import split_result_ref
+
+    base, named = split_result_ref(result_id, contrast_id)
+    return f"{base}#{named}"
+
 
 def normalize_novel_spec(spec) -> dict:
     if not isinstance(spec, dict) or set(spec) - {"schema", "statistics", "ppm", "q_max", "exclude",
@@ -151,16 +211,15 @@ def normalize_novel_spec(spec) -> dict:
                           {})
     stats_spec = spec.get("statistics")
     if not isinstance(stats_spec, dict):
-        raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
-                          {"field": "statistics"})
-    if "result_id" in stats_spec and not set(stats_spec) - {"result_id", "merge_split",
+        raise DomainError(_INVALID, _STATISTICS_SHAPE, {"field": "statistics"})
+    if "result_id" in stats_spec and not set(stats_spec) - {"result_id", "contrast_id", "merge_split",
                                                             "alignment_qc"}:
         # 割れたスポットのまとめ（既定 true）。analysis_spec の側は features.merge_split で決める。
         merge = stats_spec.get("merge_split", True)
         if not isinstance(merge, bool):
             raise DomainError(_INVALID, "statistics.merge_split は true / false",
                               {"field": "statistics.merge_split"})
-        statistics_out = {"result_id": str(stats_spec["result_id"])}
+        statistics_out = {"result_id": _result_ref(stats_spec)}
         if merge:
             # 真（既定）のときだけ規則に載せる。false は v7 と同じ規則・同じ rule_hash になる
             statistics_out["merge_split"] = True
@@ -178,8 +237,7 @@ def normalize_novel_spec(spec) -> dict:
             raise DomainError(_INVALID, f"analysis_id が spec に無い（{ids}）",
                               {"field": "statistics.analysis_id"})
     else:
-        raise DomainError(_INVALID, "statistics は {result_id} か {analysis_spec, analysis_id}",
-                          {"field": "statistics"})
+        raise DomainError(_INVALID, _STATISTICS_SHAPE, {"field": "statistics"})
     ppm = spec.get("ppm", {"default": 10.0, "bands": []})
     if (not isinstance(ppm, dict) or set(ppm) - {"default", "bands"}
             or _number(ppm.get("default", 10.0)) is None):

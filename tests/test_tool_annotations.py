@@ -66,6 +66,7 @@ EXPECTED_ANNOTATIONS = {
     "load_dataset": LOCAL_WRITE_APPEND,
     # 受付番号の読み込みを引くだけ（ハンドルの登録と直近の切り替えは読み込みが終わるときに済んでいる）。
     "dataset_load_status": READ_ONLY,
+    "job_status": READ_ONLY,
     "dataset_list": READ_ONLY,
     "dataset_close": LOCAL_DELETE,
     # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
@@ -73,6 +74,8 @@ EXPECTED_ANNOTATIONS = {
     "dataset_claim_evidence": LOCAL_WRITE,
     "dataset_novel_candidates": LOCAL_WRITE,
     "dataset_alignment_qc": LOCAL_WRITE,
+    # output_path を渡したときだけ TSV を書く（既存のファイルを置き換える。同じ引数なら同じ内容）。
+    "dataset_sample_peaks": LOCAL_WRITE,
     # 定量: preview は読むだけ。apply / merge / select は呼ぶたびに新しい記録とハンドルを足す（追記）。
     "dataset_quant_preview": READ_ONLY,
     "dataset_quant_apply": LOCAL_WRITE_APPEND,
@@ -82,7 +85,6 @@ EXPECTED_ANNOTATIONS = {
     "dataset_homolog_check": READ_ONLY,
     "dataset_feature_relations": READ_ONLY,
     "dataset_mass_accuracy": READ_ONLY,
-    "dataset_sample_peaks": READ_ONLY,
     "docs_read": READ_ONLY,
     "dcl_diagnostic_ions": READ_ONLY,
     # --- Console のメソッドファイル（計画・実行・状態は pipeline 系） ---
@@ -97,6 +99,8 @@ EXPECTED_ANNOTATIONS = {
     "pipeline_status": READ_ONLY,
     "pipeline_resume": LOCAL_WRITE,
     "pipeline_cancel": LOCAL_WRITE,
+    # ISA / mwTab を sample-manifest.v2 にして raw フォルダへ書く。既存は overwrite=True が要り、同じ引数の再実行は同じ表になる。
+    "pipeline_sample_sheet": LOCAL_WRITE,
     # --- DCL ---
     "dcl_find_msms": READ_ONLY,
     # --- 参照ライブラリ（MS/MS スペクトル照合） ---
@@ -156,6 +160,16 @@ class ToolAnnotationTests(unittest.TestCase):
         actual = actual_annotations()
         for name, expected in EXPECTED_ANNOTATIONS.items():
             self.assertEqual(actual[name], expected, name)
+
+    def test_tools_that_write_to_a_given_path_are_not_read_only(self):
+        """書き出し先の引数（`output_path` など）を持つツールは、渡せばファイルを書く（既存を置き換えうる）。
+        readOnlyHint=True だと、読み取り専用を承認なしで通すクライアントが黙って上書きを許す。"""
+        writers = {"output_path", "output_dir", "output_file", "out_path", "save_path"}
+        tools = asyncio.run(server.mcp.list_tools())
+        offenders = sorted(t.name for t in tools
+                           if writers & set((t.inputSchema or {}).get("properties", {}))
+                           and t.annotations is not None and t.annotations.readOnlyHint)
+        self.assertEqual(offenders, [], f"書き出し先の引数を持つのに readOnlyHint=True: {offenders}")
 
     def test_external_network_tools_also_declare_open_world(self):
         """openWorldHint が無いと汎用クライアントがネットワークゲートを迂回する。"""

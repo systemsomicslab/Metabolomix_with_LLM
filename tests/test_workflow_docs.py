@@ -23,8 +23,8 @@ HEADING_RE = re.compile(r"^##\s+(?P<tool>[a-z][a-z0-9_]*)\s*$", re.MULTILINE)
 
 # 設計書 §4 の対象範囲表と一対一で対応する。増減させる場合は設計書も直すこと。
 IN_SCOPE: dict[str, tuple[str, ...]] = {
-    "dataset.md": ("list_data_files", "load_dataset", "dataset_load_status", "dataset_list",
-                   "dataset_close", "dataset_status", "dataset_exclude"),
+    "dataset.md": ("list_data_files", "load_dataset", "dataset_load_status", "job_status",
+                   "dataset_list", "dataset_close", "dataset_status", "dataset_exclude"),
     "dcl.md": ("dcl_find_msms", "dcl_spot_spectrum", "dcl_diagnostic_ions"),
     "plots.md": ("dataset_plot", "save_figure"),
     "dataset_analysis.md": (
@@ -34,7 +34,7 @@ IN_SCOPE: dict[str, tuple[str, ...]] = {
     ),
     "pipeline.md": (
         "pipeline_plan", "pipeline_run", "pipeline_status",
-        "pipeline_resume", "pipeline_cancel",
+        "pipeline_resume", "pipeline_cancel", "pipeline_sample_sheet",
         "console_method_candidates", "console_method_template",
     ),
     "library.md": ("library_load", "library_match_feature", "library_plot_mirror",
@@ -178,4 +178,4 @@ class TestScopeBoundary(unittest.TestCase):
             registered,
             "対象範囲の分類と登録済みツールが一致しない",
         )
-        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 51)
+        self.assertEqual(sum(len(v) for v in IN_SCOPE.values()), 53)

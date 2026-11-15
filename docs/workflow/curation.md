@@ -67,7 +67,7 @@ flowchart TD
 9. │  └─ metabolomix/curation/flags.py  orphaned_count()（以前の版の `.arf2` に付いたフラグ → `warnings`）
 10. │  └─ metabolomix/curation/flags.py  cleared_spots()（人が取り消したスポット → `flag_cleared`）
 11. │  └─ metabolomix/curation/apply.py  confirmed_spots()（記録の confirmed ∪ `_tags.xml` の Confirmed − 最新が wrong / suspect → `confirmed`）
-12. │  └─ metabolomix/curation/evidence.py  collect()
+12. │  └─ metabolomix/curation/evidence.py  collect()（参照が引けなければ m/z は `msdial/peak_verification.py` `mass_error_ppm()`、`adduct_band` は `adduct_consistency()`。どちらも表に無いアダクトの綴りを `msdial/adducts.py` `parse_adduct()` で読み、クラスの典型とは `same_adduct()` で比べる）
 13. │     ├─ metabolomix/curation/evidence.py  _arf_rows()
 14. │     │  └─ metabolomix/arf/reader.py  deserialize()
 15. │     ├─ metabolomix/curation/evidence.py  _check_file_ids()（`.arf` に無い `file_ids` は `UnknownFileIdsError` → エラー payload）
@@ -84,7 +84,7 @@ flowchart TD
 26. │     ├─ metabolomix/curation/eic_shape.py  spot_shape()
 27. │     ├─ metabolomix/curation/evidence.py  _downsample_points()（形状計算の後に payload だけ間引く）
 28. │     ├─ metabolomix/curation/isotope.py  measured_envelope()（→ `isotopes.measured`）
-29. │     └─ metabolomix/curation/isotope.py  theoretical_envelope()（組成式＋アダクトの原子。`msdial/adducts.py` `adduct_composition()` → `isotopes.theoretical`）
+29. │     └─ metabolomix/curation/isotope.py  theoretical_envelope()（イオンの組成＝組成式の n_mol 倍＋アダクトの原子。`msdial/adducts.py` `ion_counts()` → `envelope_ratios()` → `isotopes.theoretical`）
 30. │  └─ metabolomix/curation/trend.py  composition()（`LipidParser` はモジュールで 1 つだけ作る）
 31. │  └─ metabolomix/curation/trend.py  fit_trends()
 32. │  └─ metabolomix/curation/review.py  _adduct_isomer_pool()（対象に絞らずアラインメントの注釈付き全スポット）
@@ -92,8 +92,8 @@ flowchart TD
 34. │     ├─ metabolomix/arf2/reader.py  load_catalog()（同じファイルならキャッシュ済み）
 35. │     └─ metabolomix/curation/adduct_isomer.py  pool_entry()（`evidence_tier()` で証拠の段階を付ける）
 36. │  └─ metabolomix/curation/judge.py  lipid_rules_active()（脂質規則フラグが 1 件でも True か）
-37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す → `adduct_isomer`）
-38. │  └─ metabolomix/curation/judge.py  judge_spot()
+37. │  └─ metabolomix/curation/adduct_isomer.py  find_adduct_isomer()（有効な `wrong` フラグのスポットは相手から外す。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除く → `adduct_isomer`）
+38. │  └─ metabolomix/curation/judge.py  judge_spot()（参照と注釈のアダクトの違い `adduct_differs_from_reference` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 39. │  └─ metabolomix/curation/judge.py  auto_note()（判定根拠の文 → `auto_note`）
 40. metabolomix/tools/curation_tools.py  _open_submit()
 41. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
@@ -123,7 +123,7 @@ flowchart TD
 10. │  └─ metabolomix/curation/trend.py  fit_trends()（相手 Y = 注釈付きで対象でも wrong / redundant でもないスポットの傾向）
 11. │  └─ metabolomix/curation/evidence.py  collect()（`keep_measured=True` で対象の証拠を集める）
 12. │  └─ metabolomix/curation/candidates.py  build_library_candidates()（① MS-DIAL の下位候補 ② 閾値を緩めた再検索）
-13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明）
+13. │  └─ metabolomix/curation/relations.py  find_relations()（④ 別スポットの同位体・アダクト・インソース断片としての説明。Y 自身のアダクトは `msdial/adducts.py` `same_adduct()` で組成で除き、同位体の期待比は Y のイオンの組成の `curation/isotope.py` `isotopologues()` のうち X の窓に入るものの和）
 14. metabolomix/tools/curation_tools.py  _open_submit()
 15. └─ metabolomix/curation/submit_server.py  register()（受け口が無ければ 127.0.0.1 の空きポートで起動。失敗したら `submit.via = "copy"`）
 16. metabolomix/curation/suggest.py  save_suggestion()
@@ -140,11 +140,17 @@ flowchart TD
 レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
 データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダの順（`data/` は探さない。
 サーバ再起動の後でも、貼った文なら送れる）。どれも無ければ `missing_state("dataset", ["load_dataset"])`。
+送信用テキストも `review_id` も無ければ、データセットの `.arf2` に対する最新のレビューを使う
+（`_latest_review_for_submit()` → `suggest.latest_review()`。無ければ `missing_state("curation_review")`。
+`assign` / `redundant` の要素があれば `cs-…` を求めるエラー）。そうして選んだレビューに `submit_flags()` が
+拒んだとき（対象外のスポットなど）も、エラーに `review_id` と `review_id_source: "latest"` を添える。
 書いた後、同じ `.arf2` を持つ開いているハンドルすべての `curation_flags` を読み直す
 （`submission.after_write` → `curation_tools._refresh_open_handles`。ハンドルごとにそのハンドルのロックの下で
 1 つずつ、`REFRESH_LOCK_TIMEOUT` 秒だけ待つ。取れなければ `open_handles.not_refreshed`）。
 
 1. metabolomix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
+1. metabolomix/tools/curation_tools.py  _latest_review_for_submit()（`review_id` も送信用テキストも無いとき）
+1. └─ metabolomix/curation/suggest.py  latest_review()
 2. metabolomix/curation/review.py  is_valid_review_id()（形が違えばパスに使う前にエラー。`cs-…` は metabolomix/curation/suggest.py  is_valid_suggestion_id() も許す）
 3. metabolomix/tools/curation_tools.py  _find_review()
 4. └─ metabolomix/tools/curation_tools.py  _load_any()

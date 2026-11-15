@@ -302,3 +302,13 @@ def test_auto_note_names_the_partner_and_the_adduct():
     spot.update(judge.judge_spot(spot, None, TH))
     note = judge.auto_note(spot, TH)
     assert "#189 DGDG 35:1|DGDG 16:0_19:1" in note and "[M-H]-" in note and "-1.2 ppm" in note
+
+
+@pytest.mark.parametrize("spot, reference", [
+    ("[M+HCOO]-", "[M+FA-H]-"), ("[M+HCOO]-", "[M+CHO2]-"), ("[M+CH3COO]-", "[M+Hac-H]-"),
+    ("[M+H]+", "[M+H]1+"), ("[M-H2O+H]+", "[M+H-H2O]+"),
+])
+def test_same_ion_spelled_differently_is_not_an_adduct_difference(spot, reference):
+    """参照と注釈のアダクトは綴りでなく組成で比べる（最終検証 F31）。同じイオンの別の書き方では立てない。"""
+    result = judge.judge_spot(ev(adduct=spot, reference_adduct=reference), None, TH)
+    assert "adduct_differs_from_reference" not in result["info"]

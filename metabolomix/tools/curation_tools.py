@@ -313,7 +313,7 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
     （記録と `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを
     貼るよう頼まない。Copy のテキストが貼られたとき（受け口の時間切れ・`submit.via == "copy"`）は
     curation_submit(submission_text=...) に渡す。
-    **ユーザーの同意なしに curation_submit を呼ばない。**
+    戻り値の `library` は使った参照ライブラリのファイル名（`file`）と `sha256`（置き場所は出さない）。
     """
     holder, arf2_path = _dataset_context(dataset_handle)
     if arf2_path is None:
@@ -358,7 +358,8 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
         "table": table, "n_table_rows_shown": len(table.splitlines()) - 1,
         "html_path": str(saved["html"]),
         "submit": submit_info,
-        "library": {**result["library"], "path": _file_name(holder.library.source_path)},
+        "library": {"file": _file_name(holder.library.source_path),
+                    "sha256": (result.get("library") or {}).get("sha256")},
         "analysis_params": {k: result["analysis_params"][k] for k in ("source", "path", "rt_window")},
         "options": result["options"], "thresholds": th}, 4))
 
@@ -376,8 +377,12 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     候補付け（`cs-…`）の送信は `flags=[{spot_id, flag: assign|redundant|clear, candidate: "L1"|"R1",
     level: sum|species, note}]`。候補の中身（名前・InChIKey）は保存済みの候補付けから展開するので、
     送信側で名前を書かない。assign / redundant は `_tags.xml` を変えない。
-    `source` は誰の判断か: ユーザー自身の判断は "user"、LLM の提案にユーザーがチャットで同意した
-    ものは "llm"。**ユーザーの同意なしに呼ばない。**
+    `source` は判断の出どころ: ユーザーが出した判断は "user"（既定。ビューアの送信はいつも "user"）、
+    LLM が出した判断は "llm"。記録の各行に残り、curation_flags の source 列に出る。
+    `review_id` を省くと（送信用テキストも無いとき）、データセット（`dataset_handle`、省けば直近）の
+    `.arf2` に対する最新のレビュー（`cr-…`）を使い、戻り値の `review_id` と `review_id_source: "latest"` で示す
+    （そのレビューに拒まれたエラー——対象外のスポットなど——にも同じ 2 つが付く）。
+    候補付け（`cs-…`）への送信は `review_id` を省けない。
     不正な要素が 1 つでもあれば何も書かずにエラーを返す（同じ spot_id を 1 回の送信で
     2 回以上名指しした場合も含む——どちらを採るか決められないため）。
     レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセット（`dataset_handle`、
@@ -404,8 +409,12 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
         review_id, entries, text_arf2 = parsed["review_id"], parsed["flags"], parsed["arf2_path"]
     else:
         entries = flags
+    latest = None
     if not review_id:
-        return _error("review_id がありません。")
+        latest = _latest_review_for_submit(dataset_handle, entries)
+        if isinstance(latest, str):
+            return latest
+        review_id = latest["review_id"]
     bad = _bad_review_id(review_id)
     if bad:
         return bad
@@ -423,8 +432,34 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     try:
         result = submission.submit_flags(saved, entries, review_id=review_id, source=source)
     except submission.SubmissionError as exc:
-        return _error(str(exc), **exc.details)
+        if latest is None:
+            return _error(str(exc), **exc.details)
+        # 自動で選んだレビューに拒まれたときも、どのレビューを使ったかを示す（より広い前のレビューを
+        # 飛ばした可能性があるため。対象外のスポットなら review_id を渡して呼び直す）
+        return _error(f"{exc}（review_id を省いたので、このアラインメントの最新のレビュー {review_id} を"
+                      "使いました。別のレビューに送るなら review_id を渡してください。）",
+                      **{**exc.details, "review_id": review_id, "review_id_source": "latest"})
+    if latest is not None:
+        result["review_id_source"] = "latest"
     return json_payload(result)
+
+
+def _latest_review_for_submit(dataset_handle, entries):
+    """`review_id` を省いた送信が使う、このアラインメントの最新のレビュー（dict）か封筒（str）。"""
+    if isinstance(entries, list) and any(isinstance(e, dict) and e.get("flag") in ("assign", "redundant")
+                                         for e in entries):
+        return _error("候補付け（assign / redundant）の送信は review_id（cs-…。curation_suggest の "
+                      "suggestion_id）を渡してください。")
+    holder, arf2_path = _dataset_context(dataset_handle)
+    if arf2_path is None:
+        return holder
+    latest = suggest.latest_review(arf2_path, flag_log.alignment_key(arf2_path)["alignment_sha256"])
+    if latest is None:
+        return mcp_errors.missing_state(
+            "curation_review", ["curation_review"],
+            "review_id を省きましたが、このアラインメントのレビューがありません。先に curation_review を"
+            "実行するか、review_id を渡してください。")
+    return latest
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)

@@ -66,6 +66,9 @@ precursor m/z（任意で RT）に一致する MS/MS を引く。アノテーシ
 - `.dcl` は測定ファイル 1 つにつき 1 個なので、**特定サンプルの MS/MS が欲しいときは `file_path` を明示すること**（省くとアラインメントの `.dcl` を読む）。
 
 `dcl_spot_spectrum` と `dcl_diagnostic_ions` も同じ `.dcl` を `dataset_handle` / 直近のデータセットから読む（引数は `USAGE.md`）。
+`dcl_spot_spectrum` の `ion_mode` は `.arf2` の代表の極性をそのまま小文字にした文字列（`positive` / `negative` /
+`both` / `unknown`）。上の表の `ion_mode`（パーサの生の列挙値）とは別物で、`library_match_feature` の照合の
+絞り込み（`both` / `unknown` は絞らない）とも別に、`both` と `unknown` を見分けられるように残している。
 
 ### 6.5 `.dcl` が読めないとき
 

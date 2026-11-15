@@ -195,29 +195,79 @@ def test_read_mapping_accepts_mode_aliases(tmp_path):
 
 
 def test_lock_timeout_is_busy(tmp_path, monkeypatch):
+    """ロックを待ちきれなければ、ほかのツールと同じ `HANDLE_BUSY`（何もせず、新しいハンドルも作らない）。
+    ロックを持つのが長い道具の仕事なら、その受付番号と道具を名指して `job_status` へ案内する。"""
     import threading
+    import time
+
+    from metabolomix.core import handle_dispatch
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     hp, hn = _open(pos, "positive"), _open(neg, "negative")
-    monkeypatch.setattr(qm, "LOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr(handle_dispatch, "HANDLE_LOCK_WAIT", 0.2)
     held, release = threading.Event(), threading.Event()
     blocker = handles.registry.get(max(hp, hn))
 
     def hold():
         with blocker.lock:
+            blocker.running_job = {"job_id": "job_x", "tool": "pathway_project",
+                                   "since": time.monotonic()}
             held.set()
             release.wait(5)
+            blocker.running_job = None
     t = threading.Thread(target=hold)
     t.start()
     held.wait(5)
+    n_before = len(handles.registry.list())
     try:
         out = json.loads(_tool()(hp, hn))
     finally:
         release.set()
         t.join()
-    assert out["error"]["code"] == "QUANT_HANDLE_BUSY"
+    error = out["error"]
+    assert error["code"] == "HANDLE_BUSY"
+    assert error["details"]["dataset_handle"] == blocker.handle_id
+    assert error["details"]["job_id"] == "job_x" and error["details"]["tool"] == "pathway_project"
+    assert error["required_tools"] == ["job_status"] and "job_x" in error["details"]["next"]
+    assert len(handles.registry.list()) == n_before          # 何も登録していない
     ok = json.loads(_tool()(hp, hn))  # 取ったロックは戻っている
     assert ok["status"] == "merged"
+
+
+class _SlowLock:
+    """取るのに `delay` 秒かかるロック（取れたか・渡された待ちの上限を覚える）。"""
+
+    def __init__(self, delay: float, ok: bool):
+        self.delay, self.ok, self.timeouts, self.released = delay, ok, [], 0
+
+    def acquire(self, blocking=True, timeout=-1):
+        self.timeouts.append(timeout)
+        import time
+        time.sleep(self.delay)
+        return self.ok
+
+    def release(self):
+        self.released += 1
+
+
+def test_lock_wait_is_one_deadline_across_both_handles(tmp_path, monkeypatch):
+    """2 つのハンドルのロックの待ちは合わせて最長 `HANDLE_LOCK_WAIT`（1 本ごとではない）。1 本目に時間を
+    使ったら、2 本目はその残りしか待たない。待ちきれなければ取った 1 本目も放して何もしない。"""
+    from metabolomix.core import handle_dispatch
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    monkeypatch.setattr(handle_dispatch, "HANDLE_LOCK_WAIT", 1.0)
+    first, second = sorted((handles.registry.get(hp), handles.registry.get(hn)),
+                           key=lambda h: h.handle_id)
+    first.lock, second.lock = _SlowLock(0.4, True), _SlowLock(0.0, False)
+    out = json.loads(_tool()(hp, hn))
+    assert out["error"]["code"] == "HANDLE_BUSY"
+    assert out["error"]["details"]["dataset_handle"] == second.handle_id
+    assert "job_id" not in out["error"]["details"]       # 長い仕事の持ち物ではない
+    assert first.lock.timeouts == [pytest.approx(1.0, abs=0.05)]
+    assert 0 <= second.lock.timeouts[0] <= 0.65           # 残り（1.0 - 0.4）だけ。1 本ごとの 1.0 ではない
+    assert first.lock.released == 1 and second.lock.released == 0
 
 
 def test_merge_by_exact_name(tmp_path, monkeypatch):
@@ -229,14 +279,54 @@ def test_merge_by_exact_name(tmp_path, monkeypatch):
     assert list(merged.feature_matrix[row]) == [60.0, 30.0, 40.0]  # a は NEG の 3 列目
 
 
-def test_merge_requires_quant_state(tmp_path, monkeypatch):
+def _record(tmp_path, record_id):
+    return json.loads((tmp_path / "run" / "reports" / "quant"
+                       / f"{record_id}.json").read_text(encoding="utf-8"))
+
+
+def test_merge_accepts_datasets_without_quant_state(tmp_path, monkeypatch):
+    """dataset_quant_apply も skip も通っていない 2 つは、未正規化のまま統合して記録に書く。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.quant_state = neg.quant_state = None
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert info["normalized"] is False and info["unit"] is None
+    st = merged.quant_state
+    assert st["normalized"] is False and st["method"] is None and st["unit"] is None
+    assert st["steps"] == ["merge"] and st["skipped"] == [] and st["internal_standard_ids"] == []
+    assert list(merged.feature_matrix[merged.feature_ids.index("negative:0")]) == [30.0, 40.0, 60.0]
+    rec = _record(tmp_path, info["record_id"])
+    assert rec["parent_ids"] == []  # 親の記録が無い
+    assert rec["settings"]["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert rec["summary"]["normalized"] is False
+
+
+def test_merge_treats_not_run_like_skipped(tmp_path, monkeypatch):
+    """skip=True で飛ばした側と、正規化を通っていない側は同じ未正規化として統合する。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path, unit=None)  # 両方 skip
+    neg.quant_state = None
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "skipped", "negative": "not_run"}
+    assert merged.quant_state["skipped"] == ["normalize"]
+    rec = _record(tmp_path, info["record_id"])
+    assert rec["parent_ids"] == ["q_pos"]
+    assert rec["settings"]["normalize"] == {"positive": "skipped", "negative": "not_run"}
+
+
+def test_merge_still_refuses_normalized_with_not_run(tmp_path, monkeypatch):
+    """片方だけ正規化済みなら、もう片方が正規化を通っていなくても混ぜない。"""
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     neg.quant_state = None
     with pytest.raises(DomainError) as exc:
         _merge(pos, neg, mapping_rows=None)
-    assert exc.value.code == "QUANT_NORMALIZE_STEP_REQUIRED"
-    assert "dataset_quant_apply" in exc.value.message and "skip" in exc.value.message
+    assert exc.value.code == "QUANT_MERGE_STATE_MISMATCH"
+    d = exc.value.details
+    assert d["differs"]["normalized"] == [True, False] and d["differs"]["unit"] == ["nmol", None]
+    assert d["normalize"] == {"positive": "applied", "negative": "not_run"}
+    assert not (tmp_path / "run" / "reports").exists()  # 何も書かない
 
 
 def test_merged_ids_and_origin(tmp_path, monkeypatch):
@@ -258,6 +348,30 @@ def test_merged_ids_and_origin(tmp_path, monkeypatch):
     assert set(pos.feature_tags) == {"1"}  # 元は不変
     assert merged.msdial_samples[0]["name"] == "S1"
     assert merged.roles.keys() == {"S1", "S2", "S3"} and merged.sample_meta.keys() == {"S1", "S2", "S3"}
+
+
+@pytest.mark.parametrize("pos_source,neg_source,expected", [
+    ("formula_adduct", "formula_adduct", "formula_adduct"),
+    ("mztab", "mztab", "mztab"),
+    ("formula_adduct", "mztab", "mixed"),
+])
+def test_merged_theoretical_mz_source(tmp_path, monkeypatch, pos_source, neg_source, expected):
+    """SME の理論 m/z の出所は統合後も残す（2 極性で違えば mixed。質量精度の読み方が変わるため）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.theoretical_mz_source, neg.theoretical_mz_source = pos_source, neg_source
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.theoretical_mz_source == expected
+
+
+def test_merged_theoretical_mz_computed_ids(tmp_path, monkeypatch):
+    """計算した理論 m/z の特徴は統合後の ID で持つ（根拠バンドルが特徴ごとに来歴へ写すかを決める）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.theoretical_mz_computed, neg.theoretical_mz_computed = {"1"}, set()
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.theoretical_mz_computed == {"positive:1"}
+    assert pos.theoretical_mz_computed == {"1"}  # 元は不変
 
 
 def test_merged_quant_state_and_record(tmp_path, monkeypatch):
@@ -437,13 +551,24 @@ def test_tool_refusals_are_coded(tmp_path, monkeypatch):
         "QUANT_MERGE_POLARITY_INVALID", "QUANT_MERGE_STATE_MISMATCH")
 
 
-def test_tool_normalize_step_required(tmp_path, monkeypatch):
+def test_tool_merges_without_normalize_step(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.quant_state = neg.quant_state = None
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["normalized"] is False
+    assert out["normalize"] == {"positive": "not_run", "negative": "not_run"}
+
+
+def test_tool_refuses_mixed_normalization_with_not_run(tmp_path, monkeypatch):
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     neg.quant_state = None
     hp, hn = _open(pos, "positive"), _open(neg, "negative")
     err = json.loads(_tool()(hp, hn))["error"]
-    assert err["code"] == "QUANT_NORMALIZE_STEP_REQUIRED" and "dataset_quant_apply" in err["message"]
+    assert err["code"] == "QUANT_MERGE_STATE_MISMATCH"
+    assert err["details"]["normalize"] == {"positive": "applied", "negative": "not_run"}
 
 
 def test_tool_rules_unavailable_envelope(tmp_path, monkeypatch):
@@ -478,16 +603,17 @@ def test_merge_refuses_non_msdial_source(tmp_path, monkeypatch):
     assert not (tmp_path / "run" / "reports").exists()
 
 
-def test_merge_requires_normalize_step_not_just_any_state(tmp_path, monkeypatch):
-    """quant_state があっても、正規化（か、その skip）を通っていなければ統合しない。"""
+def test_merge_accepts_selected_but_unnormalized(tmp_path, monkeypatch):
+    """選別だけ通した（skip も挟めない）2 つも、未正規化どうしとして統合する。"""
     _point(tmp_path, monkeypatch)
     pos, neg = _pair(tmp_path)
     for ds, rid in ((pos, "q_p"), (neg, "q_n")):
         ds.quant_state = qd.quant_state(normalized=False, method=None, unit=None, record_id=rid,
                                         steps=["select"], skipped=[])
-    with pytest.raises(DomainError) as exc:
-        _merge(pos, neg, mapping_rows=None)
-    assert exc.value.code == "QUANT_NORMALIZE_STEP_REQUIRED"
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert info["normalize"] == {"positive": "not_run", "negative": "not_run"}
+    assert merged.quant_state["steps"] == ["select", "merge"]
+    assert _record(tmp_path, info["record_id"])["parent_ids"] == ["q_p", "q_n"]
 
 
 def test_tool_checks_handle_capacity_before_writing(tmp_path, monkeypatch):
@@ -512,3 +638,181 @@ def test_read_mapping_non_utf8_is_bad_request(tmp_path):
         qm.read_mapping(path)
     assert exc.value.code == "QUANT_BAD_REQUEST"
     assert "map.csv" in exc.value.message and str(path.parent) not in exc.value.message
+
+
+# ---- 探索専用の印と、統合したデータセットの正規化（F4・F10） ----
+
+def test_merge_carries_exploratory_from_either_side(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.exploratory_only is False and merged.exploratory_reason is None
+    assert "exploratory" not in info
+    neg.exploratory_only, neg.exploratory_reason = True, "解析ジョブが完了していない（status failed）"
+    merged, info = _merge(pos, neg, mapping_rows=None)  # POS だけの写しでは落ちていた
+    assert merged.exploratory_only is True
+    assert merged.exploratory_reason == "negative: 解析ジョブが完了していない（status failed）"
+    assert info["exploratory"] == {"exploratory_only": True, "reason": merged.exploratory_reason}
+    pos.exploratory_only, pos.exploratory_reason = True, None
+    merged, _ = _merge(pos, neg, mapping_rows=None)
+    assert merged.exploratory_reason == ("positive: incomplete analysis run (exploratory only); "
+                                         "negative: 解析ジョブが完了していない（status failed）")
+    assert pos.exploratory_reason is None  # 元は不変
+
+
+def test_merge_takes_weaker_source_verification(tmp_path, monkeypatch):
+    """出所の裏取りも POS だけの写しにしない（書き出しのメタ行で NEG の特徴まで verified を名乗る）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.source_verification = neg.source_verification = "verified"
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.source_verification == "verified"
+    assert "source_verification" not in info  # 陽陰で同じなら欄は無い
+    for neg_value, expected in (("direct_unverified", "direct_unverified"),
+                                ("legacy_unverified", "legacy_unverified"),
+                                ("something_new", "something_new")):  # 知らない値はいちばん弱い
+        neg.source_verification = neg_value
+        merged, info = _merge(pos, neg, mapping_rows=None)
+        assert merged.source_verification == expected
+        assert info["source_verification"] == {"merged": expected, "positive": "verified",
+                                               "negative": neg_value}
+    pos.source_verification, neg.source_verification = "direct_unverified", "legacy_unverified"
+    merged, info = _merge(pos, neg, mapping_rows=None)  # POS の側が弱くても弱いほう
+    assert merged.source_verification == "direct_unverified"
+    assert info["source_verification"]["merged"] == "direct_unverified"
+    assert pos.source_verification == "direct_unverified"  # 元は不変
+    assert neg.source_verification == "legacy_unverified"
+
+
+def test_tool_merge_returns_source_verification(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.source_verification, neg.source_verification = "verified", "direct_unverified"
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["source_verification"] == {"merged": "direct_unverified",
+                                          "positive": "verified",
+                                          "negative": "direct_unverified"}
+    merged = handles.registry.get(out["dataset_handle"]).dataset
+    assert merged.source_verification == "direct_unverified"
+
+
+def test_tool_merge_returns_exploratory(tmp_path, monkeypatch):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    neg.exploratory_only, neg.exploratory_reason = True, "r-neg"
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    out = json.loads(_tool()(hp, hn))
+    assert out["exploratory"] == {"exploratory_only": True, "reason": "negative: r-neg"}
+    assert handles.registry.get(out["dataset_handle"]).dataset.exploratory_only is True
+
+
+def test_merged_dataset_is_not_normalized(tmp_path, monkeypatch):
+    """内部標準は極性ごとなので、統合したデータセットは正規化しない。skip=True も統合の状態
+    （極性ごとの .arf2・内部標準）を消して極性を取り違えたハンドルを作るので掛けない。"""
+    from metabolomix.quant.inputs import reference_input
+    from tests.test_quant_normalize import REF
+
+    _point(tmp_path, monkeypatch)
+    ref = tmp_path / "ref.csv"
+    ref.write_text(REF, encoding="utf-8")
+    for unit, root in ((None, "run_a"), ("nmol", "run_b")):  # 未正規化どうし・正規化どうし
+        pos, neg = _pair(tmp_path, unit=unit, root=root)
+        merged, info = _merge(pos, neg, mapping_rows=None, pos_handle_id="dh_p",
+                              neg_handle_id="dh_n")
+        records = tmp_path / root / "reports" / "quant"
+        before = sorted(p.name for p in records.iterdir())
+        for call in (lambda: qn.preview(merged, reference_input(str(ref)), None, "positive"),
+                     lambda: qn.apply(merged, reference_input(str(ref)), None, "positive"),
+                     lambda: qn.skip(merged, "positive")):
+            with pytest.raises(DomainError) as exc:
+                call()
+            assert exc.value.code == "QUANT_ALREADY_MERGED", unit
+            assert exc.value.details == {"record_id": info["record_id"],
+                                         "parent_handles": {"positive": "dh_p", "negative": "dh_n"}}
+        assert sorted(p.name for p in records.iterdir()) == before  # 記録を書かない
+
+
+# ---- アッセイ種別は両側から（最終検証 F19） ----
+
+@pytest.mark.parametrize("pos_kind, neg_kind, expected, noted", [
+    ("unknown", "unknown", "unknown", False),
+    ("lipid", "lipid", "lipid", False),
+    ("unknown", "lipid", "lipid", True),       # 陰イオンにだけ記録した種別を落とさない
+    ("metabolite", "unknown", "metabolite", True),
+    ("metabolite", "lipid", "unknown", True),  # 食い違えば、どちらの解釈規則も黙って当てない
+])
+def test_merge_takes_assay_kind_from_both_sides(tmp_path, monkeypatch, pos_kind, neg_kind, expected, noted):
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.assay_kind, neg.assay_kind = pos_kind, neg_kind
+    merged, info = _merge(pos, neg, mapping_rows=None)
+    assert merged.assay_kind == expected and info["assay_kind"] == expected
+    assert ("notes" in info) is noted
+    if noted:
+        assert len(info["notes"]) == 1 and "assay_kind" in info["notes"][0]
+    if expected == "unknown" and noted:
+        assert "record_objective" in info["notes"][0] and "食い違う" in info["notes"][0]
+    assert (pos.assay_kind, neg.assay_kind) == (pos_kind, neg_kind)  # 元は不変
+
+
+def test_tool_merge_carries_the_kind_recorded_on_the_negative_handle(tmp_path, monkeypatch):
+    """陰イオンのハンドルが直近のときに record_objective(assay_kind="lipid") した（陰イオンだけが lipid）。"""
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    handles.registry.get(hn).dataset.assay_kind = "lipid"
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["assay_kind"] == "lipid"
+    assert any("negative の lipid" in note for note in out["notes"])
+    merged = handles.registry.get(out["dataset_handle"])
+    assert merged.dataset.assay_kind == "lipid"
+    assert session_state.session.assay_kind == "lipid"   # 統合したハンドルが直近
+    assert handles.registry.get(hp).dataset.assay_kind == "unknown"
+
+
+def test_conflicting_kinds_send_the_user_to_the_parent_handles(tmp_path, monkeypatch):
+    """陽陰の種別が食い違うときの注記は、誤っている側の極性のハンドルへ記録し直して統合し直すよう言う
+    （レビュー V1）。統合したハンドルは陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると
+    陽イオンの解析フォルダの目的を書き換え、開き直した陽イオンのデータセットの種別まで変わる。注記どおりに
+    すれば、陽イオンの目的は 1 バイトも変わらず、統合し直したハンドルが揃った種別を持つ。"""
+    from metabolomix.core import mcp_core
+    from metabolomix.tools import objective
+
+    _point(tmp_path, monkeypatch)
+    pos, neg = _pair(tmp_path)
+    pos.analysis_dir = str(tmp_path / "run" / "pos")
+    neg.analysis_dir = str(tmp_path / "run" / "neg")
+    hp, hn = _open(pos, "positive"), _open(neg, "negative")
+    objective.record_objective("study", assay_kind="metabolite", dataset_handle=hp)
+    objective.record_objective("study", assay_kind="lipid", dataset_handle=hn)
+    pos_file = tmp_path / "run" / "pos" / "reports" / "study.objective.md"
+    before = pos_file.read_bytes()
+
+    out = json.loads(_tool()(hp, hn))
+    assert out["status"] == "merged" and out["assay_kind"] == "unknown"
+    (note,) = out["notes"]
+    assert "食い違う" in note and hp in note and hn in note and "統合し直す" in note
+    assert out["dataset_handle"] not in note and "統合したハンドル>" not in note
+
+    def recalled(holder_id, ds):
+        return objective.recall_assay_kind(ds, mcp_core._report_dir_candidates(handles.registry.get(holder_id)))[0]
+
+    # 注記どおり、誤っている側（陰イオン）を直して統合し直す
+    objective.record_objective("study", assay_kind="metabolite", dataset_handle=hn)
+    again = json.loads(_tool()(hp, hn))
+    assert again["assay_kind"] == "metabolite" and "notes" not in again
+    assert handles.registry.get(again["dataset_handle"]).dataset.assay_kind == "metabolite"
+    # 陽イオンの解析フォルダの目的は書き換わらず、開き直したときの種別もそれぞれの記録のまま
+    assert pos_file.read_bytes() == before
+    assert recalled(hp, pos) == "metabolite" and recalled(hn, neg) == "metabolite"
+
+
+def test_single_parent_derive_keeps_the_kind(tmp_path, monkeypatch):
+    """正規化・選別の派生（親 1 つ）は親の種別をそのまま持つ。"""
+    pos, _neg = _pair(tmp_path)
+    pos.assay_kind = "metabolite"
+    ones = np.ones((len(pos.feature_ids), 2))
+    new = qd.derive(pos, matrix=ones, detected=np.ones(ones.shape, dtype=bool),
+                    sample_names=["S1_pos", "S2_pos"], state=pos.quant_state)
+    assert new.assay_kind == "metabolite"

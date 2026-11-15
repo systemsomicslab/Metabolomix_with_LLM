@@ -36,7 +36,6 @@ def test_empty_steps_is_no_preprocessing():
 
 @pytest.mark.parametrize("recipe", [
     {"steps": ["impute"], "bogus": 1},                       # 未知のキー
-    {"steps": ["impute"], "normalize": {"method": "pqn"}},    # steps に無い段の設定
     {"steps": ["impute", "impute"]},                          # 重複
     {"steps": ["sort"]},                                      # 未知の段
     {"steps": ["impute"], "impute": {"method": "mice"}},      # 未知の方法
@@ -47,6 +46,16 @@ def test_invalid_recipe_rejected(recipe):
     with pytest.raises(DomainError) as info:
         R.normalize_recipe(recipe)
     assert info.value.code == "MATRIX_RECIPE_INVALID"
+
+
+def test_settings_of_steps_not_listed_are_dropped_with_a_note():
+    # steps に無い段の設定は効かない: 誤りにせず、使わずに notes に書く（正規化した recipe に残さない）
+    notes: list[str] = []
+    out = R.normalize_recipe({"steps": ["impute"], "normalize": {"method": "pqn"}}, notes=notes,
+                             label="analyses[0].matrix")
+    assert "normalize" not in out and out["steps"] == ["impute"]
+    assert len(notes) == 1 and "analyses[0].matrix" in notes[0] and "normalize" in notes[0]
+    assert out == R.normalize_recipe({"steps": ["impute"]})
 
 
 # ---------- 順序 ----------

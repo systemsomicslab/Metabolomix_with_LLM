@@ -1,3 +1,5 @@
+import pytest
+
 from metabolomix.pathway import msp_lipid as ml
 from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
 
@@ -76,7 +78,7 @@ def test_split_qualifier():
 
 def test_from_name_examples():
     assert ml.from_name("PE 32:1") == ("PE 32:1", "PE")
-    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")
+    assert ml.from_name("LPC 16:0; ExampleDB ID-0000") == ("LPC 16:0", "LPC")
     assert ml.from_name("Cer 24:1;O2|Cer 12:0;O2/12:1") == "ambiguous_class"
     assert ml.from_name("Cer[NS] d30:1") == ("Cer 30:1;O2", "Cer_NS")
     assert ml.from_name("SM d34:2") == ("SM 34:2;O2", "SM")
@@ -175,4 +177,58 @@ def test_from_name_oxidized_shorthand_goes_to_route_2():
     assert ml.from_name("Cer 18:1;O2/16:0") == ("Cer 18:1;O2/16:0", "Cer_NS")
     assert ml.from_name("SM 34:1;O2") == ("SM 34:1;O2", "SM")
     assert ml.from_name("SM 34:1;O3") == ("SM 34:1;O3", "SM")
-    assert ml.from_name("LPC 16:0; PlaSMA ID-1486") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ
+    assert ml.from_name("LPC 16:0; ExampleDB ID-0000") == ("LPC 16:0", "LPC")   # `;` の注記は切るだけ
+    # 長鎖塩基の ;O2 は空白の注記が続いても残す（注記だけを切る。`SM 18:1` に縮めない）
+    assert ml.from_name("SM 18:1;O2/16:0 (x)") == ("SM 18:1;O2/16:0", "SM")
+    assert ml.from_name("Cer 18:1;O2/16:0 (x)") == ("Cer 18:1;O2/16:0", "Cer_NS")
+
+
+def test_shorthand_keeps_the_oxidation_modifier_before_a_spaced_note():
+    assert ml.shorthand("PE 36:2;O (oxPE)") == "PE 36:2;O"
+    assert ml.shorthand("FA 18:2;O (9-HODE)") == "FA 18:2;O"
+    assert ml.shorthand("TG 52:2;O3 (x)") == "TG 52:2;O3"
+    assert ml.shorthand("Cer 18:1;O2/16:0 (x)") == "Cer 18:1;O2/16:0"
+    assert ml.shorthand("PC 34:1;O [M+H]+") == "PC 34:1;O"
+    assert ml.shorthand("Cer 18:1;O2/16:0;OH (x)") == "Cer 18:1;O2/16:0;OH"
+    # 修飾でない `;` の注記は従来どおり切る
+    assert ml.shorthand("LPC 16:0; ExampleDB ID-0000") == "LPC 16:0"
+    assert ml.shorthand("LPC 16:0; Oxidized note") == "LPC 16:0"
+    assert ml.shorthand("Cer 18:1;O2/16:0; ExampleDB ID-0000") == "Cer 18:1;O2/16:0"
+
+
+# `;` の直後に空白の無い修飾は `;O…` に限らない（`;2OH` `;(2OH)` `;(3OH)` `;(OH)` `;(OOH)` `;Ep` `;oxo`
+# `;9OH,13OH`、括弧の中に空白のある `;O(FA 16:0)`）。注記を足しても名前の読みは変わらない（レビュー V1）。
+_MODIFIED_NAMES = (
+    "Cer 18:1;O2/24:0;2OH", "Cer 18:1;O2/16:0;(2OH)", "Cer 18:1;O2/16:0;(3OH)", "HexCer 18:1;O2/16:0;(2OH)",
+    "SM 18:1;O2/16:0;(3OH)", "PC 16:0_20:4;Ep", "PC 16:0_18:2;(OH)", "PC 16:0_18:2;(OOH)", "PC 34:2;2OH",
+    "FA 18:2;9OH,13OH", "FA 18:1;oxo", "TG 16:0_18:1_18:2;O(FA 16:0)", "Cer 18:1;O2/32:0;O(FA 18:2)",
+)
+
+
+@pytest.mark.parametrize("note", [" (x)", " (Cer AS)", " [M+H]+", "; ExampleDB ID-0000", " (x); ExampleDB ID-0000"])
+@pytest.mark.parametrize("name", _MODIFIED_NAMES)
+def test_a_note_does_not_change_how_a_modified_name_reads(name, note):
+    assert ml.shorthand(name + note) == name
+    assert ml.from_name(name + note) == ml.from_name(name)
+
+
+def test_shorthand_keeps_a_token_it_does_not_know_rather_than_cut_it_as_a_note():
+    """`;` の直後に空白の無い語は、修飾として知らなくても残す（切ると修飾を落とした別の種に読み違えるが、
+    残せば GOSLIN が読めないだけ）。`; ` から後ろと、括弧の外の空白から後ろだけを注記として切る。"""
+    assert ml.shorthand("LPC 16:0;(note x)") == "LPC 16:0;(note x)"
+    assert ml.shorthand("LPC 16:0;Oxidized note") == "LPC 16:0;Oxidized"
+    assert ml.shorthand("AHexCer (O-16:0)18:1;O2/16:0 (x)") == "AHexCer (O-16:0)18:1;O2/16:0"
+
+
+def test_from_name_hydroxy_and_epoxy_fatty_acyls_are_ambiguous_or_route_2():
+    """水酸基の付いた脂肪酸の Cer（Cer AS / BS 系）は注記があっても Cer_NS にしない。Cer / HexCer / SM 以外の頭部で
+    `;O` 以外の酸素の修飾（`;2OH` `;Ep` `;oxo` `;12OH`）がある名前も経路 1 で読まない（`;O` と同じ扱い）。"""
+    assert ml.from_name("Cer 18:1;O2/16:0;(2OH) (Cer AS)") == "ambiguous_class"
+    assert ml.from_name("HexCer 18:1;O2/16:0;(2OH) (x)") == "ambiguous_class"
+    assert ml.from_name("Cer 18:1;O2/24:0;2OH (x)") == "ambiguous_class"
+    for name in ("PC 16:0_20:4;Ep", "PC 16:0_20:4;Ep (x)", "PC 34:2;2OH", "PC 34:2;2OH (x)", "FA 18:1;oxo",
+                 "FA 18:1;3oxo", "FA 18:1;12OH", "FA 18:2;9OH,13OH", "PC 16:0_18:2;(OH) (x)"):
+        assert ml.from_name(name) is None, name
+    # 酸素を足さない修飾・修飾ではない語は従来どおり
+    assert ml.from_name("FA 18:1;Me") == ("FA 18:1;Me", "FA")
+    assert ml.from_name("LPC 16:0; Oxidized note") == ("LPC 16:0", "LPC")

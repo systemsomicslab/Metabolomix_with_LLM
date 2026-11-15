@@ -22,8 +22,9 @@ pipeline は「生データ → MS-DIAL Console → 検証済みの解析フォ�
 キーごと。`explicit` / `request_file` / `default` / `explicit_update` /
 `method_declaration`）。
 
-**下流のキー**（`target` `preprocess` `comparisons`）は消えた。明示した要求にあれば
-`PIPELINE_DOWNSTREAM_REMOVED`（`details.replacements` に代わりのツール）で止め、
+**下流のキー**（`target` `preprocess` `comparisons`）は消えた。明示した要求・単位・resume の
+`updates` にあれば、ほかの知らないキーと同じ `PIPELINE_REQUEST_INVALID`（`details.unknown_keys`）で
+止め、文面と `details.replacements` で代わりのツールを案内する（`_unknown_keys`）。
 `analysis-request.json` にあれば読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED` を
 `intake_warnings`（内部キー）に残す（判断 5: 置いてある古いファイルで Console まで
 止めるのは過剰）。
@@ -79,7 +80,8 @@ REQUEST_FILE_NAME = "analysis-request.json"
 #: resume で変えられるトップのキー（試料の対応表だけ）。
 UPDATABLE = frozenset({"sample_manifest", "units"})
 
-#: 消えた下流のキー（判断 5）。
+#: 消えた下流のキー（判断 5）。要求ファイルでは読み飛ばし、明示した値では知らないキーとして
+#: 断るときに代わりのツールを案内する。
 DOWNSTREAM_KEYS = frozenset({"target", "preprocess", "comparisons"})
 
 #: 下流のキーの代わり（対話の鎖。`details.replacements` に載せる順）。
@@ -140,14 +142,21 @@ def _fail(message: str, **details) -> None:
     raise DomainError("PIPELINE_REQUEST_INVALID", message, details)
 
 
-def _downstream_removed(keys, *, where: str) -> DomainError:
+def _unknown_keys(keys, *, where: str = "", **details) -> None:
+    """知らないキーを `PIPELINE_REQUEST_INVALID` で断る。
+
+    消えた下流のキー（`DOWNSTREAM_KEYS`）が混じっていれば、文面と `details.replacements` で
+    代わりのツール（対話の鎖）を案内する。
+    """
     keys = sorted(keys)
-    return DomainError(
-        "PIPELINE_DOWNSTREAM_REMOVED",
-        f"{where}の {keys} は pipeline の下流の工程として消えました。pipeline は Console で解析フォルダを"
-        "作るところまでを受け持ち、前処理・比較・PCA は load_dataset(pipeline_path=…, polarity=…) の後に"
-        " dataset_preprocess / dataset_compare / dataset_pca で行います。",
-        {"removed_keys": keys, "replacements": list(DOWNSTREAM_REPLACEMENTS)})
+    message = f"{where}未知のキーがあります: {keys}"
+    downstream = sorted(set(keys) & DOWNSTREAM_KEYS)
+    if downstream:
+        message += (f"。{downstream} は pipeline の工程ではありません。pipeline は Console で解析フォルダを"
+                    "作るところまでを受け持ち、前処理・比較・PCA は load_dataset(pipeline_path=…, polarity=…) の"
+                    "後に dataset_preprocess / dataset_compare / dataset_pca で行います。")
+        details["replacements"] = list(DOWNSTREAM_REPLACEMENTS)
+    _fail(message, unknown_keys=keys, **details)
 
 
 def _reject_disallowed_explicit_null(source: dict, *, where: str = "") -> None:
@@ -213,13 +222,9 @@ def _units_from_list(units, *, origin: str) -> tuple[list, list]:
     for index, entry in enumerate(units):
         if not isinstance(entry, dict):
             _fail(f"units[{index}]はオブジェクトである必要があります。", index=index)
-        downstream = set(entry) & DOWNSTREAM_KEYS
-        if downstream:
-            raise _downstream_removed(downstream, where=f"units[{index}]")
         unknown = set(entry) - _UNIT_ENTRY_KEYS
         if unknown:
-            _fail(f"units[{index}]に未知のキーがあります: {sorted(unknown)}",
-                  index=index, unknown_keys=sorted(unknown))
+            _unknown_keys(unknown, where=f"units[{index}]に", index=index)
         missing = _UNIT_REQUIRED_KEYS - set(entry)
         if missing:
             _fail(f"units[{index}]に必須のキーが足りません: {sorted(missing)}",
@@ -347,8 +352,7 @@ def read_request_file(source_root: Path) -> tuple[dict, list[dict]]:
         })
     unknown = set(data) - _TOP_LEVEL_KEYS
     if unknown:
-        _fail(f"{REQUEST_FILE_NAME}に未知のキーがあります: {sorted(unknown)}",
-              path=str(path), unknown_keys=sorted(unknown))
+        _unknown_keys(unknown, where=f"{REQUEST_FILE_NAME}に", path=str(path))
     _reject_disallowed_explicit_null(data, where=f"{REQUEST_FILE_NAME}の")
     _check_schema(data.get("schema"))
     return data, warnings
@@ -394,12 +398,9 @@ def resolve_request(source_root: Path, explicit: dict | None = None) -> dict:
     explicit = explicit if explicit is not None else {}
     if not isinstance(explicit, dict):
         _fail("requestはオブジェクトである必要があります。", value=explicit)
-    downstream = set(explicit) & DOWNSTREAM_KEYS
-    if downstream:
-        raise _downstream_removed(downstream, where="request")
     unknown = set(explicit) - _TOP_LEVEL_KEYS
     if unknown:
-        _fail(f"未知のキーがあります: {sorted(unknown)}", unknown_keys=sorted(unknown))
+        _unknown_keys(unknown)
     _reject_disallowed_explicit_null(explicit)
     _check_schema(explicit.get("schema"))
 
@@ -495,14 +496,15 @@ def unit_request(request: dict, index: int, dataset_root: Path) -> dict:
 def merge_updates(request: dict, updates: dict) -> dict:
     """resume の入力訂正（試料の対応表だけ）を反映し、再検証した要求を返す。
 
-    下流のキーは `PIPELINE_DOWNSTREAM_REMOVED`、それ以外の上流の条件（メソッド・ライブラリ・
-    極性・フォルダ…）は `NEW_PIPELINE_REQUIRED`（上流の条件が変わるなら別の run）。
+    要求の知らないキー（消えた下流のキーを含む）は `PIPELINE_REQUEST_INVALID`（`_unknown_keys`）、
+    それ以外の上流の条件（メソッド・ライブラリ・極性・フォルダ…）は `NEW_PIPELINE_REQUIRED`
+    （上流の条件が変わるなら別の run）。
     """
     if not isinstance(updates, dict):
         _fail("updatesはオブジェクトである必要があります。", value=updates)
-    downstream = set(updates) & DOWNSTREAM_KEYS
-    if downstream:
-        raise _downstream_removed(downstream, where="updates")
+    unknown = set(updates) - _TOP_LEVEL_KEYS
+    if unknown:
+        _unknown_keys(unknown, where="updatesに")
     if set(updates) - UPDATABLE:
         raise DomainError(
             "NEW_PIPELINE_REQUIRED", "上流条件の変更には新しい解析が必要です",
@@ -528,10 +530,10 @@ def merge_updates(request: dict, updates: dict) -> dict:
             index = unit_index(out, polarity)
             if not isinstance(fields, dict):
                 _fail(f"updates.units.{polarity} はオブジェクトである必要があります。", value=fields)
+            unknown = set(fields) - _UNIT_ENTRY_KEYS
+            if unknown:
+                _unknown_keys(unknown, where=f"updates.units.{polarity}に", polarity=polarity)
             others = set(fields) - {"sample_manifest"}
-            if set(fields) & DOWNSTREAM_KEYS:
-                raise _downstream_removed(set(fields) & DOWNSTREAM_KEYS,
-                                          where=f"updates.units.{polarity}")
             if others:
                 raise DomainError(
                     "NEW_PIPELINE_REQUIRED", "上流条件の変更には新しい解析が必要です",

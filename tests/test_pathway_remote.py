@@ -5,6 +5,7 @@
 （実物の Rscript の契約は test_pathway_bridge.py が縛る）。
 """
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,6 +17,8 @@ from tests.test_pathway_jsonld import _graph
 from tests.test_pathway_tools import _GROUPS, lipid_arf, with_run_samples  # noqa: F401  （fixture と 2 群の指定）
 
 URL = "http://lab.example:8000"
+#: 計測（pathway_project）のジョブの送受信の記録
+MEASURE_RECORD = remote.job_record_name("measure")
 
 
 class FakeServer:
@@ -138,7 +141,7 @@ def test_measure_runs_on_the_server(serve, local_calls, tmp_path):
         "analysis": {"normalization": "none", "aggregation": "mean", "group_column": "class"},
         "measurements": {"unit": "arbitrary", "include_subsets": True, "acyl_chains": ["18:1"]},
         "output": {"format": ["jsonld"]}}
-    record = json.loads((tmp_path / remote.JOB_RECORD).read_text(encoding="utf-8"))
+    record = json.loads((tmp_path / MEASURE_RECORD).read_text(encoding="utf-8"))
     assert record["job_id"] == "job_1" and record["status"]["status"] == "succeeded"
 
 
@@ -165,7 +168,7 @@ def test_token_is_sent_but_not_recorded(serve, local_calls, tmp_path, monkeypatc
     server = serve(_measure_server())
     bridge.run_bridge(_measure_request(tmp_path), tmp_path)
     assert all(r.headers["Authorization"] == "Bearer s3cret" for r in server.requests)
-    assert "s3cret" not in (tmp_path / remote.JOB_RECORD).read_text(encoding="utf-8")
+    assert "s3cret" not in (tmp_path / MEASURE_RECORD).read_text(encoding="utf-8")
 
 
 def test_without_api_url_the_server_is_never_contacted(local_calls, tmp_path, monkeypatch):
@@ -255,3 +258,67 @@ def test_pathway_project_through_the_server(lipid_arf, serve, tmp_path):  # noqa
                           .read_text(encoding="utf-8"))
     assert manifest["backend"] == {"kind": "remote", "api_url": URL, "job_id": "job_1"}
     assert manifest["remote_fallback"] is None
+
+
+def test_failed_server_job_keeps_job_id_and_record_in_the_fallback(serve, local_calls, tmp_path):
+    """サーバのジョブが失敗してローカルへ回ったとき、job_id と計測の記録（remote-job-measure.json）の場所が残る（B11-T44）。"""
+    serve(FakeServer(final="failed"))
+    res = bridge.run_bridge(_measure_request(tmp_path), tmp_path)
+    fb = res["remote_fallback"]
+    assert fb["job_id"] == "job_1" and fb["record"] == str(tmp_path / MEASURE_RECORD)
+    assert "job job_1" in fb["message"] and "worker.log" in fb["message"]
+    assert json.loads((tmp_path / MEASURE_RECORD).read_text(encoding="utf-8"))["job_id"] == "job_1"
+
+
+def test_render_job_does_not_overwrite_the_measure_record(serve, local_calls, tmp_path):
+    """同じ run で描画のジョブを回しても、manifest の remote_fallback.record が指す計測の記録は残る。"""
+    serve(FakeServer(final="failed"))
+    fb = bridge.run_bridge(_measure_request(tmp_path), tmp_path)["remote_fallback"]
+    assert fb["record"] == str(tmp_path / "remote-job-measure.json")
+    serve(FakeServer(result={"mapped_nodes": {"ceramide": 4}}, artifacts={"ceramide.pdf": b"%PDF-1.4"}))
+    res = bridge.run_bridge(_render_request(tmp_path), tmp_path)
+    assert res["backend"]["kind"] == "remote"
+    measure = json.loads(Path(fb["record"]).read_text(encoding="utf-8"))
+    assert measure["error"]["code"] == "MSLM_RUN_FAILED" and "measurements" in measure["config"]
+    render = json.loads((tmp_path / remote.job_record_name("render")).read_text(encoding="utf-8"))
+    assert render["status"]["status"] == "succeeded" and "error" not in render and "plot" in render["config"]
+
+
+def test_failed_render_job_points_at_the_render_record(serve, local_calls, tmp_path):
+    serve(FakeServer(final="failed"))
+    fb = bridge.run_bridge(_render_request(tmp_path), tmp_path)["remote_fallback"]
+    assert fb["code"] == "PATHWAY_RENDER_FAILED"
+    assert fb["record"] == str(tmp_path / "remote-job-render.json")
+    assert not (tmp_path / MEASURE_RECORD).exists()
+
+
+def test_unreachable_server_fallback_has_record_but_no_job_id(serve, local_calls, tmp_path):
+    serve(FakeServer(health=404))
+    fb = bridge.run_bridge(_measure_request(tmp_path), tmp_path)["remote_fallback"]
+    assert "job_id" not in fb and fb["record"].endswith(MEASURE_RECORD)
+
+
+def test_failed_server_job_without_local_r_keeps_job_id_and_run_dir(lipid_arf, serve, tmp_path):  # noqa: F811
+    serve(FakeServer(final="failed"))      # [mslipidmapper] rscript は書いていない
+    body = json.loads(tools.pathway_project(**_GROUPS, pathways=["remodeling"]))
+    err = body["error"]
+    assert err["code"] == "MSLM_RUN_FAILED"
+    assert err["details"]["remote"]["job_id"] == "job_1"
+    run_dir = Path(err["details"]["run_dir"])
+    assert run_dir.parent == tmp_path / "reports" / "pathway"
+    assert err["details"]["remote"]["record"] == str(run_dir / MEASURE_RECORD)
+    assert err["details"]["local"]["code"] == "MSLM_NOT_CONFIGURED"
+
+
+def test_local_load_failure_after_server_failure_surfaces_the_r_reason(serve, tmp_path, monkeypatch):
+    """R が MSLipidMapper を読み込めなかった（T45）なら、その本文を上げ、サーバの失敗も残す。"""
+    serve(FakeServer(final="failed"))
+
+    def cannot_load(request, run_dir, *, timeout_s=300.0):
+        raise bridge.BridgeError("MSLM_R_PACKAGE_LOAD_FAILED", "読み込めませんでした: DLL が無い",
+                                 {"log": "bridge.log"})
+    monkeypatch.setattr(bridge, "_run_local", cannot_load)
+    with pytest.raises(bridge.BridgeError) as exc:
+        bridge.run_bridge(_measure_request(tmp_path), tmp_path)
+    assert exc.value.code == "MSLM_R_PACKAGE_LOAD_FAILED" and "DLL" in exc.value.message
+    assert exc.value.details["remote_fallback"]["job_id"] == "job_1"

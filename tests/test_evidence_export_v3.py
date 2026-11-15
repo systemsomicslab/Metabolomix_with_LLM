@@ -20,7 +20,7 @@ from metabolomix.mztab import loading
 from metabolomix.tools import dataset_analysis_tools as T
 from metabolomix.tools import handle_tools
 from tests.engine_chain import declare_groups, engine_compare, hc_ra, register_two_group
-from tests.reanalysis_fixtures import write_mztab
+from tests.reanalysis_fixtures import POS_FEATURES, write_mztab
 
 _COMPARISON = dict(group_a="A", group_b="B", n_a=3, n_b=3,
                    log2fc_sign="positive means group_b is higher", method="Welch",
@@ -161,6 +161,33 @@ def test_features_have_adduct_column(tmp_path):
     assert features["1"]["adduct"] == "[M+H]1+"              # SML の adduct_ions
 
 
+def test_sme_provenance_drops_only_the_computed_theoretical_mz(tmp_path):
+    """`theoretical_mz_computed` の特徴（組成式と付加体から計算した理論 m/z）だけ、rank 1 の候補の来歴の
+    theoretical_mass_to_charge を null にする（極性の統合で片側だけ計算した `mixed` の形）。ほかの特徴と rank 2 の
+    候補は mzTab-M の値のまま。データセットの候補は変えない。"""
+    features = (
+        {**POS_FEATURES[0], "sme": [*POS_FEATURES[0]["sme"],
+                                    {"name": "Betaine", "inchikey": "KWIUHFFTVRNATP-UHFFFAOYSA-N",
+                                     "formula": "C5H11NO2", "adduct": "[M+H]1+", "theo": 118.0863}]},
+        {**POS_FEATURES[1], "sme": [{"name": "Phosphocholine", "inchikey": "YHHSONZFOIEMCP-UHFFFAOYSA-O",
+                                     "formula": "C5H15NO4P", "adduct": "[M]1+", "theo": 184.0733}]},
+        POS_FEATURES[2],
+    )
+    ds = loading.load_dataset_state(mztab_path=write_mztab(tmp_path / "in" / "t.mzTab",
+                                                           features=features))
+    declare_groups(ds, hc_ra)
+    result = register_two_group(ds, "HC", "RA")
+    ds.theoretical_mz_computed = {"1"}
+    export_dataset_evidence(ds, result, tmp_path / "b")
+    rows = [r for r in _tsv(tmp_path / "b" / "annotations.tsv") if r["source"] == "msdial_sme"]
+    theo = {(r["feature_id"], r["rank"]): json.loads(r["provenance_json"])["theoretical_mass_to_charge"]
+            for r in rows}
+    assert theo[("1", "1")] is None
+    assert theo[("1", "2")] == pytest.approx(118.0863)
+    assert theo[("2", "1")] == pytest.approx(184.0733)
+    assert ds.feature_candidates["1"][0]["theoretical_mass_to_charge"] == pytest.approx(104.1070)
+
+
 def test_stale_result_is_refused(tmp_path):
     ds, result = _bundle_inputs(tmp_path, detected=True)
     ds.metadata_revision += 1                                # 試料の表・除外が登録の後に変わった
@@ -197,12 +224,66 @@ def test_writer_without_samples_stays_v2(tmp_path):     # ARF 経路
 
 def test_tool_description_names_v3_and_domain_error_is_envelope(tmp_path):
     assert "v3" in T.dataset_export_evidence_bundle.__doc__
-    # 探索専用のデータセットの DomainError が TypeError（exc.details()）にならず封筒で返る
     handle, result_id = _handle_with_result(tmp_path)        # ハンドルで preprocess → differential
-    handles.registry.get(handle).dataset.exploratory_only = True
-    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id,
+    # 結果が見つからない DomainError が TypeError（exc.details()）にならず封筒で返る
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id + "#nope",
                                                       dataset_handle=handle))
-    assert out["error"]["code"] == "EXPLORATORY_ONLY_DATASET"
+    assert out["error"]["code"] == "CONTRAST_REQUIRED"
+    assert not (tmp_path / "b").exists()
+
+
+def test_exploratory_dataset_is_exported_with_the_mark_in_the_manifest(tmp_path):
+    """未完了の実行の探索専用のデータセットも断らず、manifest の exploratory に印と理由を書く。"""
+    handle, result_id = _handle_with_result(tmp_path)
+    ds = handles.registry.get(handle).dataset
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "a"), result_id, dataset_handle=handle))
+    manifest = json.loads((tmp_path / "a" / "manifest.json").read_text(encoding="utf-8"))
+    assert "exploratory" not in manifest and "exploratory" not in out   # 探索専用でない束は今までどおり
+    assert "exploratory" not in manifest["comparison"]
+    ds.exploratory_only = True
+    ds.exploratory_reason = "解析ジョブが完了していない（status partial）"
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle))
+    assert out["contract_version"] == 3
+    assert out["exploratory"] == {"exploratory_only": True, "reason": ds.exploratory_reason}
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exploratory"] == out["exploratory"]
+    # comparison にも同じ印（受け手が comparison をそのまま見せる経路〔get_comparison_evidence の facts〕でも届く）
+    assert manifest["comparison"]["exploratory"] == out["exploratory"]
+    assert manifest["contract_version"] == 3 and manifest["comparison"]["correction"] == "BH"
+
+
+def test_bundle_result_id_defaults_to_the_latest_comparison(tmp_path):
+    handle, result_id = _handle_with_result(tmp_path)
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), dataset_handle=handle))
+    assert out["contract_version"] == 3
+    manifest = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_analysis_id"] == result_id
+
+
+def test_bundle_without_a_comparison_is_missing_state(tmp_path):
+    from metabolomix.core import session_state
+    from metabolomix.mztab.dataset_state import DatasetState
+
+    ds = DatasetState()
+    ds.analysis_dir = str(tmp_path)
+    session_state.session.dataset = ds
+    err = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b")))["error"]
+    assert err["code"] == "missing_state" and err["required_tools"] == ["dataset_compare"]
+    assert not (tmp_path / "b").exists()
+
+
+def test_bundle_correction_is_bh_and_names_the_comparisons_own_method(tmp_path):
+    """features.tsv の q_value は契約の BH の q なので correction はいつも BH。比較が別の補正なら、その方法と
+    q を計算し直したことを comparison に足す（statistics には重ねない）。"""
+    handle, result_id = _handle_with_result(tmp_path)
+    record = handles.registry.get(handle).dataset.results[result_id]
+    record["p_adjust_method"] = "bonferroni"                 # 統計エンジンの記録が持つ補正の方法
+    out = json.loads(T.dataset_export_evidence_bundle(str(tmp_path / "b"), result_id, dataset_handle=handle))
+    comparison = json.loads((tmp_path / "b" / "manifest.json").read_text(encoding="utf-8"))["comparison"]
+    assert comparison["correction"] == "BH" and "p_adjust_method" not in comparison["statistics"]
+    assert comparison["p_adjust_method"] == "bonferroni"
+    assert comparison["q_value_source"] == "recomputed_from_p_value"
+    assert out["p_adjust_method"] == "bonferroni" and "bonferroni" in out["notes"][0]
 
 
 def test_tool_passes_handle_polarity(tmp_path):

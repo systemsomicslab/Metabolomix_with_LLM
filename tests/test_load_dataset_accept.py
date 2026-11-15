@@ -142,7 +142,7 @@ def test_slow_load_returns_load_id_then_payload(tmp_path, fresh_state, gate):
     out = _accept(directory=str(_folder(tmp_path / "a")))
     load_id = out["load_id"]
     assert load_id.startswith("ld_")
-    assert out["next"] == f'dataset_load_status(load_id="{load_id}")'
+    assert out["next"] == f'dataset_load_status(load_id="{load_id}", wait_seconds=30)'
     assert set(out) == {"status", "load_id", "next"}
     assert handles.registry.list() == []
     assert session_state.session.current_handle_id is None
@@ -247,8 +247,7 @@ def test_status_wait_zero_does_not_wait(tmp_path, fresh_state, gate):
     assert json.loads(_status_when_done(load_id))["status"] == "success"
 
 
-@pytest.mark.parametrize("bad", [-1, -0.001, 30.0001, 31, 60, math.nan, math.inf, -math.inf,
-                                 True, False, "20", None])
+@pytest.mark.parametrize("bad", [math.nan, True, False, "20", None])
 def test_status_wait_rejects_bad_values(tmp_path, fresh_state, gate, bad):
     load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
     out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=bad))
@@ -256,6 +255,33 @@ def test_status_wait_rejects_bad_values(tmp_path, fresh_state, gate, bad):
     assert out["error"]["details"] == {"field": "wait_seconds"}
     gate.release.set()
     assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+@pytest.mark.parametrize("value, used", [(-1, 0), (-0.001, 0), (-math.inf, 0)])
+def test_status_wait_clamps_negative_to_zero_with_a_note(tmp_path, fresh_state, gate, value, used):
+    """範囲の外の数は断らずに丸め、丸めたことを `wait_seconds_note` で返す（負は 0 秒＝待たない）。"""
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    start = time.monotonic()
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=value))
+    assert time.monotonic() - start < 0.25
+    assert out["status"] == "loading"
+    assert "0〜30 秒の外なので 0 秒に丸めた" in out["wait_seconds_note"]
+    gate.release.set()
+    assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+@pytest.mark.parametrize("value", [30.0001, 31, 60, math.inf])
+def test_status_wait_clamps_over_the_limit_with_a_note(tmp_path, fresh_state, gate, value):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    gate.release.set()
+    assert pending_loads.registry.wait(load_id, _TIMEOUT) is not None
+    out = json.loads(handle_tools.dataset_load_status(load_id, wait_seconds=value))
+    assert out["status"] == "success"
+    assert "30 秒に丸めた" in out["wait_seconds_note"]
+    # 丸めの無い呼び出しには注記が付かない（結果そのものは同じ）。
+    again = json.loads(handle_tools.dataset_load_status(load_id))
+    assert "wait_seconds_note" not in again
+    assert again["dataset_handle"] == out["dataset_handle"]
 
 
 def test_status_wait_accepts_the_limit(tmp_path, fresh_state, gate):
@@ -402,8 +428,7 @@ def test_adopt_recheck_is_a_backstop(tmp_path, fresh_state, gate, monkeypatch):
 # ---------- 引数・失敗・受付簿 ----------
 
 
-@pytest.mark.parametrize("value", [-1, -0.001, 30.0001, 31, 60, math.nan, math.inf, -math.inf,
-                                   True, "20", None])
+@pytest.mark.parametrize("value", [math.nan, True, "20", None])
 def test_invalid_wait_seconds_is_bad_request(tmp_path, fresh_state, value):
     out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
                                                overview=False, wait_seconds=value))
@@ -412,6 +437,24 @@ def test_invalid_wait_seconds_is_bad_request(tmp_path, fresh_state, value):
     assert handles.registry.list() == []
     assert handles.registry._reserved == 0
     assert fresh_state._entries == {}
+
+
+@pytest.mark.parametrize("value, used", [(31, "30"), (60, "30"), (math.inf, "30")])
+def test_out_of_range_wait_seconds_is_clamped_with_a_note(tmp_path, fresh_state, value, used):
+    """`load_dataset` も範囲の外の数を丸めて読み込み、戻り値に `wait_seconds_note` を付ける。"""
+    out = _load(directory=str(_folder(tmp_path / "a")), wait_seconds=value)
+    assert f"{used} 秒に丸めた" in out["wait_seconds_note"]
+    assert handles.registry.peek(out["dataset_handle"]) is not None
+
+
+def test_slow_load_with_clamped_wait_carries_the_note(tmp_path, fresh_state, gate):
+    """受付番号を返すときも丸めの注記が付く（負の数は待たずに受け付ける）。"""
+    out = json.loads(handle_tools.load_dataset(directory=str(_folder(tmp_path / "a")),
+                                               overview=False, wait_seconds=-5))
+    assert out["status"] == "loading"
+    assert "0 秒に丸めた" in out["wait_seconds_note"]
+    gate.release.set()
+    assert json.loads(_status_when_done(out["load_id"]))["status"] == "success"
 
 
 def test_wait_seconds_30_is_accepted(tmp_path, fresh_state):
@@ -469,8 +512,8 @@ def test_result_survives_eviction_between_submit_and_wait(tmp_path, fresh_state,
     monkeypatch.setattr(pending_loads, "registry", loads)
     real_submit = loads.submit
 
-    def submit_then_evict(fn):
-        pending = real_submit(fn)
+    def submit_then_evict(fn, **kwargs):
+        pending = real_submit(fn, **kwargs)
         assert pending.wait(_TIMEOUT) is not None
         real_submit(lambda: "other")  # 終わった最初の受付を追い出す
         with pytest.raises(DomainError) as info:
@@ -697,17 +740,91 @@ def test_accept_through_the_mcp_layer(tmp_path, fresh_state, gate):
     assert session_state.session.current_handle_id == done["dataset_handle"]
 
 
-def test_load_status_keeps_library_names_choice(tmp_path, fresh_state, gate, monkeypatch):
-    """遅い読み込み（受付番号）でも、`library_names=False` の選択が最終の戻り値に引き継がれる。"""
+def test_load_status_shows_only_the_library_file_name(tmp_path, fresh_state, gate, monkeypatch):
+    """遅い読み込み（受付番号）の最終の戻り値も、ライブラリはファイル名と sha256 だけ（置き場所を出さない）。"""
     from tests.dbs_fixture import record, write_dbs
 
     use_config(monkeypatch, tmp_path, {"paths.library_cache": tmp_path / "cache"})
     name = "Zebra_SecretLab_Loaded.msp2.dbs"
     folder = _folder(tmp_path / "a")
     write_dbs(folder / name, [("lib", [record(mz=500.0, ion_mode=0)], ["k"])])
-    load_id = _accept(directory=str(folder), library_names=False)["load_id"]
+    load_id = _accept(directory=str(folder))["load_id"]
     gate.release.set()
     raw = _status_when_done(load_id)
     done = json.loads(raw)
     assert done["status"] == "success" and done["library"]["sha256"]
-    assert name not in raw and "Zebra" not in raw
+    assert done["library"]["file"] == name
+    assert str(folder / name) not in raw and json.dumps(str(folder / name)) not in raw
+
+
+def test_library_names_argument_is_gone():
+    """`library_names` は消えた（いつもファイル名だけを返すので、伏せる選択は要らない）。"""
+    import inspect
+
+    assert "library_names" not in inspect.signature(handle_tools.load_dataset).parameters
+    assert "library_names" not in inspect.signature(handle_tools._load_now).parameters
+
+# ---------- load_id の省き方（棚卸し C6-M09-M10） ----------
+
+
+def test_status_without_load_id_and_no_loads_is_missing_state(fresh_state):
+    out = json.loads(handle_tools.dataset_load_status())
+    assert out["error"]["code"] == "missing_state"
+    assert out["error"]["state"] == "load"
+    assert out["error"]["required_tools"] == ["load_dataset"]
+
+
+def test_status_without_load_id_picks_the_only_open_load(tmp_path, fresh_state, gate):
+    load_id = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    loading = json.loads(handle_tools.dataset_load_status())
+    assert loading["status"] == "loading" and loading["load_id"] == load_id
+    gate.release.set()
+    done = json.loads(handle_tools.dataset_load_status(wait_seconds=_TIMEOUT))
+    assert done["status"] == "success"
+    # 結果を渡した読み込みは省いた問い合わせから外れる（番号を渡せば何度でも引ける）。
+    again = json.loads(handle_tools.dataset_load_status())
+    assert again["error"]["code"] == "missing_state"
+    assert json.loads(handle_tools.dataset_load_status(load_id)) == done
+
+
+def test_status_without_load_id_asks_when_several_loads_are_open(tmp_path, fresh_state, gate):
+    a = _accept(directory=str(_folder(tmp_path / "a")))["load_id"]
+    b = _accept(directory=str(_folder(tmp_path / "b")))["load_id"]
+    out = json.loads(handle_tools.dataset_load_status())
+    body = out["needs_input"]
+    assert body["field"] == "load_id" and body["argument"] == "load_id"
+    assert body["retry_tools"] == ["dataset_load_status"]
+    assert [o["value"] for o in body["options"]] == [a, b]
+    # 選べるように、入力の名前（フォルダ名）を添える（置き場所の全体は出さない）。
+    assert "load_dataset" in body["options"][0]["label"]
+    assert str(tmp_path) not in json.dumps(out, ensure_ascii=False)
+    gate.release.set()
+    for load_id in (a, b):
+        assert json.loads(_status_when_done(load_id))["status"] == "success"
+
+
+def test_fast_load_is_not_left_open(tmp_path, fresh_state):
+    """期限の中で終わった読み込みは受付簿に残らず、省いた問い合わせにも出ない。"""
+    _load(directory=str(_folder(tmp_path / "a")), wait_seconds=20)
+    out = json.loads(handle_tools.dataset_load_status())
+    assert out["error"]["code"] == "missing_state"
+
+
+def test_load_still_inside_its_callers_wait_is_not_picked(tmp_path, fresh_state, gate):
+    """受け付けた `load_dataset` がまだ自分の `wait_seconds` の中で待っている読み込みは、省いた
+    `dataset_load_status` の候補に並ばない（その呼び出しが結果を直に受け取る。横取りすると持ち主が結果を
+    失う。レビュー指摘 R16）。"""
+    box = {}
+    folder = str(_folder(tmp_path / "a"))
+    caller = threading.Thread(target=lambda: box.setdefault("out", json.loads(
+        handle_tools.load_dataset(directory=folder, overview=False, wait_seconds=_TIMEOUT))),
+        daemon=True)
+    caller.start()
+    assert gate.entered.wait(_TIMEOUT)
+    assert len(fresh_state._entries) == 1                     # 受付はある
+    out = json.loads(handle_tools.dataset_load_status())
+    assert out["error"]["code"] == "missing_state" and out["error"]["state"] == "load"
+    gate.release.set()
+    caller.join(_TIMEOUT)
+    assert box["out"]["status"] == "success"
+    assert fresh_state._entries == {}                         # 直に渡したので覚えていない

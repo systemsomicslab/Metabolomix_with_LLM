@@ -21,10 +21,13 @@ flowchart TD
     BLD --> META[library.dbs.read_storage_meta]
     LL -->|session.library.store| LM[library_match_feature]
     LM --> MS[dcl.reader.get_msms_by_precursor]
+    LM --> WIN[analysis.spectral_match.fix_mass_tolerance<br/>前駆体の窓]
     LM --> CAND[library.store.LibraryStore.candidates]
     LM --> SCORE[analysis.spectral_match.match_spectrum]
     LM --> TOT[analysis.spectral_match.total_score]
+    LM --> AGR[library.matching.msdial_agreement]
     LM -->|session.library.last_match| LP[library_plot_mirror]
+    LP -.->|spot_id| RUN[library.tools._run_match]
     LP --> MIR[plots.mirror.build_mirror_payload]
     LP --> REND[plots.mirror.render_mirror]
 ```
@@ -92,40 +95,56 @@ MCP クライアントのタイムアウトに当たるときに使う。
 `.arf2`（省けばデータセットの `.arf2`。データフォルダは探さない）から取り、測定スペクトルをアラインメント `.dcl` の `dcl[spot_id]` から
 直接読む（手順 8 の precursor 検索は通らない。同じ m/z の別スポットを拾わないため）。
 precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_precursor_mismatch`、ID が無ければ
-`spot_not_found` を返して照合しない。
+`spot_not_found` を返して照合しない。`ion_mode` は手順 4 で正規化し（`pos` / `neg` / `+` / `-` も可）、
+読めない値は `invalid_arguments`。`.arf2` の極性が `Both` / `Unknown` なら絞らない（`_arf2_polarity()`）。
+照合の芯（手順 6〜）は `_run_match()` で、`library_plot_mirror(spot_id=…)` も同じものを呼ぶ。照合を試みて
+失敗したら（ファイルが無い・`spot_not_found`・`dcl_precursor_mismatch`・`not_found`・`no_candidates`）
+`_clear_last_match()` が直前の `last_match` を捨てる。前駆体の窓は手順 16 で MS-DIAL と同じく
+m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
 
 1. metabolomix/library/tools.py  library_match_feature()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
 3. └─ [ライブラリ無しで記憶が lbm_only のとき] metabolomix/library/tools.py  lbm_only_not_evaluable()（`not_evaluable` を返す）
-4. └─ metabolomix/tools/_holder.py  alignment_paths()（省いた `.arf2` / `.dcl` はデータセットのもの。無ければ `missing_state` / `no_alignment_files`）
-5. └─ metabolomix/library/tools.py  _spot_query()
-6. │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
-7. │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
-8. │     └─ metabolomix/dcl/reader.py  read_dcl_entry()
-9. └─ metabolomix/library/tools.py  _measured_spectrum()
-10. │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
-11. │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
-12. └─ metabolomix/library/matching.py  score_candidates()
-13. │  └─ metabolomix/library/defaults.py  pick_tol()
-14. │  └─ metabolomix/library/store.py  LibraryStore.candidates()
-15. │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-17. │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
-18. │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
-19. │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
-20. │  │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
-21. │  │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
-22. │  │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
-23. │  │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
-24. │  │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
-25. │  └─ metabolomix/analysis/spectral_match.py  total_score()
-26. │     └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
-27. │     └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
-28. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
-29. └─ metabolomix/arf2/reader.py  format_spots_as_table()
-30. └─ metabolomix/library/tools.py  identified_by_lbm()
-31.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
+4. └─ metabolomix/library/matching.py  normalize_ion_mode()
+5. │  └─ metabolomix/core/polarity_names.py  normalize_polarity()
+6. └─ metabolomix/library/tools.py  _run_match()
+7. │  └─ metabolomix/tools/_holder.py  alignment_paths()（省いた `.arf2` / `.dcl` はデータセットのもの。無ければ `missing_state` / `no_alignment_files`）
+8. │  └─ metabolomix/library/tools.py  _spot_query()
+9. │  │  └─ metabolomix/msdial/alignment_spot.py  spot_record()
+10. │  │  └─ metabolomix/msdial/alignment_spot.py  alignment_msms()
+11. │  │  │  └─ metabolomix/dcl/reader.py  read_dcl_entry()
+12. │  │  └─ metabolomix/library/tools.py  _arf2_polarity()
+13. │  └─ metabolomix/library/tools.py  _measured_spectrum()
+14. │  │  └─ metabolomix/dcl/reader.py  deserialize_dcl()
+15. │  │  └─ metabolomix/dcl/reader.py  get_msms_by_precursor()
+16. │  └─ metabolomix/library/matching.py  score_candidates()
+17. │  │  └─ metabolomix/library/defaults.py  pick_tol()
+18. │  │  └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()（前駆体の窓）
+19. │  │  └─ metabolomix/library/store.py  LibraryStore.candidates()
+20. │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+21. │  │  └─ metabolomix/analysis/spectral_match.py  match_spectrum()
+22. │  │  │  └─ metabolomix/analysis/spectral_match.py  normalize_measured()
+23. │  │  │  │  └─ metabolomix/analysis/spectral_match.py  cutoff_mask()
+24. │  │  │  └─ metabolomix/analysis/spectral_match.py  simple_dot_product()
+25. │  │  │  └─ metabolomix/analysis/spectral_match.py  weighted_dot_product()
+26. │  │  │  └─ metabolomix/analysis/spectral_match.py  reverse_dot_product()
+27. │  │  │  └─ metabolomix/analysis/spectral_match.py  matched_peaks_scores()
+28. │  │  │  └─ metabolomix/analysis/spectral_match.py  spectral_entropy_similarity()
+29. │  │  └─ metabolomix/analysis/spectral_match.py  total_score()
+30. │  │  │  └─ metabolomix/analysis/spectral_match.py  gaussian_similarity()
+31. │  │  │  └─ metabolomix/analysis/spectral_match.py  fix_mass_tolerance()
+32. │  │  └─ metabolomix/library/matching.py  dbs_cutoffs()
+33. │  └─ [失敗したとき] metabolomix/library/tools.py  _clear_last_match()
+34. │  └─ [spot_id の照合で注釈があるとき] metabolomix/library/matching.py  msdial_agreement()
+35. │     └─ metabolomix/library/matching.py  _same_compound()
+36. │        └─ metabolomix/analysis/msms_rules.py  record_lipid_species()（MS-DIAL の注釈の名前は `name_lipid_species()`）
+37. └─ metabolomix/library/record.py  inchikey_standard()
+38. └─ [detail=true] metabolomix/analysis/spectral_match.py  fragment_matches_excluding_precursor()
+39. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+40. └─ metabolomix/library/tools.py  identified_by_lbm()
+41.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
-手順 12 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
+手順 20 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
 `.dbs` の足切りだけで決まり、候補には依存しないため）。ここで求めた
 「採点に入らなかったピークの m/z」を `last_match["unscored_mz"]` に持ち、
 `library_plot_mirror` が図の上でそれらを区別する。
@@ -138,9 +157,13 @@ precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_prec
 
 ## library_plot_mirror
 
-前提: `library_match_feature` の直近結果があること（未実行、または候補 0 件なら
-手順 1 で `MissingState`）
-状態変更: なし
+前提: `library_match_feature` の直近結果があること（未実行、または直前の照合が失敗して捨てられたなら
+手順 1 で `MissingState`）。`spot_id` を渡したときは、ライブラリだけが要る（手順 2 で照合し直す）。
+状態変更: `spot_id` を渡したときだけ `last_match` を書き換える（全候補。照合に失敗したら捨てて、その封筒を返す）。
+
+`candidate`（InChIKey か名前）を渡すと手順 3 で描く候補を選ぶ（`rank` より優先）。全体の InChIKey は
+全体の一致を先に探し、無いときだけ先頭ブロックで探す（選び方は `match.picked_by`）。どのスポット・前駆体・
+候補の図かを caption（画像）と `match`（payload）に出す。
 
 `ms2_tol` は `library_match_feature` が使った値（`last_match` に保持済み）を自動で
 引き継ぐ。`last_match["unscored_mz"]`（足切りで採点から外れた測定ピーク）も同じく
@@ -155,14 +178,16 @@ run（既定）では空なので、図も caption も従来と変わらない�
 自前で描くクライアント向けの要約で、画像はこれを使わない）。
 
 1. metabolomix/library/tools.py  library_plot_mirror()
-2. └─ metabolomix/plots/render.py  resolve_plot_output()
-3. └─ metabolomix/plots/mirror.py  build_mirror_payload()
-4. └─ [output=image] metabolomix/plots/mirror.py  render_mirror()
-5.    └─ metabolomix/plots/mirror.py  scale_intensity()
-6.    └─ metabolomix/plots/mirror.py  _draw_labels()
-7.    │  └─ metabolomix/plots/mirror.py  _text_extent()
-8.    │  └─ metabolomix/plots/mirror.py  _is_overlap()
-9.    └─ metabolomix/plots/render.py  figure_to_png()
+2. └─ [spot_id] metabolomix/library/tools.py  _run_match()（`library_match_feature` の手順 6 と同じ。`top_n=-1`）
+3. └─ [candidate] metabolomix/library/tools.py  _pick_candidate()
+4. └─ metabolomix/plots/render.py  resolve_plot_output()
+5. └─ metabolomix/plots/mirror.py  build_mirror_payload()
+6. └─ [output=image] metabolomix/plots/mirror.py  render_mirror()
+7.    └─ metabolomix/plots/mirror.py  scale_intensity()
+8.    └─ metabolomix/plots/mirror.py  _draw_labels()
+9.    │  └─ metabolomix/plots/mirror.py  _text_extent()
+10.    │  └─ metabolomix/plots/mirror.py  _is_overlap()
+11.    └─ metabolomix/plots/render.py  figure_to_png()
 
 ## library_search
 
@@ -171,5 +196,6 @@ run（既定）では空なので、図も caption も従来と変わらない�
 
 1. metabolomix/library/tools.py  library_search()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
-3. └─ metabolomix/library/store.py  LibraryStore.search()
-4. └─ metabolomix/arf2/reader.py  format_spots_as_table()
+3. └─ metabolomix/library/matching.py  normalize_ion_mode()（読めない `ion_mode` は `invalid_arguments`）
+4. └─ metabolomix/library/store.py  LibraryStore.search()
+5. └─ metabolomix/arf2/reader.py  format_spots_as_table()

@@ -235,12 +235,20 @@ def test_as_two_group_single_contrast_matches_rows():
         "test": "moderated_t", "ci_level": 0.95, "verdict_rule": engine["verdict_rule"],
         "bh_population": {"name": "matrix", "n": engine["bh_population"]["n_by_contrast"]["T_vs_C"],
                           "q_interpretation": "discovery_fdr"},
-        "subject_source": "subject_id", "n_units_a": 4, "n_units_b": 4}
+        "subject_source": "subject_id", "n_units_a": 4, "n_units_b": 4,
+        "p_adjust_method": "bh"}                                       # 記録に宣言が無ければ BH
+    assert view["contrast_kind"] == "simple" and "interaction" not in view
     rows = [r for r in engine["rows"] if r["contrast_id"] == "T_vs_C"]
     assert len(view["results"]) == len(rows) == 10
     for got, row in zip(view["results"], rows):
         assert set(got) == {"feature", "mean_a", "mean_b", "log2fc", "t", "p", "q",
-                            "ci_low", "ci_high", "verdict", "significant"}
+                            "ci_low", "ci_high", "verdict", "significant", "presence_p",
+                            "presence_q", "detected_units_a", "detected_units_b",
+                            "detection_driven"}
+        # 検出の有無は記録の値（個体単位）をそのまま写す
+        assert (got["presence_p"], got["presence_q"]) == (row["presence_p"], row["presence_q"])
+        assert (got["detected_units_a"], got["detected_units_b"]) == (
+            row["detected_reference"], row["detected_test"])
         assert got["significant"] is (export_contract.is_significant(
             q=row["q"], log2fc=row["log2fc"], q_threshold=0.05, log2fc_threshold=1.0)
             and row["verdict"] == "changed")                           # R16
@@ -264,6 +272,28 @@ def test_as_two_group_single_contrast_matches_rows():
     json.loads(json_payload(json_safe(view)))
 
 
+def test_as_two_group_carries_presence_and_detection_driven():
+    """記録の Fisher の p（個体単位）と個体単位の検出数を写し、検出の有無だけの差に印を付ける（B5）。"""
+    from scipy import stats as scipy_stats
+
+    ds = _ds()
+    f3 = ds.feature_ids.index("f3")
+    for j, name in enumerate(ds.sample_names):
+        if name.startswith("C"):
+            ds.detected_mask[f3, j] = False                  # C 群では全注入が未検出（埋め値）
+        elif name.startswith("T"):
+            ds.feature_matrix[f3, j] *= 4
+    rec, _, _ = _register(ds)
+    rows = {r["feature"]: r for r in stats_results.as_two_group(rec)["results"]}
+    gap = rows["f3"]
+    assert (gap["detected_units_a"], gap["detected_units_b"]) == (0, 4)   # 個体の数（注入は 8）
+    assert gap["presence_p"] == pytest.approx(scipy_stats.fisher_exact([[4, 0], [0, 4]])[1])
+    assert gap["detection_driven"] is True                    # 低い側の検出が 0
+    both = rows["f0"]
+    assert (both["detected_units_a"], both["detected_units_b"]) == (4, 4)
+    assert both["presence_p"] == pytest.approx(1.0) and both["detection_driven"] is False
+
+
 def test_as_two_group_requires_contrast_for_multi():
     ds = _ds(groups=("C", "T", "U"))
     comps = [T_VS_C, {"id": "U_vs_C", "factor": "group", "reference": "C", "test": "U"}]
@@ -271,8 +301,13 @@ def test_as_two_group_requires_contrast_for_multi():
     assert stats_results.contrast_ids(rec) == ["T_vs_C", "U_vs_C"]
     e = _code(stats_results.as_two_group, rec)
     assert e.code == "CONTRAST_REQUIRED" and e.details["contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    # 省いた曖昧さは選択肢つき（ツールはこれを needs_input にする）
+    assert e.details["ambiguous"] is True and e.details["result_id"] == rec["result_id"]
+    assert [c["id"] for c in e.details["choices"]] == ["T_vs_C", "U_vs_C"]
+    assert e.details["choices"][1] == {"id": "U_vs_C", "kind": "simple", "label": "U vs C (group)"}
     e = _code(stats_results.as_two_group, rec, "nope")
     assert e.code == "CONTRAST_REQUIRED" and e.details["contrast_ids"] == ["T_vs_C", "U_vs_C"]
+    assert "ambiguous" not in e.details                                # 未知の ID は選び直しではなく誤り
     view = stats_results.as_two_group(rec, "U_vs_C")
     assert view["a"] == "C" and view["b"] == "U" and view["contrast_id"] == "U_vs_C"
     assert view["samples_b"] == _names(ds, "U") and view["n_units_b"] == 4
@@ -304,6 +339,96 @@ def test_as_two_group_rejects_interaction():
     # 対比が 1 つだけの交互作用も読み替えない
     rec2, _, _ = _register(ds, [inter], factors=("group", "sex"))
     assert _code(stats_results.as_two_group, rec2).code == "CONTRAST_NOT_TWO_GROUP"
+    # 2 群の対比が 1 つだけなら、交互作用と並んでいても省いてそれを使う（2 群の形で読む利用者）
+    assert stats_results.as_two_group(rec)["contrast_id"] == "T_vs_C_F"
+
+
+def test_as_two_group_reads_interaction_when_allowed():
+    """2×2 の交互作用（差の差）は allow_interaction=True のときだけ読める（書き出し用）。"""
+    ds = _ds(sex=True)
+    at_f = {"id": "T_vs_C_F", "factor": "group", "reference": "C", "test": "T", "at": {"sex": "F"}}
+    inter = {"id": "ix", "kind": "interaction", "factors": ["group", "sex"],
+             "levels": {"group": ["C", "T"], "sex": ["F", "M"]}}
+    rec, rr, _ = _register(ds, [at_f, inter], factors=("group", "sex"))
+    view = stats_results.as_two_group(rec, "ix", allow_interaction=True)
+    assert view["contrast_kind"] == "interaction" and view["contrast_id"] == "ix"
+    # 基準は (C, M) と (T, F)、比較は (T, M) と (C, F)：log2fc = (T vs C at M) − (T vs C at F)
+    assert view["a"] == "C:M + T:F" and view["b"] == "T:M + C:F"
+    assert view["interaction"]["reference_cells"] == ["C:M", "T:F"]
+    assert view["interaction"]["test_cells"] == ["T:M", "C:F"]
+    assert view["interaction"]["factors"] == ["group", "sex"]
+    assert "minus" in view["interaction"]["definition"] and "=" not in view["interaction"]["definition"]
+    units = rec["units"].values()
+    assert view["n_units_a"] + view["n_units_b"] == len([u for u in units if u.get("cell")])
+    rows = [r for r in rr["analyses"][0]["result"]["rows"] if r["contrast_id"] == "ix"]
+    assert [r["log2fc"] for r in view["results"]] == [r["log2fc"] for r in rows]
+    assert all(r["mean_a"] is None and r["mean_b"] is None for r in view["results"])
+    # 省いたときは、交互作用も数えて 2 つあるので選ばせる
+    e = _code(stats_results.as_two_group, rec, allow_interaction=True)
+    assert e.code == "CONTRAST_REQUIRED" and e.details["ambiguous"] is True
+    kinds = {c["id"]: c["kind"] for c in e.details["choices"]}
+    assert kinds == {"T_vs_C_F": "simple", "ix": "interaction"}
+
+
+def test_as_two_group_reports_the_records_p_adjust_method():
+    ds = _ds()
+    rec, _, _ = _register(ds)
+    assert stats_results.p_adjust_method(rec) == "bh"
+    rec["p_adjust_method"] = "holm"                                   # 統計エンジンの記録が持つ補正の方法
+    stats = stats_results.as_two_group(rec)["statistics"]
+    assert stats["p_adjust_method"] == "holm"
+    # q の読み方は補正の方法に合わせる（エンジンが BH の読み方を書いたままでも FWER と読む）
+    assert stats["bh_population"]["q_interpretation"] == "fwer"
+    assert "q_value_method" not in stats_results.as_two_group(rec)          # 契約の読み方でなければ足さない
+    # 契約の書き出しの読み方: q は BH、読み方も BH、比較の方法はそのまま
+    contract = stats_results.as_two_group(rec, contract_q=True)
+    assert contract["statistics"]["p_adjust_method"] == "holm"
+    assert contract["statistics"]["bh_population"]["q_interpretation"] == "discovery_fdr"
+    assert contract["q_value_method"] == "bh" and contract["q_value_source"] == "recomputed_from_p_value"
+    rec["p_adjust_method"] = "bh"
+    assert stats_results.as_two_group(rec, contract_q=True)["q_value_source"] == "comparison"
+
+
+def _bh_row(fid, p, *, q="in", status="tested", judgeable=True, ci=(-0.1, 0.1)):
+    """`contract_bh_rows` に渡す記録の行（`q` が None なら補正の母集団の外）。"""
+    return {"feature_id": fid, "contrast_id": "c", "status": status, "quantity_judgeable": judgeable,
+            "p": p, "q": None if q is None else 1.0, "ci_low": ci[0], "ci_high": ci[1],
+            "verdict": "x", "verdict_reason": "x"}
+
+
+def test_contract_bh_rows_matches_a_hand_worked_bh_and_rereads_the_verdict():
+    """手で計算した BH: p = 0.01, 0.04, 0.03, 0.005（m = 4）を昇順に 0.005·4/1 = 0.02, 0.01·4/2 = 0.02,
+    0.03·4/3 = 0.04, 0.04·4/4 = 0.04 とし、上から累積の最小を取る → q = 0.02, 0.04, 0.04, 0.02。
+    母集団の外の行（記録の q が無い）は p が小さくても入れない（m は 4 のまま）。"""
+    rows = [_bh_row("a", 0.01), _bh_row("b", 0.04, ci=(-0.5, 0.9)), _bh_row("c", 0.03),
+            _bh_row("d", 0.005), _bh_row("out", 0.0001, q=None), _bh_row("nt", None, q=None, status="not_tested"),
+            _bh_row("nj", 0.002, judgeable=False)]
+    # nj も母集団の中（q は付く）だが量を判定できない。入れると m = 5 になるので、まず外して手計算と比べる
+    rule = {"q_threshold": 0.03, "equivalence_fc": 1.2, "equivalence_log2": 0.263}
+    out = stats_results.contract_bh_rows(rows[:6], rule)
+    assert [round(r["q"], 12) if r["q"] is not None else None for r in out] == [0.02, 0.04, 0.04, 0.02, None, None]
+    # 判定はエンジンの規則で読み直す: q ≤ 0.03 は changed、超えれば区間（±0.263 の内なら unchanged）
+    assert [(r["verdict"], r["verdict_reason"]) for r in out] == [
+        ("changed", "q_below_threshold"), ("inconclusive", "neither"), ("unchanged", "ci_within_equivalence"),
+        ("changed", "q_below_threshold"), ("inconclusive", "outside_bh_population"),
+        ("inconclusive", "not_tested")]
+    # 量を判定できない行は q が小さくても changed にしない（q は母集団の中なので付く）
+    judged = stats_results.contract_bh_rows(rows, rule)
+    assert judged[-1]["q"] is not None and judged[-1]["verdict"] == "inconclusive"
+    assert judged[-1]["verdict_reason"] == "quantity_not_judgeable"
+    # 記録の行は変えない
+    assert rows[0]["q"] == 1.0 and rows[0]["verdict"] == "x"
+
+
+@pytest.mark.parametrize("population,method,expected", [
+    ("matrix", "bh", "discovery_fdr"), ("annotated", "bh", "discovery_fdr"),
+    ("matrix", "bonferroni", "fwer"), ("matrix", "holm", "fwer"), ("matrix", "none", "unadjusted"),
+    ("reported", "bh", "reproduction_only"), ("reported", "holm", "reproduction_only"),
+    ("reported", "none", "reproduction_only")])
+def test_q_interpretation_follows_population_and_method(population, method, expected):
+    engine_value = "reproduction_only" if population == "reported" else "discovery_fdr"
+    bh = {"name": population, "q_interpretation": engine_value}
+    assert stats_results.q_interpretation(bh, method) == expected
 
 
 def test_as_two_group_reads_only_compare_records():
@@ -441,6 +566,23 @@ def test_study_inputs_non_exclusive_values_are_bad_request():
     assert _code(stats_results.study_inputs, _ds(), group_levels=["c0", "r0"]).code == "DATASET_BAD_REQUEST"
 
 
+def test_groups_match_compares_the_group_each_included_sample_gets():
+    """群の上書きは dict でなく、前処理に入る試料ごとの群で比べる: 試料の表の群（Class ID）と同じ分け方の上書きは
+    上書きなしと同じ。除外した試料の群は数字に効かないので比べない。"""
+    ds = _ds()
+    plain = stats_results.study_inputs(ds)
+    by_class = stats_results.study_inputs(ds, group_levels=["C", "T"])["group_overrides"]
+    assert by_class and by_class != plain["group_overrides"]          # dict は違う
+    assert stats_results.groups_match(ds, plain, by_class)            # 試料ごとの群は同じ
+    assert stats_results.groups_match(ds, {**plain, "group_overrides": by_class}, {})
+    by_rep = stats_results.study_inputs(ds, group_levels=["r0", "r1"])["group_overrides"]
+    assert not stats_results.groups_match(ds, plain, by_rep)
+    # 除外した試料だけが群を変えるなら同じ（その試料は前処理の選択で落ちる）
+    excluded = {**plain, "exclude_samples": ["C0_r0"]}
+    assert stats_results.groups_match(ds, excluded, {"C0_r0": "X"})
+    assert not stats_results.groups_match(ds, plain, {"C0_r0": "X"})
+
+
 # --- 「matrix_id か既定の行列」の入力側（比較・PCA・パスウェイが共有） ----------------------
 
 def test_matrix_inputs_default_and_named_and_missing():
@@ -457,21 +599,6 @@ def test_matrix_inputs_default_and_named_and_missing():
     with pytest.raises(stats_results.MatrixNotFound) as exc:
         stats_results.matrix_inputs(ds, "nope")
     assert exc.value.matrix_id == "nope"
-
-
-def test_default_matrix_needs_input_envelope_names_the_tool():
-    from metabolomix.analysis.stats.preprocess import NeedsInput
-    from metabolomix.core.mcp_errors import default_matrix_needs_input
-
-    options = [{"value": "on", "label": "on"}, {"value": "off", "label": "off"}]
-    body = json.loads(default_matrix_needs_input(
-        NeedsInput("preprocess.drift.mode", "尋ねる。", options), "pathway_project"))
-    assert body == {"needs_input": {
-        "field": "preprocess.drift.mode",
-        "reason": "尋ねる。 pathway_project には drift_mode 引数がありません。"
-                  "dataset_preprocess(drift_mode=...) で行列を作り、その matrix_id を "
-                  "pathway_project に渡して呼び直してください。",
-        "options": options, "argument": "drift_mode", "retry_tools": ["dataset_preprocess"]}}
 
 
 def test_register_matrix_rejects_external_matrix_without_fingerprint():
