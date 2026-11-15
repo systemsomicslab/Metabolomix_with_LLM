@@ -266,6 +266,25 @@ def test_novel_candidates_ineffective_settings_are_notes(tmp_path):
     assert with_contrast["status"] == "success", with_contrast
     assert with_contrast["rule_hash"] == from_spec["rule_hash"]
     assert any(n.startswith("statistics.contrast_id") for n in with_contrast["notes"])
+    # result_id の経路の merge_split / alignment_qc も analysis_spec の隣では効かない（まとめは spec の
+    # features.merge_split が決める）ので、断らず捨てて欄ごとに notes に（最終検証 WK）
+    for extra in ({"merge_split": True}, {"merge_split": False}, {"alignment_qc": "not-read.json"},
+                  {"merge_split": False, "alignment_qc": "not-read.json", "contrast_id": "RA_vs_HC"}):
+        out = json.loads(R.dataset_novel_candidates(
+            {"statistics": {"analysis_spec": analysis, "analysis_id": "main", **extra}, "q_max": 1.0},
+            dataset_handle=handle))
+        assert out["status"] == "success", (extra, out)
+        assert out["rule_hash"] == from_spec["rule_hash"]
+        assert out["n_rows"] == from_spec["n_rows"]
+        assert out.get("merge_split") == from_spec.get("merge_split")
+        for key in extra:
+            assert any(n.startswith(f"statistics.{key} は statistics.analysis_spec では効かず")
+                       for n in out["notes"]), (key, out["notes"])
+    # 統計の出所を 2 つ書いた形の誤りは従来どおり断る（どちらの統計か決まらない）
+    both = json.loads(R.dataset_novel_candidates(
+        {"statistics": {"analysis_spec": analysis, "analysis_id": "main", "result_id": diff["result_id"]},
+         "q_max": 1.0}, dataset_handle=handle))
+    assert both["error"]["code"] == "NOVEL_SPEC_INVALID"
 
 
 def test_claim_evidence_description_names_the_msms_fields():

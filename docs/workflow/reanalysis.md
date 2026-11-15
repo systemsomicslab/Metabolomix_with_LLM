@@ -166,7 +166,7 @@ composition の `warnings` は `composition_warnings()` が内側の比較（絶
 3. ├─ metabolomix/analysis/homolog.py  members_from_names()（`auto.adduct` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 4. │  └─ metabolomix/analysis/homolog.py  species_of()
 5. │     └─ metabolomix/analysis/msms_rules.py  name_lipid_species()（目標照合・MS/MS の合否と同じ読み手。標識付きは読まない）
-6. ├─ metabolomix/analysis/homolog.py  check()（比べた隣どうしの対が 0 なら `not_evaluable`。ツールが `notes` に理由を書く）
+6. ├─ metabolomix/analysis/homolog.py  check()（種の鍵は（修飾, 炭素数, 二重結合数）で、修飾の違う種は別の列。比べた隣どうしの対が 0 なら `not_evaluable`。ツールが `notes` に理由と、2 つ以上の修飾を集めたときの内訳を書く）
 7. └─ metabolomix/analysis/homolog.py  rule_hash()
 
 ## dataset_feature_relations
@@ -279,7 +279,7 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 
 `statistics.alignment_qc` を省いた `result_id` の経路は、`dataset_alignment_qc` がこのハンドルに持つ最後の結果
 （`alignment_qc.remembered()`。データの指紋と `metadata_revision` が作ったときと同じものだけ）を使い、無ければ
-その場で探す（`merge_split.source`）。効かない設定（`merge_split=false` の `statistics.alignment_qc`、`analysis_spec` の隣の `statistics.contrast_id`、
+その場で探す（`merge_split.source`）。効かない設定（`merge_split=false` の `statistics.alignment_qc`、`analysis_spec` の隣の `statistics.contrast_id` / `statistics.merge_split` / `statistics.alignment_qc`、
 埋め込んだ analysis_spec の効かない設定）は `_drop_ineffective_novel_settings()` が外して `notes` に書く。
 analysis_spec で選んだ解析が `correction=none` なら、q が無いので候補が出ないことも `notes` に書く。
 `output_path` が無く 50 行を超えれば q の昇順の先頭 50 行だけを TSV にし、`truncated` を立てる（断らない）。

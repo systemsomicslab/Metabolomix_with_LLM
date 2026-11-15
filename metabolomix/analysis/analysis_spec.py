@@ -17,6 +17,8 @@ spec が渡す）。書いても効かない設定（`steps` に無い段の設�
 `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。`correction=none` の
 `bh_population`・`thresholds.q`、`drift_correct` の無い spec の `injection_order`、共変量で調整する ols の無い spec の
 `covariates` も `notes` に書くが、前から正規化した spec に入っていたので残す（`rule_hash` を変えない。表は読まない）。
+外部の行列でも同じで、`correction=none` の解析の `bh_population=annotated` と、`drift_correct` の無い spec の
+`injection_order.source=metadata` は断らない（使うとき＝`correction=bh`・`drift_correct` のあるときだけ誤り）。
 """
 from __future__ import annotations
 
@@ -153,11 +155,15 @@ def _normalize_groups(raw, input_source: str) -> dict:
                                           "role_column": None})
 
 
-def _normalize_order(raw, input_source: str):
+def _normalize_order(raw, input_source: str, used: bool = True):
+    """注入順の設定を正規化する。`used` は drift_correct の解析があるか（無ければ表を読まない）。
+
+    外部の行列の `source=metadata` は、使うときだけ誤り（試料の表が無い）。使わなければ効かない設定なので
+    断らず、正規化した形は前と同じ `{"source": "metadata"}`（`normalize_spec` が notes に書く）。"""
     if raw is None:
         return None
     if raw.get("source") == "metadata":
-        if input_source != "dataset":
+        if input_source != "dataset" and used:
             raise _fail("injection_order.source=metadata はデータセットの入力でだけ使える",
                         field="injection_order")
         _exact_keys(raw, {"source"}, {"source"}, "injection_order")
@@ -420,7 +426,9 @@ def normalize_spec(spec, *, notes: list[str] | None = None) -> dict:
             notes.append("features.alignment_qc は外部の行列（アライメントが無い）では効かず、"
                          "使っていない")
             features = {k: v for k, v in features.items() if k != "alignment_qc"}
-        if any(a["bh_population"] == "annotated" for a in normalized_analyses):
+        # 母集団を使うのは q を計算する解析（correction=bh）だけ。correction=none の annotated は効かない設定で、
+        # _normalize_analysis が notes に書く（断らない）
+        if any(a["bh_population"] == "annotated" and a["correction"] == "bh" for a in normalized_analyses):
             raise _fail("bh_population=annotated（SME のある特徴）はデータセットの入力でだけ使える",
                         field="analyses")
     # 使う解析が無い表は読まない（`_load`）。書いた設定は正規化した spec に残す（rule_hash を変えない）
@@ -434,7 +442,8 @@ def normalize_spec(spec, *, notes: list[str] | None = None) -> dict:
         "input": input_,
         "groups": _normalize_groups(spec.get("groups"), input_["source"]),
         "comparison": {"reference": reference, "test": test},
-        "injection_order": _normalize_order(spec.get("injection_order"), input_["source"]),
+        "injection_order": _normalize_order(spec.get("injection_order"), input_["source"],
+                                            _uses_injection_order(normalized_analyses)),
         "covariates": covariates,
         "features": features,
         "aggregate": aggregate,

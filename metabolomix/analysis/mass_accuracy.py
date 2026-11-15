@@ -180,8 +180,8 @@ def band_summary(rows: list[dict], band_edges: list[float]) -> dict:
 
 # ---------- 新しい知見の候補 ----------
 
-_STATISTICS_SHAPE = ("statistics は {result_id[, contrast_id]}（対比は result_id#contrast_id の形でも選べる）"
-                     "か {analysis_spec, analysis_id}")
+_STATISTICS_SHAPE = ("statistics は {result_id[, contrast_id, merge_split, alignment_qc]}（対比は "
+                     "result_id#contrast_id の形でも選べる）か {analysis_spec, analysis_id}")
 
 
 def _result_ref(stats_spec: dict) -> str:
