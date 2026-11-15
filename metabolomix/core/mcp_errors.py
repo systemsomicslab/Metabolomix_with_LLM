@@ -185,8 +185,10 @@ MZTAB_ERROR_CODES = frozenset({
     # dataset_plot(output_path=...) が指したファイルに書けない（書く段だけ。図の置き場は変えない）。
     "FIGURE_SAVE_FAILED",
     # save_figure が保存しようとした図が古い（試料の情報の更新後・元の結果が今の状態から出たものでない。除外・
-    # 試料の表の更新が図ごと捨てた図も。そのときは details.reason に変わったもの）。
-    # details.required_tools は dataset_plot（描き直す）。
+    # 試料の表の更新が図ごと捨てた図も。そのときは details.reason に変わったもの）。details.required_tools は
+    # dataset_plot（描き直す）。kind=species_pca で名指しした result_id が置き場の図の結果と違うときも
+    # （details.held_result_id と違いの種類 details.mismatch: settings / stale / input。名指しした結果の指定が
+    # 置き場の図と違うときだけ details.settings と required_tools。stale と input は描き直しても戻らない）。
     "STALE_FIGURE",
     # job_status: 知らない受付番号・走っている受付が上限・道具が DomainError 以外で止まった。
     "JOB_NOT_FOUND",

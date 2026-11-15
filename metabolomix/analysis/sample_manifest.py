@@ -931,8 +931,9 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
     契約により ``ds`` には一切触れない（対話的なDatasetState経路にも同じ検証・出所・
     無効化規則を適用する、spec §7.3）。
 
-    ``DatasetState`` は ``source_root`` 自体を保持しないため、実行時に予定した raw の
-    絶対パス（``ds.assay_sources``）から逆算する。
+    ``DatasetState`` は ``source_root`` 自体を保持しないため、試料ごとの raw の絶対パス
+    （``_raw_path_for_sample``。``resolve_metadata`` がシートの行を試料へ結ぶのと同じ値）から逆算する
+    （``_raw_manifest_layout``）。
     """
     source_root, expected_sources = _raw_manifest_layout(ds)
     rows = parse_manifest(Path(manifest_path), source_root=source_root,
@@ -944,16 +945,19 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
 def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:
     """sample-manifest.v1 検証に使う ``source_root``/相対パス一覧を、予定した raw の絶対パスから逆算する。
 
-    mzTab-M のアダプタのデータセットは ``ds.assay_sources``（abundance_assay[N] -> raw）を持つ。
-    解析フォルダのアダプタのデータセットは持たないので、試料ごとに
-    ``_raw_path_for_sample``（job の mzTab-M の場所 → ``.mddata`` の
-    ``file_path`` → assay id の優先順。resolve_metadata がシートの行を試料へ結ぶのと同じ関数）を使う。
+    試料ごとに ``_raw_path_for_sample``（``ds.sample_raw_paths`` → ``.mddata`` の ``file_path`` →
+    assay id から ``ds.assay_sources`` の優先順）を使う。resolve_metadata がシートの行を試料へ結ぶのと
+    **同じ関数**で、検証の置き場所と結び方が別の raw を見ることは無い（pipeline の run を動かしたあと
+    ``source="mztab"`` で開くと、試料の対応表を raw の名前で結んだ ``sample_raw_paths`` は今の run の場所、
+    ``assay_sources`` は Console が走ったときの場所になる。置き場所を ``assay_sources`` から取ると、どのシートも
+    試料に結べなかった）。試料から 1 つも引けないときだけ ``ds.assay_sources`` の値を使う（assay id を
+    持たない合成のデータセット）。
     """
-    paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
+    paths = [Path(p) for p in (
+        _raw_path_for_sample(ds, i)
+        for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
     if not paths:
-        paths = [Path(p) for p in (
-            _raw_path_for_sample(ds, i)
-            for i in range(len(getattr(ds, "sample_names", []) or []))) if p]
+        paths = [Path(p) for p in (getattr(ds, "assay_sources", None) or {}).values() if p]
     if not paths:
         if getattr(ds, "source_format", None) == "msdial_folder" and getattr(ds, "job_path", None):
             reason = ("この job の mzTab-M の ms_run の場所にも .mddata の file_path にも、試料の raw の"

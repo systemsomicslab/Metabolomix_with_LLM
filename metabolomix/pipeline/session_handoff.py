@@ -189,9 +189,12 @@ def bind_manifest_rows(ds, rows: list[dict]) -> str | None:
     そこでまず raw のパス（mzTab-M の `ms_run[N]-location` → `ds.assay_sources`。解析フォルダのアダプタは
     `_folder_via_job` が同じ値を `ds.sample_raw_paths` に写す。`sample_manifest.resolve_metadata`）で結び、
     結べなければ（raw を動かした run など）行の raw の名前か `sample_id` を試料名と結ぶ（run の中の
-    解析フォルダを `directory` で開く経路 `dataset.opening._apply_run_rows` と同じ鍵）。どちらでも全試料を
-    結べなければ当てない（群は `dataset_set_sample_metadata` で与える）。読み込みの一部なので
-    `metadata_revision` は進めない。
+    解析フォルダを `directory` で開く経路 `dataset.opening._apply_run_rows` と同じ鍵）。名前で結んだときは
+    行の raw のパス（今の run の場所）を `ds.sample_raw_paths` に残す。あとの `dataset_set_sample_metadata` は
+    シートの置き場所も試料への結び方もこの値から取る（`sample_manifest._raw_manifest_layout` と
+    `resolve_metadata` が同じ `_raw_path_for_sample` を読む。mzTab-M のアダプタの `ds.assay_sources` は
+    Console が走ったときの場所のまま）。どちらでも全試料を結べなければ当てない（群は
+    `dataset_set_sample_metadata` で与える）。読み込みの一部なので `metadata_revision` は進めない。
     """
     note = _bind_manifest_rows(ds, rows)
     if note:

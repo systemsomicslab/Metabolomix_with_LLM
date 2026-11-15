@@ -128,6 +128,10 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
   統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い
   印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に
   `exploratory`（`{exploratory_only: true, reason}`）が載る（でなければ欄が無い）。
+- **図は引き継がない**: 派生（apply・skip・merge・select）は親の結果・行列と同じく、親の図（`dataset_plot` が置いた図。
+  親の行列から描いたもの）も、親の除外・試料の表の更新が捨てた図の印も持たない。派生のハンドルでまだ描いていない図の
+  `save_figure` は `missing_state`（`dataset_plot` を案内）で、親の図を保存することも、親の除外を理由に
+  `STALE_FIGURE` を返すこともない。親のハンドルの図はそのまま。
 - **出所の裏取り**: 統合したデータセットの `source_verification` は、陽陰で同じならその値、違えば弱いほう
   （`verified` > `legacy_unverified` > `direct_unverified`。知らない値はいちばん弱いもの）。書き出しのメタ行
   `# source_verification` と `dataset_status` もこの値。陽陰で違うときだけ、merge の戻り値に
