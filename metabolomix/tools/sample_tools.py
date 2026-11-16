@@ -33,23 +33,18 @@ def dataset_exclude(
 ) -> str:
     """試料・特徴を解析から外す（可逆）。`dataset_preprocess` が行列から外して適用する。
 
-    samples: 試料名（`dataset_status(view="samples")` の name）または実験情報シートの sample_id。
-    features: 特徴 ID（`dataset_feature_search` の feature_id。int でも str でもよい。`str()` に直す）。
-    mode: `"add"`（既定。除外に足す。**`reason` が要る**。除外済みは理由を置き換える）/
-        `"remove"`（除外から戻す）/ `"clear"`（`samples` / `features` のうち渡した種類を空にする。
-        どちらも渡さなければ両方）。
-    reason: 除外の理由（`add` で必須。後で戻す・説明するための記録で、`dataset_status` の
-        `samples` の `excluded` 列に出る）。
+    samples: 試料名（`dataset_status(view="samples")` の name）か実験情報シートの sample_id。
+    features: 特徴 ID（`dataset_feature_search` の feature_id。int でも str でもよく、`str()` に直す）。
+    mode: `"add"`（既定。除外に足す。`reason` が要る。除外済みは理由を置き換える）/ `"remove"`（除外から戻す）/
+        `"clear"`（`samples` / `features` のうち渡した種類を空にする。どちらも渡さなければ両方）。
+    reason: 除外の理由（`add` で必須。`dataset_status` の `samples` の `excluded` 列に出る）。
+    dataset_handle: `load_dataset` が返したハンドル（省けば対話のセッションのデータセット）。ハンドルの状態だけを
+        読み書きする。
 
-    **存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変更しない**。全試料の除外も拒む。
-    入力（定量行列・特徴 ID・試料名）は変えず、`dataset_fingerprint` も動かさない。
-
-    実際に除外が変わったときだけ、前処理済み行列から先の結果（PCA・差次的解析）を古いとして
-    捨てる（`dataset_preprocess` からやり直す。古い結果は `ds.results` に残るが現在の結果として
-    は通らない）。同じ引数の再実行は何も動かさない（冪等）。結果の件数を返す。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    存在しない試料名・特徴 ID が 1 つでもあれば全体を拒み、何も変えない。全試料の除外も拒む。入力（定量行列・
+    特徴 ID・試料名）と `dataset_fingerprint` は変えない。実際に除外が変わったときだけ、前処理済み行列から先の結果
+    （PCA・差次的解析）を古いとして捨てる（`dataset_preprocess` からやり直す。古い結果は `ds.results` に残るが
+    現在の結果としては通らない）。同じ引数の再実行は何も動かさない（冪等）。結果の件数を返す。
     """
     if features is not None:
         features = [str(f) for f in features]
