@@ -390,40 +390,27 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
 def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     """最初の概観: 品質 → 全体 → クラス → 分子種の 4 段で「群の間で何が変わり、何が変わっていないか」を粗く示す。
 
-    `load_dataset(overview=True)` も読み込みの最後に同じものを返す（`overview` 欄。既定は載せない）。鎖を進めた後（キュレーション・換算・統合・
-    選別・除外・試料の表の更新）に呼び直すと、同じ形で出し直す。図は入れない（各段の `next` の dataset_plot で描く）。
-
-    - 計算は C の既定の前処理（drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）・PCA（QC は投影）・
-      moderated t（2 群は 1 対比、3〜6 群は全対と moderated F、7 群以上は基準との対比と F）。判定は
-      changed / unchanged / inconclusive だけ（q≤0.05、同等 ±1.2 倍）。
-    - 2 群の向きは**仮**（試料の表で先に現れた群を基準。名前から対照を推測しない）。向きを決めるのは
+    `load_dataset(overview=True)` も読み込みの最後に同じものを返す（`overview` 欄。既定は載せない）。鎖を進めた後（キュレーション・
+    換算・統合・選別・除外・試料の表の更新）に呼び直すと、同じ形で出し直す。図は入れない（各段の `next` の dataset_plot で描く）。
+    - 計算は既定の前処理（drift=auto がドリフト補正を当てなかったら補正なしで計算し、そう書く）・PCA（QC は投影）・moderated t
+      （2 群は 1 対比、3〜6 群は全対と moderated F、7 群以上は基準との対比と F）。判定は changed / unchanged / inconclusive だけ
+      （q≤0.05、同等 ±1.2 倍）。
+    - 2 群の向きは仮（試料の表で先に現れた群を基準。名前から対照を推測しない）。向きを決めるのは
       `dataset_compare(reference_group=..., test_group=...)`。
-    - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、
-      群とバッチが完全交絡なら比較を回さない。注入順がファイルの順かもしれない（MS-DIAL の既定・シートの宣言で
-      ファイル名の順）なら、注入順を使う事実（ドリフトの兆候・注入順の偏り）に但し書きを添え、next に実際の測定順の入れ方を足す
-      （陽陰を統合したデータセットで陽イオン以外の極性なら、統合したハンドルへのシートはその極性を変えないので、
-      その極性のハンドルにシートを当てて dataset_merge_polarities で統合し直す。統合し直すと統合したハンドルに当てた
-      シートと除外は引き継がれないので、その手は next の中で dataset_exclude と drift_mode="on" より前に置く）。群が 1 つでも比較しない。探索専用のデータセット（未完了の実行）は
-      比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実（理由つき）を置く。
+    - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、群とバッチが
+      完全交絡なら比較を回さない。群が 1 つでも比較しない。注入順がファイルの順かもしれなければ注入順を使う事実に但し書きを添え、
+      next に実際の測定順の入れ方を足す。探索専用のデータセットは比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
-    - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。考察は事実 ID を挙げて
-      事実と別に書く（サーバは考察を書かない）。
-    - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。
-      概観は `reports/stats/` に記録を 1 件追記する（書けなくても概観は成功し `record.written=false`）。
+    - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。サーバは考察を書かない。
+    - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。`reports/stats/` に記録を 1 件
+      追記する（書けなくても概観は成功し `record.written=false`）。
+    欄・但し書き・`notes` の全行の引き方は `docs_read(topic="dataset")` の 11.9。
 
-    top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて出し、`notes` にそう書く
-        （そのとき上位の表を 20 行で切ったら `species.top_truncated: true` と `species.top_n_more`＝載せなかった
-        行数）。`notes` の全行の引き方は比べ方で変わる: 2 群は `result_ids.compare` を dataset_feature_search・
-        dataset_export_differential で、多群（上位は F の q の順）は概観の群と行列をそのまま渡した
-        `dataset_compare(groups=[<概観の群>], matrix_id=<概観の行列>, output_path=...)` が書く F 検定の表
-        （`<stem>.ftests.tsv` の `f_q`）で引く（注記はその呼び出しを書いたとおりに挙げる。`matrix_id` を省くと
-        このハンドルで dataset_preprocess が最後に作った行列で比べ、F の母集団と `f_q` が概観と違いうる）。
-        比較を回さなかった（群が 1 つ・完全交絡）なら引き方は書かない。
-        整数でない・負の値は DATASET_BAD_REQUEST。
+    top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて `notes` に書く（上位の表を 20 行で切ったら
+        `species.top_truncated: true` と `species.top_n_more`）。整数でない・負の値は DATASET_BAD_REQUEST。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
 
-    戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める。
-    `record_objective(assay_kind=...)` で確定）。
+    戻り値の `assay_kind` はそのハンドルの種別（組成のラベルとクラスの段の規則を決める。`record_objective(assay_kind=...)` で確定）。
     """
     if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
         return mztab_error("DATASET_BAD_REQUEST", "top_n は 0 以上の整数です。", {"top_n": top_n})
