@@ -1,38 +1,28 @@
 # ワークフロー: 定量（内部標準の正規化・極性の統合・特徴の選別）
 
-出力の**意味**（`quant_state`・gap-fill の印・単位・`needs_input`・記録と audit）は
-[quant.md（output_format）](../output_format/quant.md)
-（`lipidmix://docs/output-format/quant`）。規則は ms-data-parser の外の任意の規則プラグイン
-（`[quant] rules`、面の仕様は [../quant-rules-plugin.md](../quant-rules-plugin.md)）が持つ。
-未設定なら 4 ツールとも `quant_rules_unavailable` の封筒を返す（ほかのツールは影響を受けない）。
+出力の意味は [quant.md（output_format）](../output_format/quant.md)（`lipidmix://docs/output-format/quant`）。規則は外部の
+規則プラグイン（`[quant] rules`。面の仕様は [../quant-rules-plugin.md](../quant-rules-plugin.md)）が持ち、未設定なら 4 ツールとも
+`quant_rules_unavailable` の封筒を返す（ほかのツールは影響を受けない）。
 
-標準の順序は `dataset_quant_preview`（確認）→ `dataset_quant_apply`（正規化。`skip=True` で飛ばせる）
-→（陽・陰の 2 データセットなら）`dataset_merge_polarities` → `dataset_select_features`。
-正規化しないなら、`dataset_quant_apply` を通さずに `dataset_merge_polarities` へ進んでもよい
-（未正規化どうしとして統合する）。
-どの工程も元のハンドルは変えず、**新しいハンドル**の派生データセットを作って直近にする
-（`metabolomix/quant/derive.py` の `register()`）。
+順序: `dataset_quant_preview`（確認）→ `dataset_quant_apply`（正規化。`skip=True` で飛ばせる）→（陽・陰の 2 データセットなら）
+`dataset_merge_polarities` → `dataset_select_features`。正規化しないなら apply を通さずに merge へ進んでよい（未正規化どうしとして
+統合する）。どの工程も元のハンドルは変えず、新しいハンドルの派生データセットを作って直近にする（`metabolomix/quant/derive.py` の
+`register()`）。
 
-`dataset_handle` を持つ 3 ツールは `handle_dispatch.install` が包み、そのハンドルの `lock` の下で
-ワーカースレッドに回す。`dataset_merge_polarities` は `dataset_handle` も `session.dataset` も持たないが、
-`handle_dispatch.ALWAYS_THREADED` に載せてあり、セッションのロックを取らずにワーカースレッドで
-回る（ロックの待ちでイベントループを塞がない）。2 つのハンドルのロックは `handle_id` の順に
-自分で取る（`SESSION_READERS` には載せない）。待つのはほかのツールと同じく**全部で**最長
-`handle_dispatch.HANDLE_LOCK_WAIT`（25 秒。1 本ごとではない）で、待ちきれなければ取ったロックを放し、何もせずに
-`HANDLE_BUSY`（`mcp_errors.handle_busy()`。ロックを持つ長い道具の仕事があればその `job_id` と道具）を返す
-（`handle_dispatch.acquire_all()`）。
+`dataset_handle` を持つ 3 ツールは `handle_dispatch.install` が包み、そのハンドルの `lock` の下でワーカースレッドに回す。
+`dataset_merge_polarities` は `dataset_handle` も `session.dataset` も持たず、`handle_dispatch.ALWAYS_THREADED` に載せてセッションの
+ロックを取らずにワーカースレッドで回る（`SESSION_READERS` には載せない）。2 つのハンドルのロックは `handle_dispatch.acquire_all()` が
+`handle_id` の順に取り、待つのは全部で最長 `handle_dispatch.HANDLE_LOCK_WAIT`（25 秒）。待ちきれなければ取ったロックを放し、何もせずに
+`HANDLE_BUSY`（`mcp_errors.handle_busy()`。ロックを持つ長い道具の仕事があればその `job_id` と道具）。
 
-4 ツールとも入力は MS-DIAL の解析フォルダから読んだデータセットだけ
-（`metabolomix/quant/table.py` の `require_msdial_source()`。ほかは `QUANT_SOURCE_UNSUPPORTED`）。
-記録を書く工程は、書く前に `metabolomix/quant/derive.py` の `check_capacity()` で新しいハンドルを
-足せるかを確かめる。
+4 ツールとも入力は MS-DIAL の解析フォルダから読んだデータセットだけ（`metabolomix/quant/table.py` の `require_msdial_source()`。
+ほかは `QUANT_SOURCE_UNSUPPORTED`）。記録を書く工程は、書く前に `derive.py` の `check_capacity()` で新しいハンドルを足せるかを確かめる。
 
 ## dataset_quant_preview
 
-前提: データセット（無ければ `missing_state`）。陽陰を統合したデータセットは、極性を解く前に
-`check_not_merged()` が `QUANT_ALREADY_MERGED` で断る（内部標準は極性ごと。`_check_not_normalized()` も
-同じ検査を通す）。極性が決まらなければ `polarity` が要る
-（`QUANT_POLARITY_REQUIRED`）。状態変更: なし（読み取り専用。記録も書かない）。
+前提: データセット（無ければ `missing_state`）。陽陰を統合したデータセットは極性を解く前に `check_not_merged()` が
+`QUANT_ALREADY_MERGED` で断る（`_check_not_normalized()` も同じ検査を通す）。極性が決まらなければ `polarity` が要る
+（`QUANT_POLARITY_REQUIRED`）。状態変更: なし（記録も書かない）。
 
 1. metabolomix/quant/tools.py  dataset_quant_preview()
 2. ├─ metabolomix/quant/tools.py  _context()
@@ -53,12 +43,11 @@
 
 ## dataset_quant_apply
 
-前提: preview と同じ。`reference_path` は `skip=True` のときだけ省ける。正規化済み・選別済み・統合済みには
-掛けない（`QUANT_ALREADY_NORMALIZED` / `QUANT_ALREADY_SELECTED` / `QUANT_ALREADY_MERGED`。`skip()` も
-`_check_not_normalized()` を通す）。派生は `derive()` の `carry_exploratory()` で親の探索専用の印を
-引き継ぐ（選別も同じ）。親の結果・行列・図（`figures`）・捨てた図の印（`discarded_figures`）は `derive()` が
-空にする（統合・選別も同じ。派生でまだ描いていない図の `save_figure` は `missing_state`）。状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、
-新しいハンドルを登録して直近にする。内部標準が未解決（`needs_input`）なら何も書かない。
+前提: preview と同じ。`reference_path` は `skip=True` のときだけ省ける。正規化済み・選別済み・統合済みには掛けない
+（`QUANT_ALREADY_NORMALIZED` / `QUANT_ALREADY_SELECTED` / `QUANT_ALREADY_MERGED`。`skip()` も `_check_not_normalized()` を通す）。
+状態変更: 解析フォルダの `reports/quant/` に記録を 1 件書き、新しいハンドルを登録して直近にする。内部標準が未解決
+（`needs_input`）なら何も書かない。`derive()` は `carry_exploratory()` で親の探索専用の印を引き継ぎ、親の結果・行列・図
+（`figures`）・捨てた図の印（`discarded_figures`）を空にする（統合・選別も同じ。output_format §5）。
 
 1. metabolomix/quant/tools.py  dataset_quant_apply()
 2. ├─ metabolomix/quant/tools.py  _context()
@@ -78,29 +67,23 @@
 
 ## dataset_merge_polarities
 
-前提: 2 つのハンドルのどちらにもデータセットがあり、正規化の状態（normalized・method・unit）が同じ。
-`dataset_quant_apply` を通していない側は未正規化（`skip=True` と同じ値）として扱う
-（`_check_states()`。違えば `QUANT_MERGE_STATE_MISMATCH`。各側の通り方 `applied` / `skipped` / `not_run` は
-`normalize_status()` が決め、記録の `settings.normalize` と戻り値の `normalize` に書く）。試料名が食い違えば `needs_input`（`only_in`）で止まり、
-記録の置き場が決まらなければ `needs_input`（`record_folder`）。状態変更: 2 つの解析フォルダの
-共通の親（または `record_folder`）の `reports/quant/` に記録を書き、新しいハンドルを登録する。
-試料の表は陽イオンのもの（陽イオンに当てたシート `sample_metadata_rows` も `derive()` がそのまま引き継ぐ）。陰イオンの
-試料ごとのバッチ・注入順は陰イオンの試料の表（当てたシートを含む）から読み（手順 16）、`quant_state.polarity_runs.negative`
-（統合後の試料名 → 測定）に残す。統合前の試料名は `quant_state.source_sample_names` に残す。統合したデータセットが陽イオンの
-測定として読む値（手順 22。統合したデータセットに `sample_runs()` を当てる）と同じかを `negative_runs`（手順 23）で
-記録と戻り値に書くので、記録は統合したデータセットを作ってから書く（手順 24。記録 ID はそのあと `quant_state` に入れる）。
-アッセイ種別（`assay_kind`）は `derive()` が写す陽イオンの値のままにせず、両側から決める（手順 21。陽陰で同じならその値、
-片方が `unknown` ならもう片方、`lipid` と `metabolite` で食い違えば `unknown`。戻り値の `assay_kind`、陽陰で違えば `notes`。
-食い違いの注記は親の 2 つのハンドルを挙げ、誤っている側へ `record_objective` で記録し直して統合し直すよう言う。`derive()` の
-写しは `analysis_dir` も陽イオンのものなので、統合したハンドルへの記録は陽イオンの解析フォルダの目的に書く）。
-統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（`dataset_analysis.md` の `dataset_preprocess`）。
-統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので陽イオンの測定だけを決め、陰イオンの測定は陰イオンの
-ハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートと除外は引き継がれない（統合は陽イオンの
-ハンドルの試料の表を引き継ぐ）。除外（`dataset_exclude`）は極性ごとのハンドルから統合後の ID に写す（手順 18。
-`derive()` は持ち越す ID の除外だけを残す——`positive:<id>` / `negative:<id>` は親に無い新しい ID なので特徴の除外は
-すべて落ち、試料の除外は陽イオンの側のものだけが共通 ID へ改名されて残る。そこで `merged_exclusions()` が両側から作り直し、
-特徴は `positive:<id>` / `negative:<id>` に、試料は各側の名前を共通 ID へ写して和をとる。引き継いだときだけ戻り値の
-`exclusions` と `notes`、記録の `summary.exclusions`）。
+前提: 2 つのハンドルのどちらにもデータセットがあり、正規化の状態（normalized・method・unit）が同じ（`_check_states()`。
+apply を通していない側は未正規化〔`skip=True` と同じ値〕。違えば `QUANT_MERGE_STATE_MISMATCH`）。各側の通り方
+（`applied` / `skipped` / `not_run`）は `normalize_status()` が決め、記録の `settings.normalize` と戻り値の `normalize` に書く。
+試料名が食い違えば `needs_input`（`only_in`）、記録の置き場が決まらなければ `needs_input`（`record_folder`）。
+状態変更: 2 つの解析フォルダの共通の親（または `record_folder`）の `reports/quant/` に記録を書き、新しいハンドルを登録する。
+
+- 試料の表とシート（`sample_metadata_rows`）は `derive()` が陽イオンのものを引き継ぐ。陰イオンの試料ごとのバッチ・注入順は
+  手順 16 で陰イオンの試料の表（当てたシートを含む）から読んで `quant_state.polarity_runs.negative` に、統合前の試料名は
+  `quant_state.source_sample_names` に残す。統合したデータセットが陽イオンの測定として読む値（手順 22）と同じかを手順 23 で
+  `negative_runs` にするので、記録は統合したデータセットを作ってから書く（手順 24。記録 ID はそのあと `quant_state` に入れる）。
+  統計エンジンの前処理はこれでドリフト補正を極性ごとに当てる（[dataset_analysis.md](dataset_analysis.md) の `dataset_preprocess`）。
+- アッセイ種別は `merged_assay_kind()`（手順 21）が両側から決める（`derive()` が写す陽イオンの値のままにしない。`derive()` が写す
+  `analysis_dir` は陽イオンのものなので、統合したハンドルへの `record_objective` は陽イオンの解析フォルダの目的に書く）。
+- 除外は `merged_exclusions()`（手順 18）が両側から統合後の ID に写す。`derive()` は持ち越す ID の除外だけを残すので、特徴の除外は
+  すべて落ち、試料の除外は陽イオンの側のものだけが共通 ID へ改名されて残るため、作り直す。
+- 決め方・写し方と、統合し直しで引き継がれないもの（統合したハンドルに当てたシートと除外）は output_format の §3 の
+  `polarity_runs` と §5 の merge。
 
 1. metabolomix/quant/tools.py  dataset_merge_polarities()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
