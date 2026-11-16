@@ -56,30 +56,21 @@ def console_method_template(
     library_mode: str = "auto",
     msp_file: str | None = None,
 ) -> str:
-    """既存のパラメータから、別極性用のメソッドファイルを作ります（最後の手段）。
+    """既存のパラメータファイルから、別の極性用のメソッドファイルを作る（最後の手段）。
 
-    **まず pipeline_plan の request で method_file を省略して試してください。** MS-DIAL GUI は解析の
-    たびに `<project>_param_<終了時刻>.txt` を自動保存するので、その極性で一度でも
-    GUI 実行があれば、作る必要はありません。
-
-    このツールが要るのは「その極性で一度も処理していない」場合だけです
-    （別極性は処理済み、というのが典型）。やることは 2 行の差し替えです:
-    `Ion mode` と `Searched adduct ions` をその極性の標準セットにする。
-    **検出・アライメント条件は元のまま引き継ぎます**（勝手に変えると別の解析になる）。
-    加えて、GUI 由来では必ず空の `Lbm file path` を解決して埋めます。
+    MS-DIAL GUI は解析のたびに `<project>_param_<終了時刻>.txt` を保存するので、その極性で一度でも GUI で処理して
+    いれば要らない（まず `pipeline_plan` の request で method_file を省く）。要るのはその極性で一度も処理して
+    いないとき（別の極性は処理済みが典型）。`Ion mode` と `Searched adduct ions` をその極性の標準セットに差し替え、
+    検出・アライメント条件は元のまま引き継ぐ。GUI 由来では必ず空の `Lbm file path` を解決して埋める。
 
     out_path: 書き出し先。
-    polarity: "positive" / "negative"（作りたい側。"pos" / "neg" / "+" / "-" も可。読めない値は
-        POLARITY_INVALID）。
-    based_on: 元にするパラメータファイル。省略時は dataset_root から探します
-        （**極性は問いません** — 別極性から作るのがこのツールの用途なので）。
-    dataset_root: based_on 省略時の探索先。dataset_root 直下・兄弟フォルダ・
-        過去 run まで探します。候補が複数あれば based_on で選ぶよう
-        METHOD_FILE_CHOICE_REQUIRED で止まります（土台の選択は解析条件そのもの
-        なので、最新を黙って採りません）。
-    library_mode: "auto"（既定）か "msp_only"。"msp_only" は pipeline_plan と同じく
-        `Lbm file path` を空にし、`Msp file path` に作りたい極性の研究室 MSP を書き、
-        Text DB と注釈器設定表の宣言を空にする（解決順・止まる条件も pipeline_plan と同じ）。
+    polarity: 作る側の "positive" / "negative"（"pos" / "neg" / "+" / "-" も可。読めない値は POLARITY_INVALID）。
+    based_on: 元にするパラメータファイル。省けば dataset_root から探す（極性を問わない）。
+    dataset_root: based_on を省いたときの探索先（直下・兄弟フォルダ・過去の run）。候補が複数なら
+        METHOD_FILE_CHOICE_REQUIRED（based_on で選ぶ。最新を黙って採らない）。
+    library_mode: "auto"（既定）か "msp_only"。"msp_only" は pipeline_plan と同じく `Lbm file path` を空にし、
+        `Msp file path` に作る極性の研究室 MSP を書き、Text DB と注釈器設定表の宣言を空にする（解決順・止まる
+        条件も pipeline_plan と同じ）。
     msp_file: library_mode="msp_only" で使う MSP の明示パス。
     """
     polarity, polarity_error = _polarity_or_error(polarity)
@@ -190,22 +181,20 @@ def console_method_candidates(
     omics: str | None = "lipidomics",
     search_dirs: list[str] | None = None,
 ) -> str:
-    """使えるメソッドファイルの候補を列挙します（pipeline_plan が失敗する前に呼べます）。
+    """使えるメソッドファイルの候補を並べる（pipeline_plan の前に呼べる）。
 
-    MS-DIAL GUI は解析のたびに `<project>_param_<終了時刻>.txt` をプロジェクト
-    フォルダへ自動保存します。その極性で一度も GUI 実行が無いフォルダには存在
-    しないため、**兄弟フォルダ**（POS の隣の NEG 等）と**過去 run** まで探します。
+    MS-DIAL GUI の `<project>_param_<終了時刻>.txt` はその極性で GUI 実行したプロジェクトフォルダにしか無いので、
+    兄弟フォルダ（POS の隣の NEG など）と過去の run まで探す。
 
     dataset_root: 生データフォルダ。
-    polarity: "positive" / "negative"（"pos" / "neg" / "+" / "-" も可。読めない値は
-        POLARITY_INVALID）。省略すると極性で区別せず全件返します。
-        指定すると各候補に `usable` が付き、一致しないものは
-        `needs_polarity_conversion`（console_method_template を経由させる）。
-    omics: 既定 "lipidomics"。None で絞り込みません。
-    search_dirs: 追加で探すフォルダ。再帰はしません。
+    polarity: "positive" / "negative"（"pos" / "neg" / "+" / "-" も可。読めない値は POLARITY_INVALID）。省けば
+        極性で区別せず全件。渡すと各候補に `usable` が付き、合わないものは `needs_polarity_conversion`
+        （console_method_template を通す）。
+    omics: 既定 "lipidomics"。None で絞らない。
+    search_dirs: 追加で探すフォルダ（再帰しない）。
 
-    候補には比較用の `key_params`（検出・アライメント条件のうち結果を変える少数）が
-    付きます。候補が 10 件を超えるときは付きません（戻り値が肥大するため）。
+    候補には比較用の `key_params`（検出・アライメント条件のうち結果を変える少数）が付く（候補が 10 件を超えると
+    付かない）。
     """
     if polarity is not None:
         polarity, polarity_error = _polarity_or_error(polarity)

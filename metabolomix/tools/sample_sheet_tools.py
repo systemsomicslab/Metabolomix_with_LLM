@@ -98,30 +98,31 @@ def pipeline_sample_sheet(
 ) -> str:
     """ISA / mwTab の試料の表から、因子の列付きの実験情報シート（sample-manifest.v2）を raw のフォルダに書く。
 
-    群は `factor_columns`（試料の表の因子の列。`Factor Value[名]`・`Characteristics[名]` の名前でも引ける）の
-    値の組（値を `_` でつなぐ）。群の決まらない生体試料（因子の値が空・表に行が無い・1 つのファイルが別々の試料に
-    当たる・同じ試料の行どうしで値が食い違う）は群 `unassigned`・`include=false`（統計の母集団から外す。値を埋めて
-    `include` を true にすれば使える）で、`unassigned_samples`・`files_not_in_assay`・`ambiguous_files`・
-    `conflicting_samples` と `notes` に出す。生体試料のどれも群が決まらなければ書かずに `SAMPLE_TABLE_INVALID`
-    （ファイルと試料の対応か因子の列が合っていない）。因子の列はシートの後ろに渡した名前で足す
-    （`dataset_compare(factors=...)` がその列で計画を組める）。シートの既知の列と**完全に同じ**名前（`group`・`batch`
-    など）だけは `factor_<名>` に改めて書き、`renamed_factor_columns` と `notes` に出す（`Group` のように大文字小文字
-    だけ違う名前はそのまま）。注入順は raw の取得時刻（メタデータだけを読む。`.wiff2` は SCIEX OS が並べて書く
-    同じ幹の `.wiff` から読む）の順で、シートの schema の行の直後に
-    `# injection_order_source = raw_acquisition_time` を書く（読み込んだ試料の表・統計の注入順の出所が
-    `raw_acquisition_time` になる）。読めない raw があっても読めた raw の順は残し、読めない raw の注入順だけを空に
-    する（`injection_order_source: "raw_acquisition_time_partial"`。空欄は MS-DIAL の番号で埋まらず不明のまま）。
-    どれも読めなければ `none`（宣言も書かない）。読めなかったファイルは `unreadable`、理由は `unreadable_reasons`
-    （理由 → 件数。件数の多い順に先頭 20 種類で、切った種類の数は `unreadable_reasons_n_more`。一覧も先頭 20 件で、
-    切った件数は `<一覧>_n_more`）。順の欠けた生体試料か QC が統計に入る（`include=true`）ときだけ、`notes` がドリフト補正と注入順の偏りの判定は
-    行われないと書く（`include=false` の試料は前処理が先に外すので止めない）。
-    バッチは空。試料の表は UTF-8（BOM 可）。
     1 行は raw のフォルダの主ファイル 1 つ（pipeline の受付と同じ一覧。形式が混ざるときは `keep_extension`）。
+    群は `factor_columns` の値の組（値を `_` でつなぐ）。群の決まらない生体試料（因子の値が空・表に行が無い・
+    1 つのファイルが別々の試料に当たる・同じ試料の行どうしで値が食い違う）は群 `unassigned`・`include=false`
+    （統計から外す。値を埋めて `include` を true にすれば使える）で、`unassigned_samples`・`files_not_in_assay`・
+    `ambiguous_files`・`conflicting_samples` と `notes` に出す。生体試料のどれも群が決まらなければ書かずに
+    `SAMPLE_TABLE_INVALID`（ファイルと試料の対応か因子の列が合っていない）。因子の列はシートの後ろに渡した名前で
+    足す（`dataset_compare(factors=...)` が使う）。シートの既知の列と完全に同じ名前（`group`・`batch` など）だけは
+    `factor_<名>` に改め、`renamed_factor_columns` と `notes` に出す（`Group` など大文字小文字だけ違う名前は
+    そのまま）。バッチは空。試料の表は UTF-8（BOM 可）。
 
-    raw_dir: 生データのフォルダ（pipeline の `raw_dir`）。sample_table: ISA の `s_*.txt` か mwTab の
-        ファイル。assay_table: ISA の `a_*.txt`（`Sample Name` と `Raw Spectral Data File`・
-        `Derived Spectral Data File` でファイルと試料を結ぶ）。省けば mwTab の `RAW_FILE_NAME`、それも無ければ
-        ファイルの幹を試料名とみなす。表のファイル名と合わなければ幹（拡張子を除いた名前）で引く。
+    注入順は raw の取得時刻（メタデータだけを読む。`.wiff2` は SCIEX OS が並べて書く同じ幹の `.wiff` から）の順で、
+    シートの schema の行の直後に `# injection_order_source = raw_acquisition_time` を書く（読み込むと注入順の
+    出所が `raw_acquisition_time` になる）。読めない raw があれば、読めた raw の順は残して読めない raw の注入順
+    だけを空にする（`injection_order_source: "raw_acquisition_time_partial"`。空欄は MS-DIAL の番号で埋めず不明の
+    まま）。どれも読めなければ `none`（宣言も書かない）。読めなかったファイルは `unreadable`、理由は
+    `unreadable_reasons`（理由 → 件数。多い順に先頭 20 種類、切った種類の数は `unreadable_reasons_n_more`。一覧も
+    先頭 20 件で、切った件数は `<一覧>_n_more`）。順の欠けた生体試料か QC が統計に入る（`include=true`）ときだけ、
+    `notes` がドリフト補正と注入順の偏りの判定は行われないと書く。
+
+    raw_dir: 生データのフォルダ（pipeline の `raw_dir`）。
+    sample_table: ISA の `s_*.txt` か mwTab のファイル。
+    factor_columns: 試料の表の因子の列（`Factor Value[名]`・`Characteristics[名]` の名前でも引ける）。
+    assay_table: ISA の `a_*.txt`（`Sample Name` と `Raw Spectral Data File`・`Derived Spectral Data File` で
+        ファイルと試料を結ぶ）。省けば mwTab の `RAW_FILE_NAME`、それも無ければファイルの幹を試料名とみなす。表の
+        ファイル名と合わなければ幹（拡張子を除いた名前）で引く。
     sample_table_format: "auto"（既定。1 行目が `#METABOLOMICS WORKBENCH` なら mwTab）/ "isa" / "mwtab"。
     qc_selector / blank_selector: [列名, 正規表現]。当たった試料を role=qc（群 QC）/ role=blank（群 blank）に
         する。列が `Sample Name` なら表に行の無い試料（ファイルの幹）にも当てる。

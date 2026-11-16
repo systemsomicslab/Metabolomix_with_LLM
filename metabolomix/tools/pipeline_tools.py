@@ -42,73 +42,55 @@ _LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempo
 @mcp.tool(annotations=_LOCAL_WRITE, structured_output=False)
 def pipeline_plan(dataset_root: str, request: dict | None = None,
                   request_id: str | None = None) -> str:
-    """入力検査・不足情報・固定要求の保存のみを行う。Consoleは起動しない。
+    """入力を検査し、不足情報と固定した要求を保存する。Console は起動しない（起動は `pipeline_run`）。
 
     Parameters
     ----------
     dataset_root:
-        生データフォルダのパス。MS-DIAL が読む 12 形式
-        （.abf / .ibf / .cdf / .mzml / .wiff / .raw / .d / .wiff2 /
-        .qgd / .lcd / .lrp / .imzml）が入っているフォルダを指します。
-        Agilent・Bruker の .d と Waters の .raw は**フォルダ**が 1 検体です。
+        生データフォルダ。MS-DIAL が読む 12 形式（.abf / .ibf / .cdf / .mzml / .wiff / .raw / .d /
+        .wiff2 / .qgd / .lcd / .lrp / .imzml）。Agilent・Bruker の .d と Waters の .raw はフォルダが 1 検体。
     request:
-        `pipeline-request.v3`（省略可。`schema` 省略・`pipeline-request.v1` も受けて v3 で
-        保存する。`pipeline-request.v2` は `PIPELINE_REQUEST_INVALID`）。共有の項目は
-        `library_mode` / `measure` / `keep_extension` / `timeout_s` / `save_project` /
-        `output_root` / `alignment_reference`。1 極性の形は `polarity` / `method_file` /
-        `lbm_file` / `msp_file` / `sample_manifest` をトップに置く。2 極性の形は
-        `units: [{"polarity", "raw_dir", "method_file"?, "lbm_file"?, "msp_file"?,
-        "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir`
-        （`dataset_root` 相対）は必須で、重ならない。単位の `sample_manifest` の既定は
-        `<raw_dir>/sample-manifest.tsv`）。`units` とトップの単位の項目は混ぜられない。
+        `pipeline-request.v3`（省略可。`schema` 省略と `pipeline-request.v1` は v3 で保存、
+        `pipeline-request.v2` は `PIPELINE_REQUEST_INVALID`）。
+        共有の項目: `library_mode` / `measure` / `keep_extension` / `timeout_s` / `save_project` /
+        `output_root` / `alignment_reference`。
+        1 極性: `polarity` / `method_file` / `lbm_file` / `msp_file` / `sample_manifest` をトップに置く。
+        2 極性: `units: [{"polarity", "raw_dir", "method_file"?, "lbm_file"?, "msp_file"?,
+        "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir`（`dataset_root` 相対）は
+        必須で重ならない。`sample_manifest` の既定は `<raw_dir>/sample-manifest.tsv`）。`units` とトップの
+        単位の項目は混ぜられない。相対パスは `dataset_root` 基準。
         知らない項目は `PIPELINE_REQUEST_INVALID`（`details.unknown_keys`）。消えた下流の項目
-        （`target` / `preprocess` / `comparisons`）なら文面と `details.replacements`
+        （`target` / `preprocess` / `comparisons`）は文面と `details.replacements`
         （`load_dataset` → `dataset_preprocess` / `dataset_compare` / `dataset_pca`）で案内する。
-        相対パスは `dataset_root` 基準。`library_mode="msp_only"` は LBM を使わず研究室の参照
-        ライブラリ（.msp）だけで同定する（`msp_file` か極性の設定 `[library]
+        `library_mode="msp_only"`: LBM を使わず研究室の .msp だけで同定する（`msp_file` か `[library]
         msp_positive` / `msp_negative`。メソッドの Text DB・注釈器設定表の宣言は空にする）。
-        `library_mode="msp_then_lbm"`（脂質の run 用）は研究室 MSP（priority 2 の注釈器設定表）を
-        優先し、`[library] lbm` の LBM で補う（LBM の照合で RT を使わない。LBM は
-        メソッドの宣言・実行体のフォルダを見ない。無ければ `LBM_NOT_CONFIGURED`）。
-        `lbm_file` との同時指定（msp_only / msp_then_lbm）、`auto` での `msp_file` は
-        `PIPELINE_REQUEST_INVALID`。
-        `alignment_reference`（既定 `"median_injection"`）は MS-DIAL の
-        `Alignment reference file ID` を、全試料（`include` を問わない）の注入順の中央
-        （偶数なら小さい方）の試料にする。注入順は実験情報シートの `injection_order` から
-        取り、1 件でも欠けるときはファイル名順の中央（戻り値の
-        `injection_order_source` が `"filename"`）。`"method"` はメソッドの宣言をそのまま使う。
-        resume では変えられない（`NEW_PIPELINE_REQUIRED`）。
+        `library_mode="msp_then_lbm"`（脂質の run 用）: 研究室 MSP（注釈器設定表の priority 2）を優先し、
+        `[library] lbm` の LBM で補う（LBM の照合は RT を使わず、メソッドの宣言・実行体のフォルダを見ない。
+        無ければ `LBM_NOT_CONFIGURED`）。
+        `lbm_file` と msp_only / msp_then_lbm の併用、`auto` での `msp_file` は `PIPELINE_REQUEST_INVALID`。
+        `alignment_reference`（既定 `"median_injection"`）: MS-DIAL の `Alignment reference file ID` を、全試料
+        （`include` を問わない）の注入順の中央（偶数なら小さい方）にする。注入順は実験情報シートの
+        `injection_order`、1 件でも欠ければファイル名順（`injection_order_source: "filename"`）。`"method"` は
+        メソッドの宣言のまま。resume では変えられない（`NEW_PIPELINE_REQUIRED`）。
     request_id:
-        冪等性キー。同一内容の再送は同じ結果を返し、別内容は `IDEMPOTENCY_CONFLICT`。
+        冪等性キー。同じ内容の再送は同じ結果、別内容は `IDEMPOTENCY_CONFLICT`。
 
-    `dataset_root` 直下に `analysis-request.json`（同じ項目を持つ JSON）と
-    `sample-manifest.tsv` があれば既定名として読む。要求値の優先順位は
-    **`request` で明示した値 > `analysis-request.json` > 既定値**（spec §7.1)
-    （`units` は層ごとに丸ごと）。どの値がどこから来たかは保存された要求の
-    `value_sources`（`explicit` / `request_file` / `default`）で確認できる。置いてある
-    ファイルが壊れている・未知キーを持つ場合は黙って無視せず `PIPELINE_REQUEST_INVALID`
-    にする。ただしファイルの下流の項目（`target` / `preprocess` / `comparisons`）は
-    読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED` を返す（Console は回す）。明示の
-    `units` に負けて使わなかったファイルのトップの単位のキーも警告
-    `REQUEST_FILE_UNIT_KEYS_IGNORED` で返す。
+    `dataset_root` 直下の `analysis-request.json`（同じ項目の JSON）と `sample-manifest.tsv` を既定で読む。
+    優先順は `request` > `analysis-request.json` > 既定値（`units` は層ごとに丸ごと）。出どころは保存した
+    要求の `value_sources`（`explicit` / `request_file` / `default`）。ファイルが壊れている・未知キーを持つなら
+    `PIPELINE_REQUEST_INVALID`。ただしファイルの下流の項目は読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED`
+    （Console は回す）、明示の `units` に負けたファイルのトップの単位のキーは警告 `REQUEST_FILE_UNIT_KEYS_IGNORED`。
 
-    戻り値の `resolved.units.<極性>` に、単位ごとの解決済みの実行条件——`method`（`source_path` /
-    `sha256`）・`lbm`（msp_then_lbm ではファイル名・sha256・出どころだけ）・`polarity`
-    （`value` とその `source`）・`library_mode`・`msp`（ファイル名・sha256・出どころ、
-    msp_then_lbm では `priority` も。置き場所は載せない）・`alignment_reference`
-    （`file_id`・`sample_file`・`injection_order_source`・`method_value`。v8 より前の計画から
-    再利用した run では null）・msp_only / msp_then_lbm では実効の足切り `dot_product_cutoffs`
-    （`weighted`・`simple`・`reverse`・`scale: "square_root"`・種類ごとの `source`）——が入る。何も
-    起動しないうちにこれらを確認するのがこのツールの用途。
+    戻り値の `resolved.units.<極性>`: `method`（`source_path` / `sha256`）・`lbm`（msp_then_lbm ではファイル名・
+    sha256・出どころだけ）・`polarity`（`value` / `source`）・`library_mode`・`msp`（ファイル名・sha256・出どころ、
+    msp_then_lbm では `priority`。置き場所は載せない）・`alignment_reference`（`file_id`・`sample_file`・
+    `injection_order_source`・`method_value`。この欄の無い古い計画を再利用した run では null）・msp_only /
+    msp_then_lbm では実効の足切り `dot_product_cutoffs`（`weighted`・`simple`・`reverse`・`scale: "square_root"`・
+    種類ごとの `source`）。
 
-    起動せずに `needs_input` を保存することがある（不正なsample_manifest等、
-    spec §9.2「既知の不正入力はConsole起動前に拒否する」）。条件だけ確認したい
-    利用者はこちらを使い、実際に進めたいときは `pipeline_run` を使う。
-
-    開いた形式（mzML・imzML・mzXML）の計測ファイルの末尾が閉じタグで終わらない・32 KiB 未満
-    （imzML は閉じタグだけ。スペクトルは隣の .ibd にある）なら、run を作る前に
-    `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）で名指しして断る
-    （Console は切れた mzML を読むところで落ち、どのファイルかを言わない）。
+    既知の不正入力（不正な sample_manifest など）は起動せずに `needs_input` を保存する。開いた形式（mzML・imzML・
+    mzXML）の計測ファイルが閉じタグで終わらない・32 KiB 未満（imzML は閉じタグだけ。スペクトルは隣の .ibd）なら、
+    run を作る前に `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）。
     """
     from metabolomix.pipeline.service import plan_pipeline
     try:
@@ -120,41 +102,31 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
 @mcp.tool(annotations=_LOCAL_WRITE, structured_output=False)
 def pipeline_run(dataset_root: str, request: dict | None = None,
                  request_id: str | None = None) -> str:
-    """計画と起動を一括実行する。生データから MS-DIAL Console を回す、対等な 2 つ目の入口。
+    """計画と起動を一度に行う。生データから MS-DIAL Console を回す（`load_dataset` と対等な入口）。
+    引数は `pipeline_plan` と同じ（起動前に解決結果を見るのは `pipeline_plan`）。
 
-    結果は極性ごとの解析フォルダ（`<run>/<極性>/input/`。MS-DIAL の `.arf` 等）と受領
-    （`results/receipt.json`）で、続きは `load_dataset(pipeline_path=…, polarity=…)` から
-    （前処理・比較・PCA は `dataset_preprocess` / `dataset_compare` / `dataset_pca`）。
-    フォルダに MS-DIAL の出力（.arf 等）が既にあれば、Console を回さず `load_dataset` で開ける。
-    起動前に解決結果（method file・LBM・極性）を見るのは `pipeline_plan`。引数は `pipeline_plan` と同じ。2 極性の要求は
-    要求の順に 1 極性ずつ回し、片方が失敗してももう片方を続ける（run は `partial`）。
+    出力は極性ごとの解析フォルダ（`<run>/<極性>/input/`。`.arf` 等）と受領（`results/receipt.json`）。続きは
+    `load_dataset(pipeline_path=…, polarity=…)`。MS-DIAL の出力が既にあるフォルダは Console を回さず
+    `load_dataset` で開ける。2 極性は要求の順に 1 極性ずつ回し、片方が失敗しても続ける（run は `partial`）。
 
-    短時間で `pipeline_path` を返す——起動受理は、workerのidentity保存と
-    起動handshakeを確認した後に返すが、応答待ちには短い上限があり、上限に
-    達しても起動失敗と決め付けず再起動もしない（`launch.handshake` が
-    `"not_confirmed"` になるだけで、`pipeline_status` で追跡できる）。
+    worker の identity の保存と起動 handshake を確かめて `pipeline_path` を返す。待ちには短い上限があり、
+    達しても失敗扱い・再起動はせず `launch.handshake: "not_confirmed"`（`pipeline_status` で追う）。
+    `launch` は実際に起動した（`launched=true`）ときだけ付く。不正な sample_manifest など、または既存の run
+    （活動中・completed・失敗・取消・部分完了）を再利用したときは `launched=false` だけ（既存の run を進めるのは
+    `pipeline_resume`）。
 
-    `launch` キーは実際にworkerを起動した（`launched=true`）ときだけ含まれる。
-    不正なsample_manifest等を検出した場合や、`find_or_create_run` が既存run
-    （活動中／completed／失敗・取消・部分完了済み）を再利用した場合は
-    `launched=false` のみを返し、`launch` キー自体を持たない（起動していない
-    以上、handshake結果も存在しない）。既存runを本当に進めたい場合は
-    `pipeline_resume` を使う。`launch.worker_in_job` が true なら worker が Windows の Job に
-    残っている（何段目の Job でも）。その Job が閉じたら止める設定か分からないとき（中継が自分の
-    直近の Job を抜けさせたのに worker がまだ Job にいる）は、Job が閉じると worker と Console も
-    止まりうるので警告 `WORKER_IN_JOB`（`details.breakaway` / `relay_breakaway`）を `warnings` に
-    返す（止まったら `pipeline_status` → `pipeline_resume`）。中継の直近の Job が閉じても止めない
-    もの（`launch.relay_breakaway: "inherited_job"`。Windows 11 のシェルの配下で普通にある）なら警告しないが、
-    Windows の問い合わせは直近の Job しか見られず、その外側に閉じたら止める Job があるかは確かめていない。
-    そのことを `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note` に添える（run の記録の `worker` にも
-    worker 自身が同じ注記を残す）。
+    `launch.worker_in_job: true` は worker が Windows の Job（何段目でも）に残っていること。中継が直近の Job を
+    抜けたのに worker が Job にいて、その Job が閉じたら止めるか分からないなら、Job が閉じると worker と Console
+    も止まりうるので警告 `WORKER_IN_JOB`（`details.breakaway` / `relay_breakaway`。止まったら `pipeline_status` →
+    `pipeline_resume`）。中継の直近の Job が閉じても止めないもの（`launch.relay_breakaway: "inherited_job"`）なら
+    警告せず、外側の Job は確かめていないことを `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note` に
+    書く（run の記録の `worker` にも同じ注記）。
 
-    Console は同じ設定ファイルを読むサーバ・worker の間で同時に 1 本だけ回す（run を跨いで。待つ間は
-    `pipeline_status` の `waiting`）。起こす前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を
-    下回れば警告 `LOW_COMMIT_MEMORY` を残す（止めない）。Console が完了しなければ工程の誤り
-    `MSDIAL_EXECUTION_FAILED` に `details.cause`（`system_resources`: 終了コード 1450 などの
-    資源不足 / `broken_input` / `input_suspected`）と `details.diagnosis`（疑わしいファイル・
-    ログのエラーの行）が付く。原因と疑わしいファイルは `pipeline_status` の `errors` で読める。
+    Console は同じ設定ファイルを読むサーバ・worker の間で同時に 1 本（run を跨ぐ。待ちは `pipeline_status` の
+    `waiting`）。起動前の commit の空きが `[msdial] min_free_commit_gb`（既定 8 GB）を下回れば警告
+    `LOW_COMMIT_MEMORY`（止めない）。Console が完了しなければ `MSDIAL_EXECUTION_FAILED` に `details.cause`
+    （`system_resources`: 終了コード 1450 などの資源不足 / `broken_input` / `input_suspected`）と
+    `details.diagnosis`（疑わしいファイル・ログのエラーの行）が付く（`pipeline_status` の `errors` でも読める）。
     """
     from metabolomix.pipeline.service import start_pipeline
     try:
@@ -165,38 +137,31 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
-    """状態・不足情報・成果物参照を読む。最終化や起動は一切しない（読取専用）。
+    """run の状態・不足情報・成果物の参照を読む（読み取り専用。最終化も起動もしない）。
 
     Parameters
     ----------
     pipeline_path:
-        `pipeline_run` / `pipeline_plan` が返した `pipeline_path`（pipeline-run.json
-        そのもの、またはその親ディレクトリのどちらでもよい）。
+        `pipeline_run` / `pipeline_plan` が返した `pipeline_path`（`pipeline-run.json` かその親フォルダ）。
     include_details:
-        True なら永続レコード全体（`record`）も返す（既定False。通常は
-        `status` / `units` / `stage_statuses` / `errors` / `needs_input` / `warnings` で足りる）。
+        True なら永続レコード全体（`record`）も返す（既定 False。普段は `status` / `units` /
+        `stage_statuses` / `errors` / `needs_input` / `warnings` で足りる）。
 
-    `units` は極性ごとの状態（`pending` / `running` / `validated` / `failed`）。受領を
-    書いた後は `receipt`（検証を通った極性の解析フォルダの場所・照合した `.arf`・
-    次に呼ぶ `load_dataset(...)`）も返す。旧形式（pipeline-run.v1）の run も読め、
-    `legacy: true` と注意 1 行が付く（再開・取消はできない）。
+    `units` は極性ごとの状態（`pending` / `running` / `validated` / `failed`）。受領を書いた後は `receipt`
+    （検証を通った極性の解析フォルダ・照合した `.arf`・次に呼ぶ `load_dataset(...)`）も返す。旧形式
+    （pipeline-run.v1）の run も読め、`legacy: true` と注意 1 行が付く（再開・取消はできない）。
 
-    `status="running"` のときだけ、記録済みworkerの生存確認 `observed_health`
-    を追加で行う。workerが消えていれば `observed_health="worker_missing"` と
-    `recovery_hint`（`pipeline_resume` を促す）を返すが、statusフィールド自体は
-    書き換えない——監視・成果物確定をポーリング呼出しに依存させない（spec）。
-    工程がこの機械のほかの run の Console を待っていれば `waiting`（工程ごとの
-    `reason: "console_slot"`・`since`・待っている相手の `holder`）を返す。待っていた worker が
-    居なければ（`observed_health="worker_missing"`）もう何も待っていないので、`waiting` ではなく
-    `interrupted_while_waiting`（中断の時点の待ちの記録）に出し、Console をまだ起こしていない極性を
-    `recovery_hint.console_not_started_units` に挙げる（`pipeline_resume` は `rerun_upstream` なしでその極性の
-    最初の Console から続ける。やり直しではなく 1 回目）。worker が
-    閉じたら止めるか分からない Windows の Job に残っていれば `warnings` に `WORKER_IN_JOB`。
+    `status="running"` のときだけ worker の生存を確かめ、居なければ `observed_health="worker_missing"` と
+    `recovery_hint`（`pipeline_resume` を促す）を返す（`status` は書き換えない）。この機械のほかの run の Console
+    を待つ工程は `waiting`（工程ごとの `reason: "console_slot"`・`since`・相手の `holder`）。待っていた worker が
+    居なければ `waiting` ではなく `interrupted_while_waiting`（中断時の待ちの記録）に出し、Console をまだ起こして
+    いない極性を `recovery_hint.console_not_started_units` に挙げる（`pipeline_resume` は `rerun_upstream` なしで
+    その極性の最初の Console から続ける）。worker が、閉じたら止めるか分からない Windows の Job に残っていれば
+    `warnings` に `WORKER_IN_JOB`。
 
-    失敗・取消で終わった工程があれば `errors`（`{<stage_id>: {"code", "message", "cause"?,
-    "suspect_files"?}}`）を返す。Console が完了しなかったときの原因の分類（`cause`:
-    `system_resources` / `broken_input` / `input_suspected`）と疑わしいファイル（`suspect_files`:
-    `[{"name", "reason"}]`、配置の工程で断った切れたファイルも）はここで読める。ログの行
+    失敗・取消で終わった工程は `errors`（`{<stage_id>: {"code", "message", "cause"?, "suspect_files"?}}`）。
+    `cause` は Console が完了しなかった原因（`system_resources` / `broken_input` / `input_suspected`）、
+    `suspect_files` は `[{"name", "reason"}]`（配置の工程で断った切れたファイルも）。ログの行
     （`details.diagnosis.log_lines`）は `include_details=True` の `record` の工程の `error` にある。
     """
     from metabolomix.pipeline.recovery import read_status
@@ -209,40 +174,34 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
 @mcp.tool(annotations=_LOCAL_WRITE, structured_output=False)
 def pipeline_resume(pipeline_path: str, updates: dict | None = None,
                     request_id: str | None = None, rerun_upstream: bool = False) -> str:
-    """試料の対応表の訂正・停止した工程からの再開。
+    """試料の対応表を訂正する・止まった工程から再開する。
 
     Parameters
     ----------
     pipeline_path:
-        対象runの `pipeline_path`（`pipeline_status` と同じく、`pipeline-run.json`
-        そのもの、またはその親ディレクトリ＝pipeline_rootのどちらでもよい）。
+        対象 run の `pipeline_path`（`pipeline-run.json` かその親フォルダ）。
     updates:
-        `sample_manifest`（1 極性の run）か `units: {<極性>: {"sample_manifest": …}}` だけ。
-        変えると受領だけを書き直す。知らない項目（消えた下流の項目 `target` / `preprocess` /
-        `comparisons` を含む）は `PIPELINE_REQUEST_INVALID`（下流の項目なら `details.replacements`）、
-        上流の条件（メソッド・ライブラリ・極性…）は `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`
-        （読むなら `load_dataset(pipeline_path=…)`、Console をやり直すなら新しい `pipeline_run`）。
+        `sample_manifest`（1 極性の run）か `units: {<極性>: {"sample_manifest": …}}` だけ。変えると受領だけを
+        書き直す。知らない項目は `PIPELINE_REQUEST_INVALID`（消えた下流の項目 `target` / `preprocess` /
+        `comparisons` なら `details.replacements`）、上流の条件（メソッド・ライブラリ・極性…）は
+        `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`（読むなら
+        `load_dataset(pipeline_path=…)`、Console をやり直すなら新しい `pipeline_run`）。
     request_id:
-        冪等性キー。同一内容の再送は新しいrevisionを作らず直前の結果を返す。
+        冪等性キー。同じ内容の再送は新しい revision を作らず、1 回目と同じ内訳（`console_not_started_units` /
+        `not_retried_units` / `held_units`）を `reused: true` で返す。
     rerun_upstream:
-        True を明示しない限り、Console実行はやり直さない（自動再試行はしない）。
-        True は upstream が成功していない極性だけをやり直す（新しい attempt）。生きている
-        worker が回している極性の Console は捨てず、戻り値の `held_units` に並べる。
-        省くと、失敗した極性はそのままにして他の極性を進める（`not_retried_units`）。まだ回して
-        いない極性の Console は省いても起こす（やり直しではなく 1 回目）。
-        worker が居なくなった run で `running` のままの極性は Console の状態が分からないので
-        `UPSTREAM_RERUN_REQUIRED`（`rerun_upstream=True` を求める）。ただし Console の順番待ちの間に
-        worker が消え、Console をまだ起こしていない極性（今の attempt の `analysis-job.json` が無い。
-        `pipeline_status` の `recovery_hint.console_not_started_units`）は、省いてもその極性の最初の
-        Console から続け、戻り値の `console_not_started_units` に並べる（再開で Console が起きる）。
-        監視を失ったまま稼働中のConsoleがある場合は `EXECUTION_UNRESOLVED` で
-        待つ（終了を確認できないものを勝手に完了扱いしない）。
+        既定 False は Console をやり直さない（自動再試行もしない）。失敗した極性はそのままで他の極性を進め
+        （`not_retried_units`）、まだ回していない極性の Console は起こす（1 回目）。
+        True は upstream が成功していない極性だけを新しい attempt でやり直す。生きている worker が回している
+        極性の Console は捨てず `held_units` に並べる。
+        worker が居なくなって `running` のままの極性は Console の状態が分からないので `UPSTREAM_RERUN_REQUIRED`
+        （True を求める）。ただし Console の順番待ちの間に worker が消え、Console をまだ起こしていない極性（今の
+        attempt の `analysis-job.json` が無い。`pipeline_status` の `recovery_hint.console_not_started_units`）は、
+        False でもその極性の最初の Console から続け、戻り値の `console_not_started_units` に並べる。
+        監視を失ったまま稼働中の Console があれば `EXECUTION_UNRESOLVED`（終了を確かめるまで完了扱いしない）。
 
-    起動した worker が閉じたら止めるか分からない Windows の Job に残っていれば `pipeline_run` と同じく
-    警告 `WORKER_IN_JOB`、中継の直近の Job が閉じても止めないもの（`inherited_job`）なら警告の代わりに
-    `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`（その外側の段は確かめていない）。
-    同じ `request_id` の再送は、1 回目と同じ内訳（`console_not_started_units` / `not_retried_units` /
-    `held_units`）を `reused: true` で返す。
+    起こした worker の Job の扱いは `pipeline_run` と同じ（警告 `WORKER_IN_JOB`、または `inherited_job` なら
+    `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`）。
     """
     from metabolomix.pipeline.service import resume_pipeline
     try:
@@ -254,13 +213,10 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
 
 @mcp.tool(annotations=_LOCAL_WRITE, structured_output=False)
 def pipeline_cancel(pipeline_path: str) -> str:
-    """取消要求を保存する。二重取消は冪等。
+    """取消を要求する（協調的な取消フラグを保存するだけ。二重取消は冪等）。raw データは消さない。
 
-    **rawデータを削除しない。** ここで保存するのは協調的な取消フラグだけで、
-    Consoleの停止は監視経路が、工程の停止はstage境界が行う。旧形式（pipeline-run.v1）の
-    run は `PIPELINE_RUN_LEGACY`。受理
-    （このツール呼び出しが成功したこと）と、実際にworkerが停止を確認した
-    こと（`cancelled` への確定）は別状態——確定は `pipeline_status` で確認する。
+    Console は監視経路が、工程は stage の境目で止める。受理（この呼び出しの成功）と停止の確定（`cancelled`）は
+    別で、確定は `pipeline_status` で見る。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`。
     """
     from metabolomix.pipeline.recovery import request_cancel
     try:

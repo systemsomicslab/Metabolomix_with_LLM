@@ -98,30 +98,23 @@ def list_data_files(
     extension: str | None = None,
     all_files: bool = False,
 ) -> str:
-    """データフォルダにある解析対象ファイルを拡張子別に一覧します。
+    """データフォルダの解析対象ファイルを拡張子別に並べる。絶対パスで返し、`dcl_find_msms(file_path=...)` などに
+    そのまま渡せる。フォルダ全体を解析するなら `load_dataset(directory=...)`。
 
-    - directory: 探索するフォルダ（必須）。
-    - extension: 指定するとその拡張子だけに絞る（例 '.pai2', '.arf2', '.EIC.aef'）。
-    - all_files: 既定では解析できる拡張子
-      (.arf / .arf2 / .pai2 / .dcl / .EIC.aef / .mddata / .mdproject) だけを返す。
-      測定生データ（MS-DIAL が読む .abf / .ibf / .cdf / .mzml / .wiff / .raw /
-      .d / .wiff2 / .qgd / .lcd / .lrp / .imzml）まで見たいときだけ True にする。
-      Agilent・Bruker の .d と Waters の .raw は**フォルダ**が 1 検体なので、
-      末尾に `/` を付けて示す。
+    - directory: 探すフォルダ（必須）。
+    - extension: その拡張子だけに絞る（例 '.pai2', '.arf2', '.EIC.aef'）。
+    - all_files: 既定は解析できる拡張子（.arf / .arf2 / .pai2 / .dcl / .EIC.aef / .mddata / .mdproject）だけ。
+      True で測定生データ（MS-DIAL が読む .abf / .ibf / .cdf / .mzml / .wiff / .raw / .d / .wiff2 / .qgd / .lcd /
+      .lrp / .imzml）も並べる。Agilent・Bruker の .d と Waters の .raw はフォルダが 1 検体なので末尾に `/` を付ける。
 
-    一覧に測定生データが入るとき（all_files=True か、生データの拡張子を extension に渡したとき）は、
-    raw ごとの取得時刻（メタデータだけを読む: .wiff の OLE・Thermo .raw のファイルヘッダ・Bruker .d の
-    tdf/sqlite・Agilent .d の AcqData/Contents.xml・mzML の startTimeStamp・.wiff2 は同じ幹の .wiff
-    （SCIEX OS が並べて書く。source は wiff_ole_sibling で、その .wiff と同じ取得）。スペクトルは解さない。
-    読めないものは順が空で理由つき）と、そこからの順・40 分を超える間隔の数を足す。フォルダに
-    実験情報シート `sample-manifest.tsv` があれば、その群と取得順の重なり（群の組ごとに
-    complete / independent / partial / unknown。independent は、40 分と隣どうしの取得の間隔の中央値の 3 倍の
-    大きいほうを超える間隔で区切った取得のまとまりのどれにも両群がいること。暦の日付では区切らず、1 周期が
-    40 分を超える長いメソッドでも連続した取得を割らない。開始が 1 分より近い取得（raw と変換した mzML など、
-    同じ取得を指すファイル）は中央値では 1 つに数える。群 `unassigned` の行は入れない）も返す。
-
-    返すのは絶対パスで、`dcl_find_msms(file_path=...)` 等へそのまま渡せる。
-    フォルダ全体をまず解析するなら `load_dataset(directory=...)` が入口。
+    一覧に測定生データが入るとき（all_files=True か、生データの拡張子を extension に渡したとき）は、raw ごとの
+    取得時刻（メタデータだけを読む: .wiff の OLE・Thermo .raw のファイルヘッダ・Bruker .d の tdf/sqlite・
+    Agilent .d の AcqData/Contents.xml・mzML の startTimeStamp・.wiff2 は SCIEX OS が並べて書く同じ幹の .wiff
+    （source は wiff_ole_sibling）。スペクトルは解さない。読めないものは順が空で理由つき）と、その順・40 分を
+    超える間隔の数を足す。実験情報シート `sample-manifest.tsv` があれば、群と取得順の重なり（群の組ごとに
+    complete / independent / partial / unknown）も返す。independent は、40 分と隣どうしの取得の間隔の中央値の
+    3 倍の大きいほうを超える間隔で区切った取得のまとまりのどれにも両群がいること（暦の日付では区切らない。開始が
+    1 分より近い取得（同じ取得を指すファイル）は中央値では 1 つに数える。群 `unassigned` の行は入れない）。
     """
     target_dir = Path(directory).expanduser()
     if not target_dir.exists():

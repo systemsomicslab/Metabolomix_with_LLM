@@ -321,29 +321,25 @@ def record_objective(
 ) -> str:
     """実験目的を解析フォルダ配下 reports/<analysis_id>.objective.md に記録する（作成と更新）。
 
-    その analysis_id の目的がまだ無ければ、**渡した欄だけで**作る（欠けた欄は空のまま。後から
-    この関数で足せる）。sub_questions は Q1..Qn の本文。あれば**渡した欄だけ**を直す
-    （confirmed_objective・biological_context・status・assay_kind など。創発した小問は
-    add_subquestions に渡すと既存 Q の最大+1 で採番して追記する。既存の小問は書き換えない。
-    小問の無い目的に sub_questions を渡すと Q1..Qn として足し、小問のある目的に渡しても
-    無視される（追記は add_subquestions を使う））。
-    biological_context は対象系（生物種/細胞/処理）。assay_kind は lipid / metabolite /
-    unknown で、**ハンドル（データセット）ごとに持つ**: 渡すと書いたハンドルの種別が切り替わり、
-    以後そのハンドルの解釈規則（ダイジェストの脂質名文法か候補集合か・概観と spec v2 の組成の
-    ラベル）が変わる。目的ファイルにも残り、同じ解析フォルダを `load_dataset` で開き直すと
-    読み戻す（作成時に省けば unknown で、ハンドルの種別は動かさない）。
-    dataset_handle: 置き場所（そのデータセットの解析フォルダ配下 reports/）と種別を書くハンドル
-    （省略時は直近。設定の `[paths] reports_dir` があれば置き場所はそちらが先）。どちらも無ければ
-    missing_state（load_dataset）。共有の置き場所にある同じ analysis_id の目的が別の解析フォルダのもの
-    （frontmatter の analysis_dir が違う）なら、それは書き換えず、このデータセットの解析フォルダ配下
-    reports/ に作る（戻り値に一言）。その reports/ に書けなければ（解析フォルダが読み取り専用）、共有の置き場所に
-    別の名前（`<analysis_id>-2.objective.md` …）で作り、frontmatter の analysis_dir でこの解析フォルダに結び付ける
-    （戻り値に一言。開き直すと読み戻し、以後の更新もそちらへ）。設定の置き場所があってデータセットがまだ無いとき（開く前の記録）は、
-    どれかの解析フォルダに結び付いた目的を書き換えない: 同じ analysis_id の目的が別の解析フォルダのもの
-    なら、別の名前（`<analysis_id>-2.objective.md` …）でまだどのフォルダにも結び付いていない目的を作る
-    （戻り値に一言。以後の開く前の記録もそちらへ）。そのとき渡した assay_kind はセッションに置き、次に
-    `load_dataset` で開いて直近になるデータセットへ引き継ぐ（その目的にそのデータセットの解析フォルダを
-    書くので、開き直しても読み戻す）。
+    その analysis_id の目的が無ければ渡した欄だけで作り（欠けた欄は空。後から足せる）、あれば渡した欄だけを直す。
+    sub_questions: Q1..Qn の本文。小問の無い目的にだけ足し、小問のある目的では無視する。
+    add_subquestions: 既存 Q の最大+1 で採番して追記する（既存の小問は書き換えない）。
+    biological_context: 対象系（生物種/細胞/処理）。
+    assay_kind: lipid / metabolite / unknown。ハンドル（データセット）ごとに持ち、渡すとそのハンドルの解釈規則
+        （ダイジェストの脂質名文法か候補集合か・概観と spec v2 の組成のラベル）が変わる。目的ファイルにも残り、
+        同じ解析フォルダを `load_dataset` で開き直すと読み戻す（作成時に省けば unknown で、ハンドルの種別は
+        動かさない）。
+    dataset_handle: 置き場所（その解析フォルダ配下 reports/）と種別を書くハンドル（省けば直近。設定の
+        `[paths] reports_dir` があれば置き場所はそちらが先）。どちらも無ければ missing_state（load_dataset）。
+
+    共有の置き場所にある同じ analysis_id の目的が別の解析フォルダのもの（frontmatter の analysis_dir が違う）なら
+    書き換えず、このデータセットの解析フォルダ配下 reports/ に作る。そこに書けなければ（読み取り専用）共有の
+    置き場所に `<analysis_id>-2.objective.md` … で作り、analysis_dir でこの解析フォルダに結び付ける（開き直すと
+    読み戻し、以後の更新もそちら）。データセットを開く前の記録（設定の置き場所だけ）は、どれかの解析フォルダに
+    結び付いた目的を書き換えず、`<analysis_id>-2.objective.md` … でまだ結び付いていない目的を作る（以後の開く前
+    の記録もそちら）。そのときの assay_kind はセッションに置き、次に `load_dataset` で開いて直近になる
+    データセットへ引き継ぐ（その目的にその解析フォルダを書くので、開き直しても読み戻す）。別の場所・別の名前に
+    作ったときは戻り値に一言書く。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):

@@ -24,14 +24,12 @@ __all__ = ["server_update"]
     openWorldHint=True),
     structured_output=False)
 def server_update() -> str:
-    """このMCPサーバ自身を origin/main へ更新する（git 早送り＋必要なら依存の再導入）。
+    """この MCP サーバ自身を origin/main へ更新する（git の早送りと、必要なら依存の再導入）。
 
-    更新通知（`load_dataset` / `dataset_status` の
-    `update_available`）が出たときに使う。プロセスは触らないので、**適用は Claude Desktop を
-    再起動するまで効かない**（戻り値の `message` に書く）。
-
-    手元の未コミット変更がある・main 以外にいる・早送りできない・オフラインの
-    いずれでも何もせずに `status="refused"` と `reason` を返す（例外は投げない）。
+    更新通知（`load_dataset` / `dataset_status` の `update_available`）が出たときに使う。プロセスは触らないので、
+    適用は Claude Desktop を再起動するまで効かない（戻り値の `message` に書く）。
+    未コミットの変更がある・main 以外にいる・早送りできない・オフラインのどれでも、何もせず `status="refused"` と
+    `reason` を返す（例外は投げない）。
     """
     result = dict(version.apply_update())
     result["running_version"] = version.server_version()
