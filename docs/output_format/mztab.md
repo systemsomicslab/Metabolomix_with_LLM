@@ -1,74 +1,51 @@
 # mzTab-M 経路の出力フィールド
 
-`load_dataset` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が
-出す値の意味。
+`load_dataset` が作る `DatasetState` と、その下流（特徴表・差次的エクスポート）が出す値の意味。
 
-> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
+> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項は核にある。節番号は全トピックの通し番号。
 
-ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/dataset.md`。
-ここは**値の意味**だけを定義する。
+呼び出しの順序は `docs/workflow/dataset.md`。
 
 ## 13. mzTab-M 経路（`load_dataset` 以降）
 
-mzTab-M 2.0.0-M は MS-DIAL Console が産む標準交換形式で、`DatasetState` の正準入力。
-ARF 経路（`.arf` を直接読む）とは**別の ID 空間・別の粒度**なので、両者の値を
-混ぜて読まないこと。
+mzTab-M 2.0.0-M は MS-DIAL Console が出す標準交換形式で、`DatasetState` の正準入力。ARF 経路（`.arf` を直接読む）とは ID 空間も粒度も別なので、両者の値を混ぜて読まない。
 
 | | mzTab-M 経路 | ARF 経路 |
 |---|---|---|
 | 行の識別子 | `SMF_ID`（= `feature_id` / エクスポートの `spot_id`） | `MasterAlignmentID` |
-| RT の単位 | ファイル上は**秒**（`retention_time_in_seconds`）。`DatasetState` は**分**に揃える | 分 |
+| RT の単位 | ファイル上は秒（`retention_time_in_seconds`）。`DatasetState` は分に揃える | 分 |
 | 同定の出所 | SME 行 / SML 行（§13.1） | `.arf2` の注釈 |
-| MSI レベル | **常に空欄**（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
+| MSI レベル | 常に空欄（§13.5） | ヒューリスティック推定あり（`identity` トピック §12.3） |
 
-`load_dataset` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も
-読む。そのときの要約は行で、読んだアダプタ（`アダプタ: msdial_folder`）・読んだ `.arf` と
-選ばなかった `.arf` の候補・同定に使ったライブラリの記録（`library_record`。ファイル名と
-sha256 だけで置き場所は出さない）を示す。アダプタと `library_record` の行は mzTab-M で
-読んだときにも出る。同じアラインメントでも、mzTab-M 経由の Height は上流が整数に丸めて
-（偶数丸め）書き出した値で、解析フォルダ経由は `.arf` の丸める前の値なので、2 つの経路の値は
-最大 0.5 違う。
+`load_dataset` は解析フォルダ（`directory`、または `job_path` / `pipeline_path` の既定）も読む。その要約の行は、読んだアダプタ（`アダプタ: msdial_folder`）、読んだ `.arf` と選ばなかった `.arf` の候補、同定に使ったライブラリの記録（`library_record`。ファイル名と sha256 だけ）を示す。アダプタと `library_record` の行は mzTab-M を読んだときにも出る。同じアラインメントでも、mzTab-M の Height は MS-DIAL が整数に偶数丸めした値、解析フォルダは `.arf` の丸める前の値なので、2 つの経路の値は最大 0.5 違う。
 
 ### 13.1 同定の出所: SME と SML
 
-mzTab-M では同定が 2 か所に出る。**意味が違うので混ぜてはいけない。**
+mzTab-M では同定が 2 か所に出る。意味が違うので混ぜない。
 
 | 出所 | 何か | `DatasetState` の置き場所 |
 |---|---|---|
-| SME 行（Small Molecule Evidence） | **スペクトル照合の証拠**。MS/MS が割り当てられた同定だけが載る | `feature_metadata` / `feature_candidates` |
+| SME 行（Small Molecule Evidence） | スペクトル照合の証拠。MS/MS が割り当てられた同定だけが載る | `feature_metadata` / `feature_candidates` |
 | SML 行（Small Molecule） | 代表同定。MS1 だけの照合（Text DB）もここに載る | `feature_annotations` |
 
-MS-DIAL は Text DB 由来の同定を **SME へ書かない**（`MztabFormatExport.cs` の
-`ShouldWriteSmeLine` が `IsTextDbBasedRepresentative` を除外する）。したがって
-Text DB 運用のメタボロミクスでは **SME が 0 行**になり、同定は SML にしか無い。
-これは異常ではない。
+MS-DIAL は Text DB 由来の同定を SME に書かない。Text DB 運用のメタボロミクスでは SME が 0 行で、同定は SML にしか無い（異常ではない）。
 
-**構造・名称は SMF 行には無い。** SMF が持つのは `SMF_ID` / `SME_ID_REFS` /
-`exp_mass_to_charge` / `retention_time_in_seconds` / `abundance_assay[N]` だけで、
-`database_identifier` / `smiles` / `inchi` / `chemical_name` は SME 専用の列。
-SMF からこれらを読もうとすると常に `None` になり、「この測定には同定が無い」と
-誤読される。
+**構造・名称は SMF 行に無い。** SMF の列は `SMF_ID` / `SME_ID_REFS` / `exp_mass_to_charge` / `retention_time_in_seconds` / `abundance_assay[N]` だけで、`database_identifier` / `smiles` / `inchi` / `chemical_name` は SME の列。SMF から読むと常に `None` になり、「同定が無い」と誤読する。
 
 ### 13.2 `feature_metadata` / `feature_candidates`（SME 由来＝証拠）
 
-`feature_metadata[feature_id]` は rank 最上位の SME 1 件を投影したもので、
-`name` / `mz` / `rt`（**分**）/ `inchikey` / `inchikey_source` / `smiles` / `inchi` を持つ。
+`feature_metadata[feature_id]` は rank 最上位の SME 1 件を投影したもので、`name` / `mz` / `rt`（分）/ `inchikey` / `inchikey_source` / `smiles` / `inchi` を持つ。
 
-`feature_candidates[feature_id]` は `SME_ID_REFS` が指す**全候補**を rank 昇順で
-並べた一覧（`sme_id` / `rank` / `charge` / `exp_mass_to_charge` /
-`theoretical_mass_to_charge` / `confidence_value` ＋ SME のテキスト列）。
-実データでは 8 割の特徴が複数候補を持つので、**`feature_metadata` の 1 件を
-「確定同定」と読まないこと**。rank 1 でも候補にすぎない。
+`feature_candidates[feature_id]` は `SME_ID_REFS` が指す全候補を rank 昇順に並べた一覧（`sme_id` / `rank` / `charge` / `exp_mass_to_charge` / `theoretical_mass_to_charge` / `confidence_value` ＋ SME のテキスト列）。多くの特徴が複数候補を持ち、rank 1 でも候補にすぎないので、`feature_metadata` の 1 件を確定同定と読まない。
 
 ### 13.3 `feature_annotations`（SML 由来＝ラベル。証拠ではない）
 
-`feature_id`（= `SMF_ID`）→ 注釈の辞書。**証拠スロットではない**
-（読ませると MS1 注釈だけで同定の証拠があるように読まれる）。曖昧でない注釈は次のキーを持つ。
+`feature_id`（= `SMF_ID`）→ 注釈の辞書。証拠スロットではない（MS1 注釈を同定の証拠と読まない）。曖昧でない注釈のキー:
 
 | キー | 由来（SML 列） | 備考 |
 |---|---|---|
 | `sml_id` | `SML_ID` | どの SML 行から来たか |
-| `ambiguous` | — | 常に `False`（曖昧な場合は下記の別形） |
+| `ambiguous` | — | 常に `False`（曖昧なときは下記の別形） |
 | `name` | `chemical_name` | |
 | `database_identifier` | `database_identifier` | MS-DIAL は必ず `<db>:<name>` 形式で書く |
 | `chemical_formula` | `chemical_formula` | |
@@ -76,149 +53,85 @@ SMF からこれらを読もうとすると常に `None` になり、「この�
 | `adduct` | `adduct_ions` | |
 | `reliability` | `reliability` | 例: `annotated by user-defined text library` |
 | `confidence_measure` | `best_id_confidence_measure` | |
-| `ontology` | `opt_global_Ontology` | MS-DIAL の脂質サブクラス。列が無いファイルでは `None`。`pathway_project` の照合キーになる。差次的エクスポートの列には出ない |
-| `ms2_presence` | `opt_global_ms2_presence` | bool。その特徴に MS/MS が取れているか。列が無い・値が読めないときは `None`（偽ではなく不明）。どのツール戻り値にも出ない |
-| `spectrum_matched` | `opt_global_spectrum_matched` | bool。その特徴の MS/MS が参照スペクトルに照合されたか（**研究室 MSP でも LBM でも真になる。出所は区別しない**）。列が無い・値が読めないときは `None`。`dataset_mass_accuracy` の `subset="msms_matched"` が読む |
-| `confidence_value` | `best_id_confidence_value`（無ければ SME 由来の total score でフォールバック。下記） | float |
-| `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。**どのツール戻り値にも出ない**（下記） |
-| `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて到達しうる（下記・§13.6） |
+| `ontology` | `opt_global_Ontology` | MS-DIAL の脂質サブクラス。列が無いファイルでは `None`。`pathway_project` の照合キー。差次的エクスポートの列には出ない |
+| `ms2_presence` | `opt_global_ms2_presence` | bool。その特徴に MS/MS が取れているか。列が無い・値が読めないときは `None`（偽ではなく不明）。どのツールの戻り値にも出ない |
+| `spectrum_matched` | `opt_global_spectrum_matched` | bool。その特徴の MS/MS が参照スペクトルに照合されたか（研究室 MSP でも LBM でも真。出所は区別しない）。列が無い・値が読めないときは `None`。`dataset_mass_accuracy` の `subset="msms_matched"` が読む |
+| `confidence_value` | `best_id_confidence_value`（無ければ SME の total score。下記） | float |
+| `confidence_measures` | SME の `id_confidence_measure[2..8]` | dict。どのツールの戻り値にも出ない（下記） |
+| `inchikey` | 導出 | `smiles` 経由（RDKit）か、`MspDB:<名前>` を研究室 MSP の表で引いて得る（§13.6） |
 | `inchikey_source` | 導出 | `msp_library` / `smiles_derived` / `none` |
 
-曖昧な注釈（1 つの特徴に SML が複数行当たる。下記）も `ms2_presence` / `spectrum_matched` を持つ。
-どの行の同定が正しいかは決めないが、行のどれかが真なら真、全部が偽なら偽、全部が不明なら `None`。
+曖昧な注釈（下記）も `ms2_presence` / `spectrum_matched` を持つ: どの行の同定が正しいかは決めず、行のどれかが真なら真、全部が偽なら偽、全部が不明なら `None`。
 
-**`confidence_value` のフォールバック（Minor 10）**: SML 行が `best_id_confidence_value`
-を持たない（実 mzTab で稀ではない: Text DB 経由でない同定はスコアが SME 側にしか
-無い）ときは、対応する SME の個別スコア（`id_confidence_measure[2..8]` の合成
-total score）を代わりに入れる。SML 側の値がある場合はそちらを優先し上書きしない。
-このフォールバックが入ったことで、`dataset_export_differential`
-（`metabolomix/analysis/dataset_export.py`）の同じ列が、
-以前は `null` だった行に SME 由来の値を出すようになった（列定義
-`export_contract.py` 自体は無変更）。
+**`confidence_value`**: SML 行に `best_id_confidence_value` が無い（Text DB 経由でない同定はスコアが SME 側にしか無いので稀ではない）ときは、対応する SME の `id_confidence_measure[2..8]` の合成 total score を入れる。SML の値があればそちらを優先する。
 
-**`confidence_measures` はどこからも読まれていない（Minor 9）**: `feature_annotations[fid]`
-に SME の個別スコア（`id_confidence_measure[2..8]`、`_extract_confidence_measures`）が
-入るが、`dataset_export_differential`
-（`metabolomix/analysis/dataset_export.py`）は列定義で明示された
-キーだけを拾うため、この辞書は現状どのツール戻り値にも出ない。参照するには
-`DatasetState.feature_annotations[fid]["confidence_measures"]` を直接読むこと。
+**`confidence_measures`**: SME の個別スコア（`id_confidence_measure[2..8]`）。`dataset_export_differential` は列定義のキーだけを拾うので、どのツールの戻り値にも出ない。読むには `DatasetState.feature_annotations[fid]["confidence_measures"]`。
 
-**`inchi` キーは存在しない。** MS-DIAL は SML の `inchi` を常に `null` で書くため、
-キーを置くと「取得していない」と「無い」の区別を偽ることになる。
-`database_identifier` も必ず `<db>:<name>` 形式なので InChIKey にはならない。
-したがって mzTab-M の SML から InChIKey に到達できるのは `smiles` 経由（RDKit）だけで、
-テキスト DB が SMILES 列を持たなければ `inchikey` は `None` のままになる。
+**`inchi` キーは無い。** MS-DIAL は SML の `inchi` を常に `null` で書く（キーを置くと「取得していない」と「無い」の区別を偽る）。`database_identifier` も `<db>:<name>` 形式で InChIKey にならない。テキスト DB が SMILES 列を持たなければ `inchikey` は `None`。
 
 **対応付けの規則**:
 
-- 1 つの SML が複数の SMF を指す（`SMF_ID_REFS` が `1|2`）場合は、同一分子が
-  複数 adduct で検出された形。**全 feature に同じ注釈が付く**のが正しい。
-- 複数の SML が 1 つの SMF を指す場合は、どれが正しいか決められないので名前を
-  選ばない。その形は `{"ambiguous": True, "sml_ids": [...], "name": None}`。
+- 1 つの SML が複数の SMF を指す（`SMF_ID_REFS` が `1|2`）のは同一分子が複数のアダクトで検出された形で、全特徴に同じ注釈が付く。
+- 複数の SML が 1 つの SMF を指すときは、どれが正しいか決められないので名前を選ばない。形は `{"ambiguous": True, "sml_ids": [...], "name": None}`。
 - `SMF_ID_REFS` が存在しない特徴を指す行は捨て、警告を積む。
 
-警告は**種類**で 1 件に集約する（行ごとに積むと実データで数百件になり、表示制限で
-重要な警告が埋もれるため）。
+警告は種類ごとに 1 件にまとめる（行ごとには積まない）。
 
 ### 13.4 `.annotations.tsv` の `identification_status`
 
-特徴表（`export_features` が書く `<name>.annotations.tsv`）は §13.1 の区別を
-`identification_status` で伝える。列（`_ANNOTATION_COLUMNS`）は 3 値のどれでも同じ。
+特徴表（`export_features` が書く `<name>.annotations.tsv`）は §13.1 の区別を `identification_status` で伝える。列（`_ANNOTATION_COLUMNS`）は 3 値のどれでも同じ。
 
 | 値 | 意味 |
 |---|---|
-| `candidate` | SME 由来。スペクトル照合の候補（rank 1 でも確定同定は名乗らない）。候補の数だけ行が出る |
-| `ms1_annotation` | **SML 由来。m/z 照合のみ。MS/MS の裏付けは無い**。1 特徴 1 行 |
+| `candidate` | SME 由来。スペクトル照合の候補（rank 1 でも確定同定ではない）。候補の数だけ行が出る |
+| `ms1_annotation` | SML 由来。m/z 照合だけで、MS/MS の裏付けは無い。1 特徴 1 行 |
 | `unidentified` | 同定情報が無い。複数の SML が 1 特徴に当たって決められない場合もここ |
 
-**`ms1_annotation` を `candidate` と同一視しないこと。** MSI レベルで言えば
-MS/MS 照合とは別水準で、v2 の `required_evidence` では `library_match` も
-`authentic_standard_match` も満たさない。`identity` トピック §12.4 の
-「`FLAG_ONLY` を `PASS` と同等に扱わない」と同じ趣旨。
+`ms1_annotation` を `candidate` と同一視しない: MS/MS 照合とは別の水準で、v2 の `required_evidence` では `library_match` も `authentic_standard_match` も満たさない。
 
-未同定の特徴も 1 行残る。表から消すと「同定できたものだけの世界」になるため。
+未同定の特徴も 1 行残る。
 
 ### 13.5 差次的エクスポートの同定列
 
-差次的エクスポート（`dataset_export_differential`）は**行単位で出所を 1 つに決める**。
-決め手は InChIKey を供給した側で、列ごとに選ぶと name が SML 由来・inchikey が
-SME 由来という食い違った行ができる。
+差次的エクスポート（`dataset_export_differential`）は行ごとに出所を 1 つに決める。決め手は InChIKey を供給した側（列ごとに選ぶと、name が SML 由来で inchikey が SME 由来という食い違った行ができる）。
 
 | 列 | 値 | 意味 |
 |---|---|---|
 | `name_source` | `mztab_sme` | SME 由来（スペクトル照合の証拠） |
-| | `mztab_sml` | **SML 由来。MS1 照合のみ** |
-| `inchikey_source` | `database_identifier` / `msp_library` / `inchi_derived` / `smiles_derived` | どこから導出したか。`msp_library` は Console に渡した研究室 MSP の `INCHIKEY` を `MspDB:<名前>` で引いた値（RDKit 不要。spec 2026-10-10 `msp-inchikey-design`） |
-| `msi_level` | **常に空欄** | 下記 |
+| | `mztab_sml` | SML 由来。MS1 照合だけ |
+| `inchikey_source` | `database_identifier` / `msp_library` / `inchi_derived` / `smiles_derived` | どこから導出したか。`msp_library` は Console に渡した研究室 MSP の `INCHIKEY` を `MspDB:<名前>` で引いた値（RDKit 不要） |
+| `msi_level` | 常に空欄 | 下記 |
 | `spot_id` | `SMF_ID` | メタ行の `# id_space = mztab_smf_id` が ID 空間を宣言する |
 
-`msi_level` が空欄なのは、`.arf2` 由来の MSI ヒューリスティック（`identity`
-トピック §12.3）が Level 2 に MS/MS の取得を要件としており、別ルールの値を同じ列へ
-入れると比較不能な 2 つの意味が同居するため。**空欄は「該当なし」ではなく
-「この経路では取得していない」。**
+`msi_level` の空欄は「該当なし」ではなく「この経路では取得していない」。`.arf2` 由来の MSI 推定（`identity` トピック §12.3。Level 2 に MS/MS の取得を要件とする）とは規則が違うので、同じ列に入れない。
 
-**InChIKey が無い行は捨てられる**（`NO_ANNOTATED_FEATURES`）。下流
-（別リポ massbank-context）が InChIKey を結合キーにするため。名前だけの SML 注釈は
-このゲートを越えられない。
+InChIKey が無い行は捨てる（`NO_ANNOTATED_FEATURES`）。下流（massbank-context）が InChIKey を結合キーにするので、名前だけの SML 注釈は出力に入らない。
 
 ### 13.5b `dataset_status` の views と除外
 
 `dataset_status(view=...)`:
 
-- `summary`（既定）: 概要。`groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が
-  無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）を含む。`samples` は name/role の TSV（列名
-  `name\trole`）で、役割は試料の表から読む（`view="samples"`・統計エンジンと同じ。`dataset_set_sample_metadata` で
-  直した役割もここに出る。空は `sample`）。
-  `groups` と `n_ungrouped` は**統計に入る試料だけ**（`included_sample_indices` と同じ集合）を数える。外した試料は外した理由ごとに
-  群 → 件数で分け（群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）、`groups` には載せない: 実験情報シートの `include=false`
-  の試料（`pipeline_sample_sheet` の群 `unassigned` など。`unassigned` は群ではなく、`dataset_compare` に渡せない）は
-  `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した試料はシートの側だけに
-  数える）。`roles` は全試料を数える。
-- `samples`: 試料の TSV（name・group・role・batch・batch_source・injection_order・injection_order_source・
-  subject_id・excluded、続けて実験情報シートに足した因子の列を名前の順に。足していなければ因子の列は無い）。
-  `*_source` は値の出所（`sheet` / `mddata` / `mzTab` / `raw_acquisition_time` / `filename`）で、バッチが空で試料名に
-  8 桁の数字があれば `batch_source` は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は
-  `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、
-  除外していなければ空。`query` は因子トークン（`_` 区切りの AND・順不同、`,` 区切りの複数指定は OR。旧
-  `dataset_status(view="samples")` の `specs` と同じ文法）。役割では落とさない。
-- `tags`: タグごとの特徴 ID（先頭 50 件）。**特徴のタグは MS-DIAL の `_tags.xml` から読んだもの**で、
-  アノテーションの確かさそのものではない。
-- `results`: このハンドルの統計の行列（`stat_matrices`）と結果（`results`）の一覧。`{view, n_matrices, matrices,
-  n_results, results, note}` で、`matrices` と `results` は TSV（1 件も無ければ空文字列。真偽の列の値は `True` /
-  `False`、値の無い欄は空）。
-  - `matrices` の列: `matrix_id`・`current`・`drift`（ドリフト補正の段の状態 `applied` / `partial` / `skipped`）・
-    `filters`（当てた足切りの名前を `/` で連ねたもの。`blank_ratio` / `detection` / `qc_rsd` / `d_ratio`）・
-    `normalize`（正規化の方法）・`n_features`（行列の特徴数）・`n_units`（行列の単位の数。反復をまとめた行列なら
-    個体、まとめない行列なら注入）・`excluded_samples` / `excluded_features`（行列を作ったときの除外の**件数**）・
-    `group_overrides`（群を上書きした試料の件数）。
-  - `results` の列: `result_id`・`kind`（`compare` / `stat_pca` / `overview` / `species_pca`）・`matrix_id`・
-    `contrasts`（`compare` の対比 ID を spec の順に `,` で連ねたもの。ほかの種類は空）・`origin`（`overview` は最初の
-    概観が回した比較で、特徴検索の既定の選択に入らない。利用者が回した結果は空）・`current`・`last`（`True` は
-    図・書き出しが `result_id` を省いたときに使う直近の結果＝直近の比較か直近の PCA）。
-  - `current`: `True` は今のデータ（データの指紋。指紋を持たない `species_pca` はデータセットの ID）と今の
-    `metadata_revision` で作った行列・結果。`False` は除外・試料の表の更新・データの入れ替えの前に作ったもので、
-    今の結果として読まない（作り直す）。古い `matrix_id` を渡したツールは `missing_state`（`dataset_preprocess` を
-    案内）で断る。
-  - 掘るときは `result_id`（compare は `contrast_id` も）を渡す。`query` は効かず、使わずに `notes` に書く（断らない）。
+- `summary`（既定）: `groups`（群＝Class ID ごとの件数）・`roles`・`n_ungrouped`（群の宣言が無い試料の数）・`tags`（タグごとの特徴数）・`excluded`（除外の件数）。`samples` は name / role の TSV（列名 `name\trole`）で、役割は試料の表から読む（`view="samples"`・統計エンジンと同じ。`dataset_set_sample_metadata` で直した役割も出る。空は `sample`）。`groups` と `n_ungrouped` は統計に入る試料（`included_sample_indices` と同じ集合）だけを数え、`roles` は全試料を数える。外した試料は外した理由ごとに群 → 件数で分け（群が無ければ `(群なし)`。1 件も無ければ鍵ごと出さない）、`groups` には載せない: 実験情報シートの `include=false` の試料（`pipeline_sample_sheet` の群 `unassigned` など。`unassigned` は群ではなく、`dataset_compare` に渡せない）は `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した試料はシートの側だけに数える）。
+- `samples`: 試料の TSV（name・group・role・batch・batch_source・injection_order・injection_order_source・subject_id・excluded、続けて実験情報シートに足した因子の列を名前の順に。足していなければ因子の列は無い）。`*_source` は値の出所（`sheet` / `mddata` / `mzTab` / `raw_acquisition_time` / `filename`）。バッチが空で試料名に 8 桁の数字があれば `batch_source` は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は `dataset_exclude` の理由、実験情報シートの `include=false` の試料は「include=false（実験情報シート）」、除外していなければ空。`query` は因子トークン（`_` 区切りは順不同の AND、`,` 区切りは OR）で、役割では落とさない。
+- `tags`: タグごとの特徴 ID（先頭 50 件）。タグは MS-DIAL の `_tags.xml` から読んだもので、同定の確かさそのものではない。
+- `results`: このハンドルの統計の行列（`stat_matrices`）と結果（`results`）の一覧。`{view, n_matrices, matrices, n_results, results, note}` で、`matrices` と `results` は TSV（1 件も無ければ空文字列。真偽の列は `True` / `False`、値の無い欄は空）。
+  - `matrices` の列: `matrix_id`・`current`・`drift`（ドリフト補正の段の状態 `applied` / `partial` / `skipped`）・`filters`（当てた足切りを `/` で連ねたもの。`blank_ratio` / `detection` / `qc_rsd` / `d_ratio`）・`normalize`（正規化の方法）・`n_features`（行列の特徴数）・`n_units`（行列の単位の数。反復をまとめた行列なら個体、まとめない行列なら注入）・`excluded_samples` / `excluded_features`（行列を作ったときの除外の件数）・`group_overrides`（群を上書きした試料の件数）。
+  - `results` の列: `result_id`・`kind`（`compare` / `stat_pca` / `overview` / `species_pca`）・`matrix_id`・`contrasts`（`compare` の対比 ID を spec の順に `,` で連ねたもの。ほかの種類は空）・`origin`（`overview` は最初の概観が回した比較で、特徴検索の既定の選択に入らない。それ以外の結果は空）・`current`・`last`（`True` は図・書き出しが `result_id` を省いたときに使う直近の結果＝直近の比較か直近の PCA）。
+  - `current`: `True` は今のデータ（データの指紋。指紋を持たない `species_pca` はデータセットの ID）と今の `metadata_revision` で作った行列・結果。`False` は除外・試料の表の更新・データの入れ替えの前に作ったもので、今の結果として読まない（作り直す）。古い `matrix_id` を渡すと `missing_state`（`dataset_preprocess` を案内）で断る。
+  - 掘るときは `result_id`（compare は `contrast_id` も）を渡す。`query` は効かず、断らずに `notes` に書く。
 
-**除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID -> 理由）は
-解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した
-試料・特徴を**前処理済み行列から外す**（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、
-前処理済み行列から先の結果（PCA・差次的解析）は古い結果になる——`ds.results` には残るが現在の結果としては
-通らない。`dataset_exclude` を使う前に作った結果の数字を、除外後の結果として読んではいけない。
-任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持ち、統計エンジンの前処理が**同じ個体の反復注入を 1 個体にまとめる**鍵に使う（`dataset_preprocess` の `collapse_replicates`、`injection_columns` で注入ごとに違う列を鍵から外す。`subject_source` は `subject_id` / `injection` / `mixed`）。`subject_id` が無い試料は注入が 1 個体になる。
+**除外（`dataset_exclude`）は入力を変えない。** `excluded_samples` / `excluded_features`（名前・特徴 ID → 理由）は解析の状態で、定量行列・試料名・特徴 ID・データセットの指紋は元のまま。前処理（`dataset_preprocess`）が除外した試料・特徴を前処理済み行列から外す（検出率の足切りの分母からも外す）。除外を変えると `metadata_revision` が進み、前処理済み行列から先の結果（PCA・差次的解析）は古くなる（`ds.results` に残るが現在の結果としては通らない）。除外の前に作った結果の数字を、除外後の結果として読まない。
 
-v2 の実験情報シートは、既知の列（と任意の `subject_id`）の後ろに**因子の列**（`Genotype`・`Treatment` など）を足せる。列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値（空は欠落）は行にそのまま載り、受領の `samples.rows`・`dataset_set_sample_metadata`・データセットの試料の表を通って、analysis-spec v2 の `design.factors` / `covariates` が列名で引く。因子の列の値だけの変更も `changed_fields` に列名で出て、差次的解析の結果を古くする。
+任意の列 `subject_id`（実験情報シートの末尾）は `sample_meta` に持ち、前処理が同じ個体の反復注入を 1 個体にまとめる鍵に使う（`dataset_preprocess` の `collapse_replicates`。`injection_columns` で注入ごとに違う列を鍵から外す。`subject_source` は `subject_id` / `injection` / `mixed`）。`subject_id` が無い試料は注入が 1 個体。
 
-`pipeline_sample_sheet` は ISA / mwTab の試料の表からこの v2 のシートを raw のフォルダに書く（受付と同じ読み手で
-確かめてから書く）。群の決まらない生体試料（因子の値が空・表に行が無い・別々の試料に当たるファイル・因子の値が
-食い違う同じ試料の行）は群 `unassigned` で `include=false`（統計の母集団に入らない。`unassigned` は群ではない）。
-因子の列は渡した名前で足し、既知の列と完全に同じ名前だけ `factor_<名>` に改める（`renamed_factor_columns`）。
-注入順は raw の取得時刻の順で（`.wiff2` は同じ幹の `.wiff` の時刻）、取得時刻の読めない raw の注入順だけを空にする（宣言の行は書き、読み手はその空欄に
-「取得時刻では分からない」印を付けて `.mddata`・mzTab-M の番号で埋めない。`notes` が「ドリフト補正と注入順の偏りの
-判定は行われない」と書くのは、順の欠けた生体試料か QC が統計に入る `include=true` のときだけ）。生体試料のどれも群が決まらなければ書かない。同じ名前のシートが既にあり `overwrite=True` でなければ `SAMPLE_SHEET_EXISTS`（`details.path`）、
-試料の表・引数が読めない・合わない（因子の列が無い・`output_name` にフォルダを含む・読み書きできないなど）ときは
-`SAMPLE_TABLE_INVALID` で、どちらもシートを書かない。
+v2 の実験情報シートは、既知の列（と任意の `subject_id`）の後ろに因子の列（`Genotype`・`Treatment` など）を足せる。列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値（空は欠落）は行にそのまま載り、受領の `samples.rows`・`dataset_set_sample_metadata`・データセットの試料の表を通って、analysis-spec v2 の `design.factors` / `covariates` が列名で引く。因子の列の値だけの変更も `changed_fields` に列名で出て、差次的解析の結果を古くする。
+
+`pipeline_sample_sheet` は ISA / mwTab の試料の表からこの v2 のシートを raw のフォルダに書く（受付と同じ読み手で確かめてから書く）。
+
+- 群の決まらない生体試料（因子の値が空・表に行が無い・別々の試料に当たるファイル・因子の値が食い違う同じ試料の行）は群 `unassigned` で `include=false`（統計の母集団に入らない）。生体試料のどれも群が決まらなければ書かない。
+- 因子の列は渡した名前で足し、既知の列と完全に同じ名前だけ `factor_<名>` に改める（`renamed_factor_columns`）。
+- 注入順は raw の取得時刻の順（`.wiff2` は同じ幹の `.wiff` の時刻）。取得時刻の読めない raw の注入順だけを空にし（宣言の行は書く）、読み手はその空欄に「取得時刻では分からない」印を付けて `.mddata`・mzTab-M の番号で埋めない。`notes` が「ドリフト補正と注入順の偏りの判定は行われない」と書くのは、順の欠けた生体試料か QC が `include=true` で統計に入るときだけ。
+- 同じ名前のシートが既にあり `overwrite=True` でなければ `SAMPLE_SHEET_EXISTS`（`details.path`）、試料の表・引数が読めない・合わない（因子の列が無い・`output_name` にフォルダを含む・読み書きできないなど）ときは `SAMPLE_TABLE_INVALID`。どちらもシートを書かない。
 
 ### 13.6 `inchikey_coverage`
 
@@ -229,108 +142,47 @@ v2 の実験情報シートは、既知の列（と任意の `subject_id`）の�
 | `total_features` | SMF 行数 |
 | `with_inchikey` | InChIKey が付いた特徴数（SME・SML 合算） |
 | `by_source` | `database_identifier` / `msp_library` / `inchi_derived` / `smiles_derived` / `none` の内訳。全特徴を 1 回ずつ数える |
-| `rdkit_available` | RDKit で構造から導出できる環境か。`False` なら `smiles`/`inchi` 経路は静かに落ちる |
-| `identified_by` | **同定の出所内訳**。`sme`（MS/MS 証拠あり）/ `sml_only`（MS1 注釈のみ）/ `none` |
-| `msp_lookup` | MSP 表の使用状況。`status`（`used` / `no_msp` / `unavailable` / `not_applicable`）、`file`（MSP のファイル名だけ）、`resolved` / `conflicting_names` / `unmatched`（**照合の試行回数**: 特徴ごとの SME 最良証拠 1 件と、SML 行 × 参照特徴）。`conflicting_names` は同じ名前に別の InChIKey が MSP にあって付けなかった数 |
+| `rdkit_available` | RDKit で構造から導出できる環境か。`False` なら `smiles` / `inchi` 経路は黙って落ちる |
+| `identified_by` | 同定の出所の内訳。`sme`（MS/MS 証拠あり）/ `sml_only`（MS1 注釈だけ）/ `none` |
+| `msp_lookup` | MSP 表の使用状況。`status`（`used` / `no_msp` / `unavailable` / `not_applicable`）、`file`（MSP のファイル名だけ）、`resolved` / `conflicting_names` / `unmatched`（照合の試行回数: 特徴ごとの SME 最良証拠 1 件と、SML 行 × 参照特徴）。`conflicting_names` は同じ名前に別の InChIKey が MSP にあって付けなかった数 |
 
-**同名衝突の特徴単位の印**: `conflicting_names` は試行回数の合計で、どの特徴かは分からない。名前から InChIKey を
-引こうとして MSP に同じ名前の別の InChIKey があり（どれにも決めなかった）、構造（InChI / SMILES）からも RDKit で
-導けずに InChIKey が空のまま残った特徴には、特徴単位の印
-`inchikey_name_conflict: true` が付く（最良証拠は `feature_metadata[fid]`、各 SME 候補は候補ごと、SML の注釈は注釈ごと。
-曖昧な SML 注釈はどれかの行が衝突なら付く）。構造から導けた InChIKey（`inchi_derived` / `smiles_derived`）は名前に
-依らないので、名前が衝突しても印は付かない（`conflicting_names` の試行回数には数える）。`dataset_feature_search` の
-窓の行は `inchikey_ambiguity` 列に `name_conflict` を出す（無ければ空）。印の付いた特徴の InChIKey が空なのは
-「未同定」ではなく「同名の物質が複数あって決めなかった」。差次的エクスポートの列は変えない（InChIKey の無い行として扱う）。
+**同名衝突の特徴単位の印**: `conflicting_names` は試行回数の合計で、どの特徴かは分からない。名前から InChIKey を引こうとして MSP に同じ名前の別の InChIKey があり（どれにも決めず）、構造（InChI / SMILES）からも RDKit で導けずに InChIKey が空のまま残った特徴には `inchikey_name_conflict: true` が付く（最良証拠は `feature_metadata[fid]`、SME 候補は候補ごと、SML の注釈は注釈ごと。曖昧な SML 注釈はどれかの行が衝突なら付く）。構造から導けた InChIKey（`inchi_derived` / `smiles_derived`）には付かない（`conflicting_names` には数える）。`dataset_feature_search` の窓の行は `inchikey_ambiguity` 列に `name_conflict` を出す（無ければ空）。印の付いた特徴の InChIKey が空なのは「未同定」ではなく「同名の物質が複数あって決めなかった」。差次的エクスポートの列は変えない（InChIKey の無い行として扱う）。
 
-**解決の順序**: `database_identifier` が InChIKey 形 → **研究室 MSP の表**（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。
-MSP を RDKit より前に置くのは、RDKit の有無（Windows のアプリケーション制御がネイティブ DLL を
-拒否する機械がある）で結果を変えないため。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作られ、
-実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）がMSP を指していればその最初の MSP を、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は`MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
+**解決の順序**: `database_identifier` が InChIKey 形 → 研究室 MSP の表（`MspDB:<名前>`）→ RDKit（InChI / SMILES）。MSP を RDKit より前に置くので、RDKit の有無で結果が変わらない。MSP 表はジョブ経由の読み込み（`job_path`）でだけ作り、実効メソッドの MSP の注釈器設定表（`MSP annotator settings file path`。`library_mode="msp_then_lbm"` の run）が MSP を指していればその最初の MSP、無ければ `Msp file path` を読む（Console と同じ順）。設定表から入った MSP の同定は `MspDB_<n>_<MSP の stem>:<名前>` で出るので、stem がその MSP のものだけを引く。直接読み（`mztab_path`）では `not_applicable`。
 
-`identified_by` は `load_dataset` の要約にも 1 行で出る。
-**`sml_only` を `sme` と足して「同定できた件数」にしないこと** — 証拠水準が違う。
+`identified_by` は `load_dataset` の要約にも 1 行で出る。`sml_only` を `sme` と足して「同定できた件数」にしない（証拠の水準が違う）。
 
 ### 13.7 `abundance` は実測か gap-fill かを区別しない
 
-mzTab-M の `abundance_assay[N]` は非ゼロでも実測ピークか gap-fill 補間かを
-区別しない。実データ（60 サンプル × 714 特徴）では**セルの 70.0% が gap-fill**
-だったので、非ゼロを検出と数えると検出率を 3 倍以上に過大評価する。
+mzTab-M の `abundance_assay[N]` は、非ゼロでも実測ピークか gap-fill の補間かを区別しない。非ゼロを検出と数えると検出率を大きく過大評価する。
 
-隣接する `.arf` が同一アライメントだと**数値で検証できた場合だけ**、
-`ds.detected_mask`（(特徴 × サンプル) の bool 行列）に検出状態が入る。
-要約は `ds.feature_qc`:
+隣接する `.arf` が同じアラインメントだと数値で検証できたときだけ、`ds.detected_mask`（特徴 × 試料の bool 行列）に検出状態が入る。要約は `ds.feature_qc`:
 
 | キー | 意味 |
 |---|---|
 | `source` | `"arf"`（取り込めた）/ `None`（取り込めていない） |
 | `reason` | `source is None` のときだけ。`no_candidate` ほか |
 | `n_cells` / `n_detected` / `gap_filled_rate` | 取り込めたときの内訳 |
-| `join` | 接合の検証内訳（スポット数一致・m/z 差）。解析フォルダのデータセットでは読んだ `.arf` のパスと `feature_axis="arf2_master_id"` |
+| `join` | 接合の検証の内訳（スポット数の一致・m/z 差）。解析フォルダのデータセットでは読んだ `.arf` のパスと `feature_axis="arf2_master_id"` |
 
-解析フォルダ（`source_format="msdial_folder"`）のデータセットでは、検出状態は読んだ `.arf` そのものが
-持つので、`source="arf"` は「隣の `.arf` を照合して取り込めた」ではなく「`.arf` から読んだ」の意味で
-常に付く（`source is None` にはならない）。`inchikey_coverage` も同じキー（`total_features` /
-`with_inchikey` / `by_source` / `identified_by`）で埋まるが、`by_source` の出所は `arf2` と `none` だけ。
+解析フォルダ（`source_format="msdial_folder"`）のデータセットでは、検出状態を読んだ `.arf` が持つので、`source="arf"` は「`.arf` から読んだ」の意味で常に付く（`None` にならない）。`inchikey_coverage` も同じキー（`total_features` / `with_inchikey` / `by_source` / `identified_by`）で埋まるが、`by_source` の出所は `arf2` と `none` だけ。
 
-取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。
-**その試料で検出された（gap-fill でない）セルだけ**（補間値の m/z は実測ではない）。検出された
-セルが 1 つも無い特徴は持たない。取り込めていないときは `None`。検出マスクと違い**データセットの
-指紋（`dataset_fingerprint`）には入らない**（入力ではなく付随の証拠。質量精度の注入順の傾向だけが読む）。
+取り込めたときは、試料ごとの実測 m/z も `ds.per_sample_mz`（特徴 ID → {試料名: m/z}）に載る。その試料で検出された（gap-fill でない）セルだけで、検出セルが 1 つも無い特徴は持たない。取り込めていないときは `None`。データセットの指紋（`dataset_fingerprint`）には入らない（質量精度の注入順の傾向だけが読む）。
 
-**`source is None` を「gap-fill が無い」と読まないこと。** 取り込めていないだけで、
-その mzTab-M の非ゼロ値には補間値が混じり得る。この状態では検出率・欠測率を語れず、
-`dataset_preprocess` の `detection_min_rate` も効かない: 誤りにはならず、検出率の足切りを行わずに
-前処理の `steps` の足切りの段に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と
-記録する（検出率で落とした特徴は 0 件だが、それは「全特徴が検出率を満たした」という意味ではない）。
-足切りが効いたかは戻り値の `steps` で確かめる。
+**`source is None` を「gap-fill が無い」と読まない。** 取り込めていないだけで、非ゼロ値に補間値が混じりうる。この状態では検出率・欠測率を語れず、`dataset_preprocess` の `detection_min_rate` も効かない: 誤りにはせず、検出率の足切りを行わずに、前処理の `steps` の足切りの段に `filters.detection = {status: "skipped", reason: "no_detected_mask"}` と記録する（検出率で落とした特徴が 0 件でも「全特徴が検出率を満たした」ではない）。
 
 ### 13.8 `dataset_feature_search` の戻り値
 
-窓検索（`targets` なし）は `features stats stats_unmerged merge_split results stats_source notes`、
-目標照合（`targets` あり）は `targets candidates stats stats_unmerged merge_split results rule stats_source
-rt_offset notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のときだけ）。`include_statistics=false` では
-比較の統計（`stats` `stats_unmerged` `results` `stats_source`）を付けず、`merge_split` は `{enabled}`（目標照合で
-割れの組を候補の数え方に使ったときは `source` `alignment_qc_sha256` `n_groups` `groups` も）だけになる。
-`result_ids` `contrast_id` はそのとき効かないので、渡していれば `notes` に書く。`features` `candidates` `stats` は
-TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・
-p / q / 平均 / `presence_p` は有効 4 桁）。
+窓検索（`targets` なし）は `features stats stats_unmerged merge_split results stats_source notes`、目標照合（`targets` あり）は `targets candidates stats stats_unmerged merge_split results rule stats_source rt_offset notes` を返す（`stats_unmerged` は `merge_split=true`（既定）のときだけ）。`include_statistics=false` では比較の統計（`stats` `stats_unmerged` `results` `stats_source`）を付けず、`merge_split` は `{enabled}`（目標照合で割れの組を候補の数え方に使ったときは `source` `alignment_qc_sha256` `n_groups` `groups` も）だけ。このとき `result_ids` `contrast_id` は効かず、渡していれば `notes` に書く。`features` `candidates` `stats` は TSV（列名 1 回）で、空欄は「値が無い」。数値は丸めてある（m/z 4 桁・ppm 2 桁・RT 3 桁・log2FC 4 桁・p / q / 平均 / `presence_p` は有効 4 桁）。
 
-**`ppm_offset`（質量の窓の中心のずれ、目標照合だけ・任意）**。形は `docs/output_format/reanalysis.md` §8 と同じ
-（`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は
-理論 m/z が `max_mz` 未満の最初の帯、無ければ `default`）。付加体ごとの理論 m/z で帯を引いた中心に対し、質量の窓は
-`|ppm − 中心| ≤ ppm`。**窓の幅（目標の `ppm`）と `candidates.ppm` 列は変わらない**（実測 − 理論のまま）。`rule.ppm_offset` に
-正規化した spec（渡したときだけ。渡さなければ欄ごと無い）、`rule.targets[].ppm_offset` に付加体ごとの中心（2 桁。渡したときだけ）が出て、
-`rule_hash` に入る（渡さなければ従来と同じ hash）。窓検索（`targets` なし）では効かないので、誤りにせず
-「目標照合（targets）でないので効かなかった引数」として `notes` に書く。形の誤りは窓検索でも `DATASET_BAD_REQUEST`（`field: ppm_offset`）。
+**`ppm_offset`（質量の窓の中心のずれ。目標照合だけ・任意）**: 形は `reanalysis` トピック §8 と同じ（`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz` 未満の最初の帯、無ければ `default`）。付加体ごとの理論 m/z で帯を引いた中心に対し、質量の窓は `|ppm − 中心| ≤ ppm`。窓の幅（目標の `ppm`）と `candidates.ppm` 列（実測 − 理論）は変わらない。渡したときだけ `rule.ppm_offset`（正規化した spec）と `rule.targets[].ppm_offset`（付加体ごとの中心。2 桁）が出て `rule_hash` に入る。窓検索では効かず、誤りにせず `notes` に書く。形の誤りは窓検索でも `DATASET_BAD_REQUEST`（`field: ppm_offset`）。
 
-**`rt_offset_min`（RT の窓の中心のずれ、目標照合だけ・任意）**。`rt_min` を持つ目標の RT の窓の中心を
-`rt_min + rt_offset_min`（分）に置き、`|RT − 中心| ≤ rt_tol_min` で見る。**窓の幅（`rt_tol_min`）と
-`candidates.delta_rt` 列（RT − `rt_min`）は変わらない**。渡したときだけ `rule.targets[]` の `rt_offset_min`（`rt_min` のある
-目標だけ）が出て `rule_hash` に入り（渡さなければ従来と同じ hash）、`rt_min` のある目標が 1 つでもあれば `rule.rt_offset_min` も
-出る。**`rt_min` の無い目標には RT の窓が無いので効かない**: どの目標にも `rt_min` が無ければ使わずに `notes` に書き、
-`rule` にも `rule_hash` にも入れない（`dataset_claim_evidence` の spec の `rt_offset_min` と同じ）。一部の目標だけに無ければ、
-効かなかった `target_id` を `notes` に挙げる。窓検索では効かないので `notes` に書く（`ppm_offset` と同じ）。有限の数でないときは `DATASET_BAD_REQUEST`（`field: rt_offset_min`）。
+**`rt_offset_min`（RT の窓の中心のずれ。目標照合だけ・任意）**: `rt_min` を持つ目標の RT の窓の中心を `rt_min + rt_offset_min`（分）に置き、`|RT − 中心| ≤ rt_tol_min` で見る。窓の幅（`rt_tol_min`）と `candidates.delta_rt` 列（RT − `rt_min`）は変わらない。渡したときだけ `rule.targets[].rt_offset_min`（`rt_min` のある目標だけ）が出て `rule_hash` に入り、`rt_min` のある目標が 1 つでもあれば `rule.rt_offset_min` も出る。`rt_min` の無い目標には効かない: どの目標にも無ければ使わずに `notes` に書き、`rule` にも `rule_hash` にも入れない（`dataset_claim_evidence` の spec の `rt_offset_min` と同じ）。一部の目標だけに無ければ、効かなかった `target_id` を `notes` に挙げる。窓検索では効かず `notes` に書く。有限の数でなければ `DATASET_BAD_REQUEST`（`field: rt_offset_min`）。
 
-**`rt_offset`（RT のずれの見積もり、目標照合のときいつも）**。`rt_min` を持つ目標と特徴の組のうち、質量の窓
-（`ppm_offset` があればずらした中心）に入り、|RT − `rt_min`| ≤ 2 分で、目標から見ても特徴から見ても相手が 1 つだけの
-組（`contradicted` と除外した特徴は数えない。割れの組は 1 つと数える）から、RT − `rt_min` を測る。目標は付加体を
-複数持つので、**付加体ごとに一致がたかだか 1 つ**で、一致した特徴どうしが 0.05 分（`criteria.coelute_min`）以内に
-同時溶出していれば、同じ化合物の `[M+H]+` と `[M+Na]+` などとみなして **1 組**と数える（付加体の数だけ数えない。
-同時溶出しない・ある付加体に 2 つ以上あるときは数えない）。
-`{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}` で、`shift_min` は組が 10 以上かつ |中央値| > 0.2 分の
-ときだけ中央値（それ以外は null で `reason` が `too_few_pairs` / `below_threshold`）。**見積もりであって当ててはいない**
-——勧めを使うなら `rt_offset_min` に渡して呼び直す（判定と `rule_hash` が変わるのはそのときだけ）。
+**`rt_offset`（RT のずれの見積もり。目標照合でいつも返す）**: `rt_min` を持つ目標と特徴の組のうち、質量の窓（`ppm_offset` があればずらした中心）に入り、|RT − `rt_min`| ≤ 2 分で、目標から見ても特徴から見ても相手が 1 つだけの組（`contradicted` と除外した特徴は数えない。割れの組は 1 つと数える）から RT − `rt_min` を測る。目標の付加体ごとに一致がたかだか 1 つで、一致した特徴どうしが 0.05 分（`criteria.coelute_min`）以内に同時溶出していれば、同じ化合物の別の付加体（`[M+H]+` と `[M+Na]+` など）とみなして 1 組と数える（同時溶出しない・ある付加体に 2 つ以上あるときは数えない）。`{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}` で、`shift_min` は組が 10 以上かつ |中央値| > 0.2 分のときだけ中央値（それ以外は null で、`reason` が `too_few_pairs` / `below_threshold`）。見積もりで、当ててはいない。使うなら `rt_offset_min` に渡して呼び直す（判定と `rule_hash` が変わるのはそのときだけ）。
 
-**窓検索の `sort` と追加の列**。`sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても
-上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。目標照合（`targets`）では
-効かないので、誤りにせず `notes` に書いて規則の順で返す。`mz` / `intensity` 以外は `DATASET_BAD_REQUEST`）。**強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大**、
-つまりピークの高さ（データセットの測定値）の最大で、**EIC のクロマトグラムの最大ではない**。検出セルが無い特徴
-は最後に並ぶ。**検出の印（`detected_mask`）が無いデータセット**は gap-fill を見分けられないので、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空のまま）。`dataset_exclude` した特徴は両方の並びで出さない。
-`features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`
-（検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で
-標準化した脂質名）・`msi_level`（MSI の同定水準）・`inchikey_ambiguity`（同名衝突で InChIKey を決めなかった特徴なら
-`name_conflict`、無ければ空。§13.6 の「同名衝突の特徴単位の印」）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット
-（`.arf2` の同定の標準化。意味は `docs/output_format/identity.md`）だけで、mzTab-M のデータセットでは空。
+**窓検索の `sort` と追加の列**: `sort="mz"`（既定）は m/z 昇順、`sort="intensity"` は強度の降順で、条件が無くても上位 `max_results` 件を返す（`sort="mz"` で条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`。目標照合では効かず、誤りにせず `notes` に書いて規則の順で返す。`mz` / `intensity` 以外は `DATASET_BAD_REQUEST`）。強度は検出セル（gap-fill でない実測。`dataset_exclude` した試料の列を除く）の値の最大＝ピークの高さの最大で、EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後に並ぶ。検出の印（`detected_mask`）が無いデータセットは、除外していない試料の全セル（NaN は無視）の最大で並べ、`notes` に 1 行そう書く（`n_detected` は空）。`dataset_exclude` した特徴はどちらの並びでも出さない。
+`features` は `evidence` の後ろに `ontology`（MS-DIAL の Ontology。mzTab-M では SML 注釈にあれば）・`n_detected`（検出セルの数。除外した試料を数えない。検出状態が無いデータセットでは空で、0 ではない）・`normalized`（GOSLIN で標準化した脂質名）・`msi_level`（MSI の同定水準）・`inchikey_ambiguity`（§13.6 の同名衝突なら `name_conflict`、無ければ空）を持つ。`normalized` と `msi_level` は解析フォルダのデータセット（`.arf2` の同定の標準化。意味は `identity` トピック）だけで、mzTab-M のデータセットでは空。
 
 **`evidence`（証拠の水準）** は 2 種類ある。
 
@@ -338,16 +190,13 @@ p / q / 平均 / `presence_p` は有効 4 桁）。
 |---|---|---|
 | `features.evidence`（窓検索） | `sme` | SME 候補（MS/MS を見た同定）がある。`name` `inchikey` `adduct` は rank 最上位の候補のもの |
 | | `sml` | SME は無く、SML 注釈（MS1 照合のラベル）だけがある。曖昧な注釈は `name` が空で `inchikey` を `;` で連結 |
-| | `none` | 注釈が無い。**統計は付く**（注釈が無いことは「調べていない」ではない） |
-| `candidates.evidence`（目標照合） | `sme_match` | SME 候補のどれか（rank を問わない）が InChIKey 先頭ブロック・付加体・価数のすべてで目標と一致。一致した rank が `sme_rank`。**付加体は綴りでなく組成で比べる**（n_mol・価数・極性・付加と脱離の原子が同じなら同じ: MS-DIAL の mzTab の `[M+HCOO]1-`・MSP の `[M+CHO2]-` は層の `[M+FA-H]-` に、`[M+Hac-H]-`・`[M+C2H3O2]-` は `[M+CH3COO]-` に、`[M-H-H2O]-` は `[M-H2O-H]-` に一致する。組成で読めない表記どうしは、空白と価数 1 の `1` と大文字小文字を無視した綴りで比べる） |
+| | `none` | 注釈が無い。統計は付く（注釈が無いことは「調べていない」ではない） |
+| `candidates.evidence`（目標照合） | `sme_match` | SME 候補のどれか（rank を問わない）が InChIKey 先頭ブロック・付加体・価数のすべてで目標と一致。一致した rank が `sme_rank`。付加体は綴りでなく組成で比べる（n_mol・価数・極性・付加と脱離の原子が同じなら同じ: MS-DIAL の mzTab の `[M+HCOO]1-`・MSP の `[M+CHO2]-` は層の `[M+FA-H]-` に、`[M+Hac-H]-`・`[M+C2H3O2]-` は `[M+CH3COO]-` に、`[M-H-H2O]-` は `[M-H2O-H]-` に一致する。組成で読めない表記どうしは、空白と価数 1 の `1` と大文字小文字を無視した綴りで比べる） |
 | | `sml_match` | SME が無い（または InChIKey を解決できた SME 候補が無い）特徴で、SML 注釈の InChIKey 先頭ブロックが一致 |
-| | `unannotated` | 注釈が無い、または SML が別物質（SML は MS1 照合だけで異性体を区別できないので矛盾としない）。**`rt_min` があるときだけ** qualified |
-| | `contradicted` | InChIKey を持つ SME 候補がどれも一致しない＝ MS/MS の同定が別物質。qualified にならない |
+| | `unannotated` | 注釈が無い、または SML が別物質（SML は MS1 照合だけで異性体を区別できないので矛盾としない）。`rt_min` があるときだけ qualified |
+| | `contradicted` | InChIKey を持つ SME 候補がどれも一致しない＝MS/MS の同定が別物質。qualified にならない |
 
-`candidates.reasons` は `;` 区切りで、落ちた理由（`rt_outside_tolerance` `identifier_mismatch`
-`adduct_mismatch` `charge_mismatch` `mass_only_not_identified`）と、情報として残す印
-（`sme_identity_unresolved`: InChIKey を解決できない SME 候補しか無かった／`sml_ambiguous`／
-`lower_adduct_tier` `lower_evidence_tier`: 判定に使わなかった層・水準の qualified 候補）を並べる。
+`candidates.reasons` は `;` 区切りで、落ちた理由（`rt_outside_tolerance` `identifier_mismatch` `adduct_mismatch` `charge_mismatch` `mass_only_not_identified`）と、情報として残す印（`sme_identity_unresolved`: InChIKey を解決できない SME 候補しか無かった／`sml_ambiguous`／`lower_adduct_tier` `lower_evidence_tier`: 判定に使わなかった層・水準の qualified 候補）を並べる。
 
 **`targets[*].status`（判定）**
 
@@ -357,148 +206,56 @@ p / q / 平均 / `presence_p` は有効 4 桁）。
 | `needs_input` | 規則では 1 つに決まらない。`reason` が `multiple_qualified_candidates`（同じ層・同じ水準に 2 つ以上）か `no_qualified_candidate`（どの層にも無い） |
 | `not_applicable` | 目標の極性が読み込んだデータセットの極性と違う（`reason` は `polarity_mismatch`）。照合していない。目標の極性は `polarity`、省いたときは明示した付加体（`adduct` / `adduct_tiers`）の符号（陽陰が混ざる目標は `FEATURE_TARGET_INVALID`） |
 
-`needs_input` は「誰が次に何を見るか」を返している。**強度・ppm・RT の近さで 1 件を選び直さないこと**
-（選んだ時点で、規則ではなく読み手の好みが結論になる）。
+`needs_input` は次に何を見るかを返す。強度・ppm・RT の近さで 1 件を選び直さない（規則でなく読み手の好みが結論になる）。
 
-- `multiple_qualified_candidates`: `selected_evidence` は**同点で決着が付かなかった水準**（選んだ水準
-  ではない）、`adduct_tier_used` はその層。その層・水準の候補（`candidates` で `qualified=true`、
-  `lower_*` の印が無い行）の同定を MS/MS で確かめる——`dcl_find_msms` で実スペクトルを引き、
-  `library_match_feature` で参照ライブラリと照合する。
-- `no_qualified_candidate`: 規則とデータのどちらかが食い違っている。`counts`
-  （`mass` → `rt` → `qualified`、`by_evidence` は水準ごとの qualified 数。どれも特徴の一意な件数）で
-  どの段で 0 になったかを見て、`ppm`・`rt_min`・`rt_tol_min`・付加体の層・極性を確かめる。
-  `rt_min` が無い目標では未注釈の特徴は qualified にならない（質量だけでは同定と言わない）。
+- `multiple_qualified_candidates`: `selected_evidence` は同点で決着が付かなかった水準（選んだ水準ではない）、`adduct_tier_used` はその層。その層・水準の候補（`candidates` で `qualified=true`、`lower_*` の印が無い行）の同定を MS/MS で確かめる: `dcl_find_msms` で実スペクトルを引き、`library_match_feature` で参照ライブラリと照合する。
+- `no_qualified_candidate`: 規則とデータのどちらかが食い違っている。`counts`（`mass` → `rt` → `qualified`、`by_evidence` は水準ごとの qualified 数。どれも特徴の一意な件数）でどの段で 0 になったかを見て、`ppm`・`rt_min`・`rt_tol_min`・付加体の層・極性を確かめる。`rt_min` が無い目標では未注釈の特徴は qualified にならない（質量だけでは同定と言わない）。
 
 `targets[*].truncated` は `max_results` で打ち切った候補の件数（`counts` は打ち切り前）。
 
-**`stats`（差次的統計）** は `candidates`（目標照合）か `features`（窓検索）に出た特徴だけを、
-特徴 × 結果で並べる。
+**`stats`（差次的統計）** は `candidates`（目標照合）か `features`（窓検索）に出た特徴だけを、特徴 × 結果で並べる。
 
 | 欄 | 意味 |
 |---|---|
-| `status` | `tested`（p が有限）/ `not_in_matrix`（前処理で落ち、検定の行列に居ない）/ `not_testable`（行列には居るが p が無い）。**後の 2 つは数値欄が空で、「差が無かった」ではない** |
+| `status` | `tested`（p が有限）/ `not_in_matrix`（前処理で落ち、検定の行列に居ない）/ `not_testable`（行列には居るが p が無い）。後の 2 つは数値欄が空で、「差が無かった」ではない |
 | `log2fc` | 正なら `group_b` が高い（`results[*].log2fc_sign`） |
 | `q` | その結果に付いた BH の q をそのまま（窓で絞った件数で掛け直していない） |
-| `detected_a` / `detected_b` | 群ごとの**実検出の例数**（§13.7 の検出状態から数える）。**gap-fill の値は検出に数えない**。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均）。注入の数で数える |
-| `detected_units_a` / `detected_units_b` | 群ごとの**個体単位の実検出数**（結果の行の `detected_reference` / `detected_test` をそのまま写す。`presence_p` と `detection_driven` の分子で、分母は `results[*].n_units_a` / `n_units_b`）。反復注入をまとめていなければ `detected_a` / `detected_b` と同じ。結果の行列に無い特徴・検出状態の無い結果は空。量を判定できない行（`not_testable`）にも付く |
-| `presence_p` | 検出の有無そのものの検定（Fisher）の p（有効 4 桁）。結果の行（`dataset_compare` の `presence_p`）をそのまま写す。量を判定できない行（`not_testable`）にも付く。結果の行列に無い特徴・検出状態の無い結果は空。**反復注入を個体にまとめた比較では個体の数で数える**（`detected_a` / `detected_b` と単位が違うときは `notes` に 1 行） |
-| `detection_driven` | 量の差が値の大小より検出の有無から来ているか（`reanalysis` §6 の `detection_driven` と同じ規則。高い側の群の検出が個体数の半分未満か、低い側の検出が 0 なら true）。`tested` で `log2fc` が 0 でない行だけ、ほかは空。**判定は変えない**——true の行は量の差を言う前に検出の差として読む |
-| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を比較名と同じ向きの名前で書いたもの——`RA_vs_HC` の比較で `group_a=HC` と読み違えないための欄 |
+| `detected_a` / `detected_b` | 群ごとの実検出の例数（§13.7 の検出状態から数える。gap-fill の値は数えない）。注入の数で数える。検出状態が無い・試料の対応を保証できないときは空で、`notes` に理由。非ゼロの平均があっても検出 0 例はありうる（埋め値の平均） |
+| `detected_units_a` / `detected_units_b` | 群ごとの個体単位の実検出数（結果の行の `detected_reference` / `detected_test` をそのまま写す。`presence_p` と `detection_driven` の分子で、分母は `results[*].n_units_a` / `n_units_b`）。反復注入をまとめていなければ `detected_a` / `detected_b` と同じ。結果の行列に無い特徴・検出状態の無い結果は空。量を判定できない行（`not_testable`）にも付く |
+| `presence_p` | 検出の有無そのものの検定（Fisher）の p（有効 4 桁）。結果の行（`dataset_compare` の `presence_p`）をそのまま写す。`not_testable` の行にも付く。結果の行列に無い特徴・検出状態の無い結果は空。反復注入を個体にまとめた比較では個体の数で数える（`detected_a` / `detected_b` と単位が違うときは `notes` に 1 行） |
+| `detection_driven` | 量の差が値の大小より検出の有無から来ているか（`reanalysis` §6 の `detection_driven` と同じ規則。高い側の群の検出が個体数の半分未満か、低い側の検出が 0 なら true）。`tested` で `log2fc` が 0 でない行だけ、ほかは空。判定は変えない: true の行は量の差を言う前に検出の差として読む |
+| `comparison` / `group_a` / `group_b` / `log2fc_test_over_ref` | `with_group_labels=true`（opt-in）のときだけ末尾に付く。`comparison` は `<group_b>_vs_<group_a>`。`log2fc_test_over_ref` は `log2fc` と同じ値（正なら `group_b` が高い）を、比較名と同じ向きの名前で書いたもの |
 
-`results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign,
-bh_population, caveats}`（統計エンジンの結果は加えて個体の数 `n_units_a` / `n_units_b`。反復注入をまとめていなければ
-`n_a` / `n_b` と同じ）。差次的結果が 1 件も無い（`result_ids=[]` を含む）ときは統計を付けず、統計にだけ効く引数
-（`with_group_labels=true`・`contrast_id`、窓検索では `alignment_qc_path`・`merge_split=false` も）を渡していれば
-「効かなかった引数」として `notes` に挙げる。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの
-特徴数・前処理後に検定の行列に残った数・p が有限だった数で、**BH は `n_tested` 件に掛かっている**。
-`caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。
+`results[*]` は統計を付けた結果ごとの `{result_id, group_a, group_b, n_a, n_b, log2fc_sign, bh_population, caveats}`（統計エンジンの結果は加えて個体の数 `n_units_a` / `n_units_b`。反復注入をまとめていなければ `n_a` / `n_b` と同じ）。`bh_population = {n_features_total, n_in_matrix, n_tested}` はデータセットの特徴数・前処理後に検定の行列に残った数・p が有限だった数で、BH は `n_tested` 件に掛かっている。`caveats` は差次的結果の注意書き（交絡の警告を含む）をそのまま写す。差次的結果が 1 件も無い（`result_ids=[]` を含む）ときは統計を付けず、統計にだけ効く引数（`with_group_labels=true`・`contrast_id`、窓検索では `alignment_qc_path`・`merge_split=false` も）を渡していれば「効かなかった引数」として `notes` に挙げる。
 
-**割れたスポットのまとめ（`merge_split`、既定 true。spec 2026-10-28 §4.3 (c)）。** MS-DIAL のアライメントが
-1 つの物質を 2 つのスポットに割ると（例: 最初の数注入だけ RT がずれて別のスポットへ行く）、片方のスポットの
-「無い」試料に gap-fill の背景が入り、群の差でない差が出る。`merge_split=true` では、
-`dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）が
-データセットに 1 つでもあれば、すべての組の 2 スポットを**試料ごとの大きい方の値**で 1 列にまとめた行列
-（前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを
-当て直し（`dataset_compare` の記録した spec を当て直す。下記）、同じ検定と**まとめた後の全特徴**での
-BH をやり直して、`stats` の**すべての行**をそこから出す（統計を付ける特徴が組に入るかどうかによらない。
-組が無ければやり直さない）。
+**割れたスポットのまとめ（`merge_split`、既定 true）**: 1 つの物質がアラインメントで 2 つのスポットに割れると、片方の「無い」試料に gap-fill の背景が入り、群の差でない差が出る。`merge_split=true` では、`dataset_alignment_qc` の `merge_groups`（互いに最も近い mergeable な 2 スポット。`reanalysis` §9）がデータセットに 1 つでもあれば、すべての組の 2 スポットを試料ごとの大きい方の値で 1 列にまとめた行列（前処理の前の生の値。検出状態は「どちらかで検出」）に、差次的結果を計算したのと同じ前処理のレシピを当て直し（下記）、同じ検定と、まとめた後の全特徴での BH をやり直して、`stats` のすべての行をそこから出す（統計を付ける特徴が組に入るかどうかによらない。組が無ければやり直さない）。
 
 | 欄 | 意味 |
 |---|---|
-| `stats` | まとめた後の値。まとめる組がデータセットに 1 つでもあれば**すべての行**をまとめた行列で検定し直した値にする（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の残す ID＝受け持ちの多い側（同数なら小さい ID）。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さず従来の値 |
-| `stats_unmerged` | まとめる前の従来の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
-| `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）・`alignment_qc`（`alignment_qc_path` の JSON）・`last_alignment_qc`（`dataset_alignment_qc` がこのハンドルに持つ最後の結果）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空で、検定はやり直さない）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
+| `stats` | 組がデータセットに 1 つでもあれば、すべての行をまとめた行列で検定し直した値（1 つの表の q は 1 つの BH の母集団から。組に入らない特徴も、正規化と BH はまとめた行列で回り直す）。組に入る特徴は 1 行（`feature_id` は組の残す ID＝受け持ちの多い側、同数なら小さい ID。消える側の ID を頼んでも残す ID の行に解き、`notes` に書く）で、末尾の `merged_from` に 2 つの ID を `;` で（組に入らない行は空）。組が無ければ検定はやり直さない |
+| `stats_unmerged` | まとめる前の `stats`（頼んだ ID のまま・同じ列。`merged_from` は無い） |
+| `merge_split` | `{enabled, source, alignment_qc_sha256, n_groups, groups, renamed, recomputed, bh_population}`。`source` は `find_split_pairs`（その場で既定の閾値）・`alignment_qc`（`alignment_qc_path` の JSON）・`last_alignment_qc`（`dataset_alignment_qc` がこのハンドルに持つ最後の結果）、`n_groups` はデータセットでまとめる組の数、`groups` はそのうち統計を付けた特徴に関わる組、`recomputed` は検定し直した result_id（組が無ければ空）、`bh_population` は検定し直した結果ごとの母集団（`n_features_total` はまとめた後の特徴数） |
 
-`dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。
-ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す
-（対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。
-元の記録が無い・まとめた行列で比較をやり直せない（記録の `analysis_id` と spec の解析が食い違う内部の不整合も含む）ときは `FEATURE_MERGE_UNAVAILABLE`。
+`dataset_compare` の結果（統計エンジン）は、記録した spec（`input` の除外・群の上書きを含む）を、まとめた行列（`merge_feature_columns`。ゼロと NaN を「無い」として試料ごとに大きい方）で `run_spec_v2` に当て直し、`as_two_group` で同じ対比を取り直す（対比が複数の結果は `result_id#contrast_id` の形で名指す。`contrast_id` 引数で絞ってもよい。交互作用の対比は対象外）。元の記録が無い・まとめた行列で比較をやり直せない（記録の `analysis_id` と spec の解析が食い違う内部の不整合も含む）ときは `FEATURE_MERGE_UNAVAILABLE`（まとめる前の数字をまとめた後の顔では返さない。`merge_split=false` で呼び直す）。
 
-まとめる前の数字をまとめた後の顔では返さない（`FEATURE_MERGE_UNAVAILABLE` のときは `merge_split=false` で呼び直す）。
-`merge_split=false` なら従来どおりで、`stats_unmerged` も `merged_from` 列も無く `merge_split` は
-`{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを
-受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` では効かない（読まずに `notes` に
-書く。誤りにしない）。省けば
-`dataset_alignment_qc` がこのハンドルに持つ最後の結果（データ・試料の表・除外が変わっていないもの。`reanalysis` §9）、
-それも無ければその場で探す。
+`merge_split=false` なら `stats_unmerged` も `merged_from` 列も無く、`merge_split` は `{"enabled": false}`。`alignment_qc_path` は `dataset_alignment_qc` が今のデータセットで書いた JSON だけを受け（`dataset_fingerprint` が違えば `ANALYSIS_INPUT_INVALID`）、`merge_split=false` では効かない（読まずに `notes` に書く。誤りにしない）。省けば `dataset_alignment_qc` がこのハンドルに持つ最後の結果（データ・試料の表・除外が変わっていないもの。`reanalysis` §9）、それも無ければその場で探す。
 
-**目標照合でも組は 1 つの候補。** `merge_split=true` では、判定（`targets[*]` の `status`・`counts`）を数える
-単位が「組の残す ID」になる——組の 2 スポットが同じ箱（層・水準）に qualified で入っても 1 つと数え、
-`resolved` なら `selected_feature_id` は残す ID、`targets[*].merged_from` にその組（それ以外は null）。
-`candidates` の行はスポットごとのまま（RT・ppm・証拠はそのスポットのもの）で、末尾の `merged_from` に組。
-組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（`reasons` に `merge_partner`。
-qualified にせず数にも入れない——選んだ残す ID の行が必ずある）。組でない 2 スポットは従来どおり
-`needs_input`（`multiple_qualified_candidates`）。`rule` には `merge_split` と、判定でまとめた組の hash
-`merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る（false は v7 と同じ規則と hash。
-ただし陽イオンで分子式（`formula`）を渡し `adduct_tiers` を省いた目標は除く: 2026-11-14 に陽イオンの既定の付加体の層へ `[M+CH3OH+H]+` と
-`[M+H-2H2O]+` を足したので、照合する付加体（規則）も hash も v7 と違う。層を明示した目標・`expected_mz` の目標・陰イオンの目標は同じ）。
+**目標照合でも組は 1 つの候補。** `merge_split=true` では、判定（`targets[*]` の `status`・`counts`）を数える単位が「組の残す ID」になる: 組の 2 スポットが同じ箱（層・水準）に qualified で入っても 1 つと数え、`resolved` なら `selected_feature_id` は残す ID、`targets[*].merged_from` にその組（それ以外は null）。`candidates` の行はスポットごとのまま（RT・ppm・証拠はそのスポットのもの）で、末尾の `merged_from` に組。組の片方だけが質量の窓に入ったときは、相手のスポットも同じ付加体で行に足す（`reasons` に `merge_partner`。qualified にせず数にも入れない）。組でない 2 スポットは `needs_input`（`multiple_qualified_candidates`）。`rule` には `merge_split` と、判定でまとめた組の hash `merge_groups_hash` が並び、`merge_split=true` のときだけ `rule_hash` に入る。`merge_split=false` の規則と hash は v7 と同じ（ただし陽イオンで分子式（`formula`）を渡し `adduct_tiers` を省いた目標は、既定の付加体の層に `[M+CH3OH+H]+` と `[M+H-2H2O]+` が加わったので、照合する付加体も hash も v7 と違う。層を明示した目標・`expected_mz` の目標・陰イオンの目標は同じ）。
 
-**`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の
-`targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標
-（統計の出所を含まない）から作る。覆うのは照合を左右する欄（`target_id`・InChIKey 先頭ブロック・
-分子式か `expected_mz`・付加体の層と理論 m/z・`ppm`・RT・目標の極性・`applicable`）だけで、
-**表示名 `name` は入れず、目標は `target_id` の順に並べ替えてから作る**——改名や `targets` の
-並べ替えでは hash は変わらない。既定値を明示しても省いても、別の session・別の実行役でも、
-同じ目標・同じ極性なら同じ hash になる——判断ログには「この規則で呼んだ」とだけ書ける。
-分子式を渡して `adduct_tiers` を省いた目標は既定の層を解決して hash に入れるので、既定の層を変えればその目標の hash も変わる
-（2026-11-14 の陽イオンの層の追加が、その意図した変化）。
-**hash は表示用の丸め（`rule.targets` の理論 m/z を 4 桁に丸める）より前の値から作るので、
-返された `rule.targets` から hash を計算し直すことはできない**（計算し直すと別の値になり、
-規則が変わったように見える）。照合するときは `rule_hash` の値どうしを比べる。`polarity_source` は `job_declared`（ジョブの宣言）/
-`adduct_majority`（mzTab-M の SML 付加体の多数決）/ `unknown`。統計の出所は
-`stats_source = {result_ids, dataset_hash}`（`dataset_hash` はデータの指紋）に分けて返す。result_id は
-計算のたびに発行される ID なので `rule_hash` には入れない。同じ `rule_hash` でも `stats_source` が
-違えば、統計は別の計算から来ている。
+**`rule_hash` と `stats_source` は別物**。`rule = {targets, polarity, polarity_source, rule_hash}` の `targets` は既定値を埋めて付加体の層を解決した目標で、`rule_hash` はその正規化後の目標（統計の出所を含まない）から作る。覆うのは照合を左右する欄（`target_id`・InChIKey 先頭ブロック・分子式か `expected_mz`・付加体の層と理論 m/z・`ppm`・RT・目標の極性・`applicable`）だけで、表示名 `name` は入れず、目標は `target_id` の順に並べ替えてから作る（改名や `targets` の並べ替えでは hash は変わらない）。既定値を明示しても省いても、別の session・別の実行役でも、同じ目標・同じ極性なら同じ hash。分子式を渡して `adduct_tiers` を省いた目標は既定の層を解決して hash に入れるので、既定の層を変えればその目標の hash も変わる。hash は表示用の丸め（`rule.targets` の理論 m/z を 4 桁に丸める）より前の値から作るので、返された `rule.targets` から計算し直すと別の値になる。照合は `rule_hash` の値どうしで比べる。`polarity_source` は `job_declared`（ジョブの宣言）/ `adduct_majority`（mzTab-M の SML 付加体の多数決）/ `unknown`。統計の出所は `stats_source = {result_ids, dataset_hash}`（`dataset_hash` はデータの指紋）。result_id は計算のたびに発行されるので `rule_hash` には入れない。同じ `rule_hash` でも `stats_source` が違えば、統計は別の計算から来ている。
 
-**脂質の種の目標（`lipid_species`。opt-in）。** InChIKey が一意に決まらない脂質の種（sn 位・
-二重結合の位置が未定の `PC 34:4`・`PC 18:3_16:1`）は、`inchikey` の代わりに `lipid_species` で
-指定する（`inchikey` と排他）。GOSLIN の種のレベル（`LipidLevel.SPECIES`）に直して照合に使うので、
-`PC 18:3_16:1` も `PC 16:1/18:3` も `PC 34:4` として照らす。上の表の「InChIKey 先頭ブロック」は、
-種の目標では「SME 候補の `chemical_name`（SML なら `name`）を種のレベルに読んだもの」に置き換わり、
-付加体・価数・層・水準の規則はそのまま。
+**脂質の種の目標（`lipid_species`。opt-in）**: InChIKey が一意に決まらない脂質の種（sn 位・二重結合の位置が未定の `PC 34:4`・`PC 18:3_16:1`）は、`inchikey` の代わりに `lipid_species` で指定する（`inchikey` と排他）。GOSLIN の種のレベル（`LipidLevel.SPECIES`）に直して照合するので、`PC 18:3_16:1` も `PC 16:1/18:3` も `PC 34:4` として照らす。上の表の「InChIKey 先頭ブロック」は、種の目標では「SME 候補の `chemical_name`（SML なら `name`）を種のレベルに読んだもの」に置き換わり、付加体・価数・層・水準の規則はそのまま。
 
-- **種のレベルの一致は分子種（どの鎖の組か）を確かめない。** `PC 16:1_18:3` と `PC 14:0_20:4` は
-  どちらも `PC 34:4` の `sme_match` で、両方が qualified なら `needs_input`（`multiple_qualified_candidates`）。
-  分子種の主張の裏取りは MS/MS（鎖の断片）で別に見る。
-- 修飾は種に残る（`PE 34:1;O` ≠ `PE 34:1`）。エーテルは別のクラス（`PC O-34:1` ≠ `PC 34:1`）。
-  GOSLIN は `P-` のビニルエーテルの二重結合を数えて `O-` に直すので、`PC P-34:1` は `PC O-34:2` と一致する。
-- SME 候補・SML の名前は、MS/MS の合否（`library_msms_qualify`・`dataset_claim_evidence` の `msms`）がライブラリの
-  記録を読むのと同じ読み方で種に読む（`msms_rules.name_lipid_species`）: 名前をそのまま → 読めなければ注記・
-  付加体の表記を外し古い書式を略記に直した名前（`PE 36:2;O (oxPE)` → `PE 36:2;O`、`LPC 16:0; ExampleDB ID-0000` →
-  `LPC 16:0`。経路は `reanalysis` §4 の `name` / `name_cleaned`）。MSP の記録名がそのまま SME の名前になる
-  Console / mzTab-M のデータセットでも、同じ記録を走査と MS/MS で別の種に読まない。同位体の標識のある名前
-  （`(d7)` などの内部標準）は種に読まない。
-- **目標の側も同じ: 同位体の標識のある `lipid_species`（`PC 15:0_18:1(d7)`・`PC 33:1(d7)` などの内部標準）は
-  `FEATURE_TARGET_INVALID`（`field: lipid_species`）。** GOSLIN は標識を落として読む（`PC 33:1`）ので、受けると天然の種を
-  探し、候補の側では読まない内部標準の名前の特徴を「SME・SML の裏付けが無い」`unannotated` にしてしまう。天然の種なら
-  標識の無い名前を、内部標準そのものは窓検索（`min_mz`/`max_mz`・`min_rt`/`max_rt`）で探す。長鎖塩基の `d18:1` は
-  標識ではない（`:` が続く）。`dataset_claim_evidence` の `target.lipid_species` も同じ。
-- 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前、内部標準など）は InChIKey の無い候補と
-  同じく評価できないものとして飛ばす（`sme_identity_unresolved`）。曖昧な SML は名前を持たないので
-  種では照らせず `unannotated`。
-- 正規化後の目標は `lipid_species`（種のレベル）・`lipid_species_input`（入力を GOSLIN で読んだ綴り）を持ち、
-  `inchikey_block` は null。`rule_hash` は `lipid_species` を含み、`lipid_species_input` は `name` と同じく
-  入れない（`PC 18:3_16:1` と `PC 34:4` は同じ規則）。**InChIKey の目標の正規化・`rule_hash`・戻り値は
-  この口を足す前と同じ**（キーを足さない）。
+- 種のレベルの一致は分子種（どの鎖の組か）を確かめない。`PC 16:1_18:3` と `PC 14:0_20:4` はどちらも `PC 34:4` の `sme_match` で、両方が qualified なら `needs_input`（`multiple_qualified_candidates`）。分子種の裏取りは MS/MS（鎖の断片）で別に見る。
+- 修飾は種に残る（`PE 34:1;O` ≠ `PE 34:1`）。エーテルは別のクラス（`PC O-34:1` ≠ `PC 34:1`）。GOSLIN は `P-` のビニルエーテルの二重結合を数えて `O-` に直すので、`PC P-34:1` は `PC O-34:2` と一致する。
+- SME 候補・SML の名前は、MS/MS の合否（`library_msms_qualify`・`dataset_claim_evidence` の `msms`）がライブラリの記録を読むのと同じ読み方で種に読む（`msms_rules.name_lipid_species`）: 名前をそのまま → 読めなければ注記・付加体の表記を外し古い書式を略記に直した名前（`PE 36:2;O (oxPE)` → `PE 36:2;O`、`LPC 16:0; ExampleDB ID-0000` → `LPC 16:0`。経路は `reanalysis` §4 の `name` / `name_cleaned`）。MSP の記録名がそのまま SME の名前になる Console / mzTab-M のデータセットでも、同じ記録を走査と MS/MS で別の種に読まない。同位体の標識のある名前（`(d7)` などの内部標準）は種に読まない。
+- 目標の側も同じ: 同位体の標識のある `lipid_species`（`PC 15:0_18:1(d7)`・`PC 33:1(d7)` などの内部標準）は `FEATURE_TARGET_INVALID`（`field: lipid_species`）。GOSLIN は標識を落として読む（`PC 33:1`）ので、受けると天然の種を探し、内部標準の特徴を `unannotated` にしてしまうため。天然の種なら標識の無い名前を、内部標準そのものは窓検索（`min_mz`/`max_mz`・`min_rt`/`max_rt`）で探す。長鎖塩基の `d18:1` は標識ではない（`:` が続く）。`dataset_claim_evidence` の `target.lipid_species` も同じ。
+- 名前を種のレベルに読めない SME 候補（`Unknown`、クラスだけの名前、内部標準など）は、InChIKey の無い候補と同じく評価できないものとして飛ばす（`sme_identity_unresolved`）。曖昧な SML は名前を持たないので種では照らせず `unannotated`。
+- 正規化後の目標は `lipid_species`（種のレベル）・`lipid_species_input`（入力を GOSLIN で読んだ綴り）を持ち、`inchikey_block` は null。`rule_hash` は `lipid_species` を含み、`lipid_species_input` は `name` と同じく入れない（`PC 18:3_16:1` と `PC 34:4` は同じ規則）。InChIKey の目標にはこれらのキーを足さない（正規化・`rule_hash`・戻り値は変わらない）。
 - 種より粗い（`PC`）・読めない名前、`inchikey` との同時指定は `FEATURE_TARGET_INVALID`（`field` は `lipid_species`）。
 
-`notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・
-極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は
-SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。
-`result_ids` を省いたときは、統計に使えなかった結果も `統計に使えなかった指定: …` の 1 行で入る
-（`dataset_compare` の結果の対比が交互作用だけで、2 群の形にならず統計は付かない）。`result_ids` を省いて
-`contrast_id` を渡し、その対比を持つ結果が 1 つも無ければ `CONTRAST_REQUIRED`（候補は全結果の対比）。`result_ids` で
-交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。対比を選ばないと
-読めない曖昧さ（`as_two_group` の、選択肢つきの `CONTRAST_REQUIRED`）は誤りでなく `needs_input`（`field` / `argument` =
-`contrast_id`、選択肢は対比の一覧、`retry_tools` は `dataset_feature_search`）で返す——`dataset_export_differential`・
-`dataset_plot`・`save_figure`・`dataset_export_evidence_bundle` と同じ封筒。ID だけの `result_ids` と省いた `result_ids` は
-対比ごとに広げるので、今の選び方ではこの曖昧さは起きない。
-目標照合に渡した `sort="intensity"` と、`merge_split=false` と一緒に渡した `alignment_qc_path` は効かないので、誤りにせず
-`notes` に「効かなかった引数」として書く（`alignment_qc_path` のファイルは読まない）。
+`notes` には、打ち切り・使わなかった古い差次的結果・差次的結果が無いこと・検出状態が無いこと・極性の宣言と多数決の食い違い・キュレーションのフラグがあるのに反映していないこと（この検索は SME / SML の生の同定だけを見るので、`dataset_export_differential` の同定と食い違いうる）が入る。`result_ids` を省いたときは、統計に使えなかった結果も `統計に使えなかった指定: …` の 1 行で入る（`dataset_compare` の結果の対比が交互作用だけで、2 群の形にならず統計は付かない）。`result_ids` を省いて `contrast_id` を渡し、その対比を持つ結果が 1 つも無ければ `CONTRAST_REQUIRED`（候補は全結果の対比）。`result_ids` で交互作用だけの結果を名指しすると `missing_state`（`dataset_compare`）で、メッセージにその理由が入る。対比を選ばないと読めない曖昧さ（`as_two_group` の、選択肢つきの `CONTRAST_REQUIRED`）は誤りでなく `needs_input`（`field` / `argument` = `contrast_id`、選択肢は対比の一覧、`retry_tools` は `dataset_feature_search`）で返す（`dataset_export_differential`・`dataset_plot`・`save_figure`・`dataset_export_evidence_bundle` と同じ封筒）。ID だけの `result_ids` と省いた `result_ids` は対比ごとに広げるので、今の選び方ではこの曖昧さは起きない。目標照合に渡した `sort="intensity"` と、`merge_split=false` と一緒に渡した `alignment_qc_path` は効かないので、誤りにせず `notes` に「効かなかった引数」として書く（`alignment_qc_path` のファイルは読まない）。
 
 ## `dataset_plot(kind="loadings")`（mzTab-M のデータセット）
 
-`dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。
-特徴量は PCA の軸に入った特徴（`stats-pca.v1` の `kept_features`。値が変わらない特徴は入らない）、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、
-無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色になる。r は `dataset_pca` が autoscale で回したときの
-成分 × 特異値 / √n（`n_fit` = 軸を決めた個体数。QC は軸の計算に入らない）で出す。返り値の意味は `dataset` トピックの §11.8 と同じ。
+`dataset_pca` の結果は `dataset_plot(kind="loadings")` で主成分ごとのローディング図に描ける（`result_id` を省けば直近の `dataset_pca`）。特徴量は PCA の軸に入った特徴（`stats-pca.v1` の `kept_features`。値が変わらない特徴は入らない）、表示名は `feature_annotations`（SML 由来）か `feature_metadata`（SME 由来）の名前で、無ければ `feature_id`。mzTab-M にはクラス（Ontology）が無いので棒は 1 色。r は `dataset_pca` が autoscale で回したときの成分 × 特異値 / √n（`n_fit` = 軸を決めた個体数。QC は軸の計算に入らない）。戻り値の意味は `dataset` トピックの §11.8 と同じ。
