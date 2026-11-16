@@ -402,8 +402,8 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
       next に実際の測定順の入れ方を足す。探索専用のデータセットは比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実を置く。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。サーバは考察を書かない。
-    - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。`reports/stats/` に記録を 1 件
-      追記する（書けなくても概観は成功し `record.written=false`）。
+    - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。`reports/stats/` に概観の記録を
+      1 件追記する（既定の前処理の行列を新しく作ったときはその記録も。書けなくても概観は成功し `record.written=false`）。
     欄・但し書き・`notes` の全行の引き方は `docs_read(topic="dataset")` の 11.9。
 
     top_n: 分子種の段の上位の件数（既定 5、上限 20）。20 を超える値は断らず 20 に下げて `notes` に書く（上位の表を 20 行で切ったら

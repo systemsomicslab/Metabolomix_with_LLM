@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 Pathway projection (`pathway_project` / `pathway_plot`) uses the lab's MSLipidMapper
 server when `[mslipidmapper] mslipidmapper_api_url` is set, and falls back to local R otherwise. Local R
-needs a one-time `Rscript r/setup.R`; see [USAGE.md](USAGE.md) section 16.
+needs a one-time `Rscript r/setup.R`; see [USAGE.md](USAGE.md) section 11.
 
 No environment variable is required. The data location is never configured: pass the MS-DIAL
 output folder to `list_data_files` / `load_dataset`, and the tools that take no path use the
