@@ -1,19 +1,14 @@
 # 生データフォルダpipeline呼び出し連鎖
 
-pipeline は生データから MS-DIAL の解析フォルダを作る入口で、GUI で解析済みのフォルダを読む入口
-(`list_data_files` → `load_dataset`。[dataset.md](dataset.md))と対等に並ぶ。走らせるのは上流だけ——
-raw を run の中へ配置し、極性ごとに MS-DIAL Console を回し、解析フォルダを mzTab-M と照合して受領
-(`results/receipt.json`)を書く。統計は計算しない。続きは `load_dataset(pipeline_path=…, polarity=…)` で
-GUI の入口と同じ鎖へ合流する(前処理・比較・PCA は `dataset_preprocess` / `dataset_compare` /
-`dataset_pca`。[dataset_analysis.md](dataset_analysis.md))。Console に渡すメソッドファイルを選ぶ・作る
-2 ツール(`console_method_candidates` / `console_method_template`)と、受付が読む試料の表
+生データから MS-DIAL の解析フォルダを作る入口(GUI の入口との関係は [index.md](index.md) の「一気通貫の順序」)。raw を run の
+中へ配置し、極性ごとに MS-DIAL Console を回し、解析フォルダを mzTab-M と照合して受領(`results/receipt.json`)を書く。統計は
+計算しない。メソッドファイルを選ぶ・作る `console_method_candidates` / `console_method_template` と、受付が読む試料の表
 (`sample-manifest.tsv`)を ISA / mwTab から作る `pipeline_sample_sheet` もここに置く。
 
-MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/console_tools.py`)。実体は `metabolomix/pipeline/service.py`
-（受付・工程handler一式）と `metabolomix/pipeline/recovery.py`（読取専用status・取消・
-再開判定）にある。工程本体は独立したworkerプロセス（`metabolomix/pipeline/worker.py`）が
-`metabolomix/pipeline/engine.py::run_engine()` を通じて進めるため、MCP呼び出し自身の
-連鎖と、workerが後で進める連鎖は別物として分けて書く。
+MCP 層は `metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/console_tools.py`。実体は `metabolomix/pipeline/service.py`
+(受付・工程 handler)と `metabolomix/pipeline/recovery.py`(読取専用の status・取消・再開判定)。工程は独立した worker
+プロセス(`metabolomix/pipeline/worker.py`)が `metabolomix/pipeline/engine.py::run_engine()` で進めるので、MCP 呼び出しの
+連鎖と worker の連鎖を分けて書く。
 
 ## pipeline_run
 
@@ -37,86 +32,59 @@ MCP層は薄い(`metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/con
 18.   └─ metabolomix/pipeline/service.py  _dispatch_summary()
 19.      └─ metabolomix/pipeline/service.py  _launch_warnings()
 
-手順6-7は開いた形式(mzML・imzML・mzXML)の主ファイルの末尾が根の要素の閉じタグ(`</indexedmzML>` /
-`</mzML>` / `</mzXML>`)で終わるか、サイズが下限(`raw_integrity.MIN_OPEN_FORMAT_BYTES`、32 KiB)以上かを
-確かめ(imzML は閉じタグだけ。メタデータだけでスペクトルは隣の `.ibd` にあるので小さくてよい。`.ibd` の
-中身は見ない)、切れた・小さすぎるファイルを名指しして `PIPELINE_INPUT_INVALID`(`details.files` に
-`{"name", "size", "reason"}`、`reason` は `truncated` / `too_small` / `unreadable`)で断る。読むのは末尾の
-数 KB だけで、XML 全体の検証はしない。ベンダーの形式は見ない。Console は切れた mzML を読むところで落ち、
-どのファイルかをログに残さないので、run を作る前に止める。
-事前検査(手順8-9)で壊れた実験情報シート等の既知の不正入力を検出した場合、
-`find_or_create_run` でrunは作るがworkerは起動しない(手順11で`needs_input`のまま
-保存し、手順12のstatus読み直し自体を行わず手順13の発送receiptへ直行する)。
-要求は `pipeline-request.v3`(`request.resolve_request`)で、1 極性の形も 2 極性の
-`units` の形も単位の並びに正規化する。入力計画(`inspect_inputs`)と事前検査は単位ごとに
-回し、run(`pipeline-run.v3`)は単位ごとの記録 `record["units"][<極性>]` を持つ。
-下流のキー(`target` / `preprocess` / `comparisons`)は、ほかの知らないキーと同じ
-`PIPELINE_REQUEST_INVALID`(`details.unknown_keys`。下流のキーがあれば文面と `details.replacements` で
-`load_dataset` → `dataset_preprocess` / `dataset_compare` / `dataset_pca` を案内する。`request._unknown_keys`)
-(元フォルダの `analysis-request.json` に書かれたものは読み飛ばして警告
-`REQUEST_FILE_DOWNSTREAM_IGNORED`)。明示の `units` は単位を丸ごと決めるので、
-`analysis-request.json` のトップの単位のキー(`polarity` `method_file` …)は使わず、警告
-`REQUEST_FILE_UNIT_KEYS_IGNORED` で伝える(どちらの警告も `pipeline_plan` / `pipeline_run` の
-戻り値の `warnings` に出る)。2 単位の `raw_dir` は同じフォルダも、片方が
-もう片方の中にある(`.` を含む)のも `PIPELINE_REQUEST_INVALID`。
+手順 6-7: 開いた形式(mzML・imzML・mzXML)の主ファイルが根の閉じタグ(`</indexedmzML>` / `</mzML>` / `</mzXML>`)で
+終わるかと、サイズが下限(`raw_integrity.MIN_OPEN_FORMAT_BYTES`、32 KiB)以上かを確かめる(imzML は閉じタグだけ。`.ibd` は
+見ない)。読むのは末尾の数 KB だけで、XML 全体の検証もベンダーの形式の検査もしない。切れた・小さすぎるファイルは名指しして
+run を作る前に `PIPELINE_INPUT_INVALID`(`details.files` に `{"name", "size", "reason"}`、`reason` は `truncated` /
+`too_small` / `unreadable`)で断る。
 
-**起動しないもう1つの経路（レビュー指摘1）**: manifestが正常でも、
-`find_or_create_run`(手順10)が既存run——活動中／completed／失敗・取消・部分完了
-済みのいずれか——を再利用した場合、手順12で読み直したstatusが`planned`で
-ないので手順13で起動せず終える。新規に作られたrunだけが`status="planned"`の
-まま返るので、それだけを起動条件にする。既存runを本当に進めたい場合は
-`pipeline_resume`を使う。
+事前検査(手順 8-9)が既知の不正入力(壊れた実験情報シートなど)を見つけたら、`find_or_create_run` で run は作るが
+worker は起動しない(手順 11 で `needs_input` として保存し、手順 12 を飛ばして手順 13 の発送 receipt を返す)。
+manifest が正常でも、`find_or_create_run`(手順 10)が既存 run(活動中・completed・失敗・取消・部分完了)を再利用したときは、
+手順 12 で読み直した status が `planned` でないので起動しない(手順 13)。起動するのは新規に作られた `status="planned"` の
+run だけ。既存 run を進めるのは `pipeline_resume`。
 
-手順14の `_launch_and_await` は「launch直前に読んだ`baseline_record`」を引数に
-取る中間関数で、`launch_pipeline_worker`(起動)と`_await_launch_handshake`
-(handshake待ち)を1つにまとめている——resumeで前回workerの残骸identityが
-既に記録されているケースでも、両呼び出しが同じ基準時点の記録を共有できるように
-するため(`pipeline_resume`と共有する実装)。
+要求は `pipeline-request.v3`(`request.resolve_request`)で、1 極性の形も 2 極性の `units` の形も単位の並びに正規化する。
+入力計画(`inspect_inputs`)と事前検査は単位ごとに回し、run(`pipeline-run.v3`)は単位ごとの記録 `record["units"][<極性>]` を持つ。
+- 下流のキー(`target` / `preprocess` / `comparisons`)はほかの知らないキーと同じく `PIPELINE_REQUEST_INVALID`
+  (`details.unknown_keys`。下流のキーには文面と `details.replacements` で `load_dataset` → `dataset_preprocess` /
+  `dataset_compare` / `dataset_pca` を示す。`request._unknown_keys`)。元フォルダの `analysis-request.json` にある下流のキーは
+  読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED`。
+- 明示の `units` があると、`analysis-request.json` のトップの単位のキー(`polarity` `method_file` …)は使わず警告
+  `REQUEST_FILE_UNIT_KEYS_IGNORED`。どちらの警告も `pipeline_plan` / `pipeline_run` の `warnings` に出る。
+- 2 単位の `raw_dir` が同じフォルダ、または片方がもう片方の中(`.` を含む)なら `PIPELINE_REQUEST_INVALID`。
 
-`launch_pipeline_worker` は `sys.executable` で `python -m metabolomix.pipeline.worker`
-を起動し、cwdは呼び出し元のcwdや別checkoutではなくこのcheckout自身(`_REPO_ROOT`)へ
-固定する。起動プロセスのstdout/stderrは `launch_detached` がログファイルへ結ぶため、
-起動元プロセスがworkerのstdoutパイプを継承して待ち続ける経路(`bInheritHandles=TRUE`
-かつハンドル未指定)は無い。子へ渡すハンドルはログと NUL の 2 つだけに絞る
-(`process_control._create_process` が `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` で渡す)ので、
-MCP サーバの標準入出力のパイプなど、ほかの継承可能なハンドルは中継にも worker にも
-Console にも渡らない(渡ると、サーバが終わってもアプリの側にパイプの終わりが届かない)。
+手順 14 の `_launch_and_await`(`pipeline_resume` と共有)は launch 直前に読んだ `baseline_record` を取り、
+`launch_pipeline_worker`(起動)と `_await_launch_handshake`(handshake 待ち)を同じ基準の記録で呼ぶ(前回 worker の残骸の
+identity を新しい起動の証拠と取り違えない)。`_await_launch_handshake` は短い上限だけ待ち、超えても起動失敗とせず再起動も
+しない(`launch.handshake="not_confirmed"` で `pipeline_path` を返す。確認は `pipeline_status`)。
 
-`launch_detached` は worker を直接起こさず、すぐ終わる中継のプロセス
-(`python -m metabolomix.core.detach_relay`。`process_control._launch_via_relay` が起こして
-終わりを待つ)に起こさせる。中継は worker を起こし、その pid と identity(pid と生成時刻)を
-書いてすぐ終わる。デスクトップアプリは呼び出しを打ち切ると MCP サーバを作り直す。試し走りの
-観察から、そのときサーバをプロセスの木ごと消していると見ている(実測はしていない)。worker の
-親(中継)が残らないので、木ごとの終了(`taskkill /T` と同じく親子の記録をたどる)でも worker と
-その Console(worker が自分の Job で所有する)は残る。2 段(サーバ→中継・中継→worker)とも
-同じ規則で切り離す(breakaway のフラグは Job が許すときだけ)。戻り値の pid・identity は
-worker のもので、handshake(worker 自身が `pipeline-run.json` に書く identity)と
-`pipeline_status` / `pipeline_cancel` / `pipeline_resume` の追跡は今までどおり。
-限界: Job の制限は直近の 1 段しか読めない(`QueryInformationJobObject(NULL)`)ので、`DETACH_UNSUPPORTED` で
-断れるのは直近の Job が KILL_ON_JOB_CLOSE 付きで breakaway を許さないときだけ。breakaway を許さない Job
-(`inherited_job`)や、それより外側の Job には中継も worker も残り、木ごとの終了には残るが、その Job が
-閉じる・終了させられる(`TerminateJobObject`)と巻き込まれる。そこで中継は起こした worker を
-`IsProcessInJob(worker, NULL)` で確かめ(何段目の Job でも捕まえる)、`launch_detached` の戻り値の
-`worker_in_job` に返す(`relay_breakaway` は中継の直近の Job から見た値)。警告するかは
-`engine.worker_in_job_warning` が決める: worker が Job に残り、その Job が閉じたら止める設定か分からない
-(中継が自分の直近の Job を抜けさせた `silent_breakaway` / `breakaway_ok` なのに worker がまだ Job にいる＝
-中継から見えない外側の段)なら、`_launch_warnings`(手順19)が `pipeline_run` / `pipeline_resume` の戻り値の
-`warnings` に `WORKER_IN_JOB`(`details.breakaway` / `relay_breakaway`)を足す。中継の直近の Job が
-`inherited_job`(breakaway は許さないが閉じても止めない)なら worker もその Job にいると分かるので警告しない
-(Windows 11 ではシェルの配下のプロセスが制限の無い Job にいることが普通にあり、警告すると毎回の雑音になる)。
-ただしそれより外側の段は見えない: Job は入れ子になりうるので、直近が閉じても止めない Job でも、その外側に
-KILL_ON_JOB_CLOSE の Job があれば、外側が閉じたとき worker と Console は止まる(`0x3000 → 0x0 → 0x2000` の
-入れ子では、中継は 0x3000 を黙って抜け、worker は 0x0 と外側の 0x2000 に残る)。そこで警告の代わりに軽い注記を
-添える(`engine.worker_outer_jobs_note`): `_launch_and_await`(手順14)が起動の結果に
-`launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`(外側の段は確かめていない。止まったら
-`pipeline_status` → `pipeline_resume`)を足す。worker も起動直後に自分を確かめ(`process_control.current_job_state`: 何段目かを
-問わず Job にいるかと、直近の Job の制限)、run の記録の `worker.in_job` / `worker.nearest_job` に残し、同じ規則で
-`warnings`(`WORKER_IN_JOB`、run に 1 つだけ。`details.nearest_job`)か、直近が `inherited_job` なら
-`worker.outer_jobs` / `worker.outer_jobs_note` の注記に残す。どちらも止めはしない。
+`launch_pipeline_worker` は `sys.executable` で `python -m metabolomix.pipeline.worker` を起こし、cwd はこの checkout
+(`_REPO_ROOT`)に固定する。起動プロセスの stdout/stderr は `launch_detached` がログファイルへ結び(起動元が worker の
+stdout を継承して待ち続けることは無い)、子へ渡すハンドルはログと NUL の 2 つだけ(`process_control._create_process` の
+`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`)。MCP サーバの標準入出力のパイプなどは中継・worker・Console に渡らない。
 
-`_await_launch_handshake` は短い上限だけ待ち、超えても
-起動失敗と決め付けず再起動もしない(`launch.handshake="not_confirmed"`のまま
-`pipeline_path`を返す。確認は`pipeline_status`に委ねる)。
+`launch_detached` は、すぐ終わる中継(`python -m metabolomix.core.detach_relay`。`process_control._launch_via_relay` が起こして
+終わりを待つ)に worker を起こさせる。中継は worker の pid と identity(pid と生成時刻)を書いて終わるので、worker の親は残らず、
+プロセスの木ごとの終了(`taskkill /T` と同じ)でも worker とその Console(worker が自分の Job で所有する)は残る。2 段(サーバ→
+中継・中継→worker)とも同じ規則で切り離す(breakaway のフラグは Job が許すときだけ)。戻り値の pid・identity は worker のもので、
+handshake(worker が `pipeline-run.json` に書く identity)と `pipeline_status` / `pipeline_cancel` / `pipeline_resume` の追跡に使う。
+
+Job の制限は直近の 1 段しか読めない(`QueryInformationJobObject(NULL)`)。`DETACH_UNSUPPORTED` で断るのは、直近の Job が
+KILL_ON_JOB_CLOSE 付きで breakaway を許さないときだけ。breakaway を許さない Job(`inherited_job`)やその外側の Job に残った
+中継・worker は、その Job が閉じる・`TerminateJobObject` されると巻き込まれる。中継は worker を `IsProcessInJob(worker, NULL)`
+(何段目の Job でも捕まえる)で確かめ、`launch_detached` の戻り値の `worker_in_job` に返す(`relay_breakaway` は中継の直近の
+Job から見た値)。警告は `engine.worker_in_job_warning` が決める:
+- 中継が直近の Job を抜けた(`silent_breakaway` / `breakaway_ok`)のに worker が Job にいる(中継から見えない外側の段)→
+  `_launch_warnings`(手順 19)が `pipeline_run` / `pipeline_resume` の `warnings` に `WORKER_IN_JOB`(`details.breakaway` /
+  `relay_breakaway`)を足す。
+- 中継の直近の Job が `inherited_job`(breakaway は許さないが閉じても止めない)→ 警告しない。外側に KILL_ON_JOB_CLOSE の Job が
+  あれば、それが閉じたとき worker と Console は止まる(`0x3000 → 0x0 → 0x2000` の入れ子では、中継は 0x3000 を黙って抜け、worker
+  は 0x0 と外側の 0x2000 に残る)ので、`_launch_and_await`(手順 14)が起動の結果に注記(`engine.worker_outer_jobs_note`)
+  `launch.outer_jobs: "unchecked"` と `launch.outer_jobs_note`(外側の段は確かめていない。止まったら `pipeline_status` →
+  `pipeline_resume`)を足す。
+
+worker 自身の確かめは「workerが1回分を進める経路」の節(手順 2・4)。
 
 ## pipeline_plan
 
@@ -126,58 +94,54 @@ KILL_ON_JOB_CLOSE の Job があれば、外側が閉じたとき worker と Con
 4.    └─ metabolomix/pipeline/service.py  _dispatch_summary()
 5.       └─ metabolomix/pipeline/service.py  _resolved_settings()
 
-`pipeline_run` と事前検査までは完全に同じ経路(`_prepare_run`)を共有するが、
-`launch_pipeline_worker` を一切呼ばない——検査・計画・不足情報の保存だけで終える。
+`pipeline_run` と事前検査まで同じ経路(`_prepare_run`)を通り、`launch_pipeline_worker` を呼ばない(検査・計画・不足情報の
+保存だけ)。
 
-手順5の `_resolved_settings` は `plan_pipeline` の発送receiptにだけ足される
-(`_dispatch_summary(include_resolved=True)`)。載せるのは解決済みの
-method(`source_path`/`sha256`)・LBM・polarity(`value`/`source`)・`library_mode`・
-MSP(ファイル名・sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、
-`raw_stat`・`entries`・`overrides` のような大きな中間データは `record["inputs"]`
-に残したまま出さない。サーバー共通指示(`metabolomix/core/mcp_core.py` の ENTRY POINT)が
-このツールを「起動前に解決結果を確認する入口」として案内しているため、receiptが
-それを持たないと `pipeline_status(include_details=true)` でrecord全体を引くしかなく、
-「receiptはコンパクトに」という拘束と衝突する。起動する側(`pipeline_run`)の
-receiptは従来どおり最小のまま。
+手順 5 の `_resolved_settings` は `plan_pipeline` の発送 receipt にだけ足す(`_dispatch_summary(include_resolved=True)`)。
+載せるのは解決済みの method(`source_path` / `sha256`)・LBM・polarity(`value` / `source`)・`library_mode`・MSP(ファイル名・
+sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、`raw_stat`・`entries`・`overrides` などの中間データは
+`record["inputs"]` に残す。`pipeline_run` の receipt は最小のまま。
 
-`library_mode="msp_only"` の要求では LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を
-`msp_file` か極性の設定(`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。
-メソッドが宣言する Text DB と注釈器設定表は空にする。dot product の足切りは下の `msp_then_lbm` と同じく平方根の側のキーで書き(2026-11-02 から。それより前の msp_only の run は接頭辞の無いキーを二乗で読ませていた)、receipt の `resolved.dot_product_cutoffs` に出す。MSP の sha256 は入力計画に固定し、計画の指紋にも入れる
-(MSP が変われば `pipeline_run` は別の run を作る)。上流をやり直さない `pipeline_resume` では
-`metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わっていれば `INPUT_CHANGED`、`which: "msp"`)。
-receipt にはファイル名・sha256・出どころだけを載せ、置き場所は載せない。
+`library_mode="msp_only"`: LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を `msp_file` か極性の設定
+(`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。メソッドが宣言する Text DB と
+注釈器設定表は空にする。dot product の足切りは下の `msp_then_lbm` と同じく平方根の側のキーで書き、receipt の
+`resolved.dot_product_cutoffs` に出す。MSP の sha256 は入力計画と計画の指紋に入る(MSP が変われば `pipeline_run` は別の run を
+作る)。上流をやり直さない `pipeline_resume` では `metabolomix/pipeline/inputs.py` の `verify_inputs()` が再検査する(変わって
+いれば `INPUT_CHANGED`、`which: "msp"`)。
 
-`library_mode="msp_then_lbm"`(v8。脂質の run 用)は研究室 MSP を優先し、LBM で補う。MSP は `msp_only` と同じ規則で決め、
-LBM は `[library] lbm` **だけ**から決める(メソッドの宣言・実行体のフォルダ・
-ビルド生成物は見ない。無ければ `LBM_NOT_CONFIGURED`、指す先が無ければ `LBM_NOT_FOUND`)。実効メソッドは `Msp file path` を空にし、
-`MSP annotator settings file path` に `inputs/msp-annotators.tsv`(`stage_inputs` が書く。列 `annotator_id` / `msp_file_path` /
-`priority`、研究室 MSP を priority 2 で 1 行)、`Lbm file path` に LBM、`Use retention information for LBM-based annotation
-scoring` / `filtering` に `False` を書く。メソッドが宣言する MSP 設定表の別名は同じ設定表へ向け(Console は別名を含めて最初の行を
-空でも読むため)、Text DB と Text の設定表は空にする。dot product の足切り(weighted / simple / reverse)は MSP と LBM に同じ値を
-`Square root of ... dot product cutoff for MSP-based annotation` / `...for LBM-based annotation` で書き、宣言された
-`Weighted dot product cutoff for MSP-based annotation` 等は空にする——Console はこの接頭辞の無いキーを**二乗の**足切りとして読む
-(0.6 は実効で 0.775)ので、そのままだと MSP だけが LBM(キー無し=既定の平方根の側 0.6 / 0.8)より厳しくなり、同じ証拠の水準に
-並ばない。値は平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順で、空にした宣言（原本が値を宣言していたもの）は `removed_declarations` に載り、
-実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` / 種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_only と msp_then_lbm。計画の指紋の外)に出る。Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、
-LBM の注釈器の priority を 1 に固定しているので、代表の同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ
-LBM になる。LBM と MSP の sha256 は計画の指紋に入り、`verify_inputs()` が再検査する(`which: "lbm"` の details もファイル名だけ)。
-receipt の `resolved.lbm` は `file` / `sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。
-設定表の sha256 は配置時に snapshot(`msp.annotator_table_sha256`)へ固定し、再開時の照合が実効メソッドと同じく確かめる
-(変わっていれば `STAGED_INPUT_MISMATCH`)。`pipeline_status(include_details=true)` の record の写しでは、LBM の `path` と
-`Lbm file path` の上書き、絶対パスの設定表の上書きもファイル名だけにする。mzTab の読み込みは設定表の MSP で InChIKey を補う
-(同定は `MspDB_<n>_<MSP の stem>:<名前>`)。
+`library_mode="msp_then_lbm"`(脂質の run 用): 研究室 MSP を優先し、LBM で補う。MSP は `msp_only` と同じ規則で決め、LBM は
+`[library] lbm` **だけ**から決める(メソッドの宣言・実行体のフォルダ・ビルド生成物は見ない。無ければ `LBM_NOT_CONFIGURED`、
+指す先が無ければ `LBM_NOT_FOUND`)。実効メソッドには次を書く:
+- `Msp file path` は空。`MSP annotator settings file path` に `inputs/msp-annotators.tsv`(`stage_inputs` が書く。列
+  `annotator_id` / `msp_file_path` / `priority`、研究室 MSP を priority 2 で 1 行)。メソッドが宣言する MSP 設定表の別名も
+  同じ設定表へ向ける(Console は別名を含めて最初の行を読む)。Text DB と Text の設定表は空。
+- `Lbm file path` に LBM、`Use retention information for LBM-based annotation scoring` / `filtering` に `False`。
+- dot product の足切り(weighted / simple / reverse)は MSP と LBM に同じ値を `Square root of ... dot product cutoff for
+  MSP-based annotation` / `...for LBM-based annotation` で書き、宣言された接頭辞の無いキー(`Weighted dot product cutoff for
+  MSP-based annotation` 等)は空にする(Console は接頭辞の無いキーを**二乗の**足切りとして読む。0.6 は実効で 0.775)。値は
+  平方根の側の宣言 → 接頭辞の無いキーの宣言(平方根の側の値と読む)→ 既定 0.6 / 0.6 / 0.8 の順で決め、空にした宣言(原本が値を
+  宣言していたもの)は `removed_declarations` に載る。
+  実効の足切りは receipt の `resolved.dot_product_cutoffs`(`weighted` / `simple` / `reverse` / `scale: "square_root"` /
+  種類ごとの `source`: `root_key` / `unprefixed_key_read_as_root` / `default`。msp_only と msp_then_lbm。計画の指紋の外)。
+
+Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を使わず、LBM の注釈器の priority を 1 に固定するので、代表の
+同定は同じ証拠の水準なら MSP、MSP に MS/MS の照合が無く LBM にあるときだけ LBM になる。LBM の sha256 も計画の指紋に入り、
+`verify_inputs()` が再検査する(`which: "lbm"`。details はファイル名だけ)。receipt の `resolved.lbm` は `file` /
+`sha256` / `source`、`resolved.msp` は `priority`(2)も持つ。設定表の sha256 は配置時に snapshot(`msp.annotator_table_sha256`)へ
+固定し、再開時に実効メソッドと同じく照合する(変わっていれば `STAGED_INPUT_MISMATCH`)。`pipeline_status(include_details=true)`
+の record の写しでは、LBM の `path`・`Lbm file path` の上書き・絶対パスの設定表の上書きもファイル名だけにする。mzTab の読み込みは
+設定表の MSP で InChIKey を補う(同定は `MspDB_<n>_<MSP の stem>:<名前>`)。
 
 アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
-`Alignment reference file ID` を、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の
-file ID(入力フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)に書く。`_prepare_run` が実験情報シートを
-`inspect_inputs` より先に解して行を渡し、`injection_order` が 1 件でも欠ける・シートが無いときはファイル名順の中央
-(receipt の `injection_order_source` が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。
-`overrides` は計画の指紋の外なので、既存の要求の hash も完了済み run の再利用も変わらない——ただし
-古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前と違う(既定の 0 → 中央)。
-`alignment_reference` の既定(`"median_injection"`)は要求の hash の外なので、v7 で完了した run のある元フォルダへ既定のまま
-v8 の要求を出すと、その run を再利用する(上書きしたメソッドは使われていない)。このとき receipt の
-`resolved.alignment_reference` は `null`（v7 の計画に無い）で、参照ファイルが中央に変わっていないことの印になる——中央の参照で
-やり直したいときは `alignment_reference` を明示するか、新しい run を作る。
+`Alignment reference file ID` に、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の file ID(入力
+フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)を書く。`_prepare_run` は実験情報シートを `inspect_inputs` より先に
+解して行を渡す。`injection_order` が 1 件でも欠ける・シートが無いときはファイル名順の中央(receipt の `injection_order_source`
+が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。`overrides` は計画の指紋の外なので、要求の
+hash も完了済み run の再利用も変わらない。ただし古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前
+(0)と違う(中央)。`alignment_reference` の既定は要求の hash の外なので、この設定の無い計画で完了した run がある元フォルダへ
+既定のまま要求を出すと、その run を再利用する(上書きしたメソッドは使われていない)。このとき receipt の
+`resolved.alignment_reference` は `null` で、参照ファイルが中央でないことの印。中央の参照でやり直すには `alignment_reference` を
+明示するか新しい run を作る。
 
 ## pipeline_status
 
@@ -189,24 +153,22 @@ v8 の要求を出すと、その run を再利用する(上書きしたメソ�
 6.    └─ [失敗・取消で終わった工程があるとき] metabolomix/pipeline/recovery.py  _stage_errors()
 7.       └─ metabolomix/pipeline/receipt.py  stage_error_summary()
 
-`load_run` は読取専用で、このツール自身は `pipeline-run.json` を一切書き換えない。
-`status="running"`のときだけ`same_process`でworker identityの生存を確認するが、
-確認できなくても`status`フィールドは変えず`observed_health`という別軸で返す。
-単位ごとの状態(`units`)と、受領があればその要約(解析フォルダの場所・照合した `.arf`・
-次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。走っている工程が機械全体の
-Console の順番を待っていれば `waiting`(`{<stage_id>: {"reason": "console_slot", "since", "message",
-"holder": {"pipeline_id", "unit", "since"}}}`。工程の status は `running` のまま)を返す。待っていた worker が
-居ない(`worker_missing`)なら、記録に残った待ちは中断の時点のものなので `waiting` に出さず `interrupted_while_waiting`
-に出し、Console をまだ起こしていない単位(`recovery._console_never_started`: 待ちの理由が `console_slot` で、今の
-attempt の `analysis-job.json` が無い)を `recovery_hint.console_not_started_units` に挙げる。失敗・取消で
-終わった工程があれば `errors`(`{<stage_id>: {"code", "message", "cause"?, "suspect_files"?, "n_suspect_files"?}}`。
-手順6-7)を返す——`stage_statuses` は状態の文字列だけなので、これが無いと Console が落ちた原因と疑わしい
-ファイルは `include_details=true` の記録全体を引かないと見えない(1 極性の run は受領も書かれない)。要約は
-`receipt.stage_error_summary` で、受領の単位の `error` と同じ形: `MSDIAL_EXECUTION_FAILED` の
-`details.cause` と `details.diagnosis.suspect_files`、配置の工程で断った `PIPELINE_INPUT_INVALID` の
-`details.files` を `cause` / `suspect_files`(`[{"name", "reason"}]`。10 件まで、超えたら `n_suspect_files`)に
-そろえ、文面は 600 字で切る。ログの行(`details.diagnosis.log_lines`)は載せない。旧 v1 の run は
-`legacy: true` で読めるだけ(再開・取消は `PIPELINE_RUN_LEGACY`)。
+`load_run` は読取専用で、このツールは `pipeline-run.json` を書き換えない。`status="running"` のときだけ `same_process` で
+worker identity の生存を確かめ、結果は `status` を変えずに `observed_health` で返す。単位ごとの状態(`units`)と、受領があれば
+その要約(解析フォルダの場所・照合した `.arf`・次の呼び出し `load_dataset(pipeline_path=…, polarity=…)`)も返す。
+- 走っている工程が機械全体の Console の順番を待っていれば `waiting`(`{<stage_id>: {"reason": "console_slot", "since",
+  "message", "holder": {"pipeline_id", "unit", "since"}}}`。工程の status は `running` のまま)。待っていた worker が居なければ
+  (`worker_missing`)、記録に残った待ちは `waiting` でなく `interrupted_while_waiting` に出し、Console をまだ起こしていない単位
+  (`recovery._console_never_started`: 待ちの理由が `console_slot` で、今の attempt の `analysis-job.json`〔順番が来てから
+  Console を起こす前に `store.console_attempt_dir` の下へ書く〕が無い。単位の `console_job_path` は見ない)を
+  `recovery_hint.console_not_started_units` に挙げる。
+- 失敗・取消で終わった工程があれば `errors`(`{<stage_id>: {"code", "message", "cause"?, "suspect_files"?,
+  "n_suspect_files"?}}`。手順 6-7。`stage_statuses` は状態の文字列だけ)。要約は `receipt.stage_error_summary` で、受領の単位の
+  `error` と同じ形: `MSDIAL_EXECUTION_FAILED` の `details.cause` と `details.diagnosis.suspect_files`、配置の工程で断った
+  `PIPELINE_INPUT_INVALID` の `details.files` を `cause` / `suspect_files`(`[{"name", "reason"}]`。10 件まで、超えたら
+  `n_suspect_files`)にそろえ、文面は 600 字で切る。ログの行(`details.diagnosis.log_lines`)は載せない(`include_details=true`
+  の記録全体にある)。
+- 旧 v1 の run は `legacy: true` で読めるだけ(再開・取消は `PIPELINE_RUN_LEGACY`)。
 
 ## pipeline_resume
 
@@ -223,35 +185,26 @@ attempt の `analysis-job.json` が無い)を `recovery_hint.console_not_started
 11.      └─ metabolomix/pipeline/service.py  _await_launch_handshake()
 12.   └─ [起動したとき] metabolomix/pipeline/service.py  _launch_warnings()
 
-受付の事前検査で `needs_input` に止まった run の resume は、起動する前に保存済みの要求と
-入力計画で単位ごとの事前検査(`_precheck_manifest`)をやり直す。直っていなければ
-`needs_input` のまま保存し直し、worker は起動しない(`launch: {"launched": false}`)。
+受付の事前検査で `needs_input` に止まった run は、起動の前に保存済みの要求と入力計画で単位ごとの事前検査
+(`_precheck_manifest`)をやり直す。直っていなければ `needs_input` のまま保存し直し、worker を起動しない
+(`launch: {"launched": false}`)。
 
-`prepare_resume`は新しいattempt/revisionを用意し、どのstageを`pending`へ戻すかを
-決めて保存するだけで、それ自体はworkerを起動しない(no-op resumeで無駄な起動を
-避ける)。`resume_pipeline`は`prepare_resume`の戻り値`status`が`"planned"`の
-ときだけ、改めて`load_run`でlaunch直前の記録(前回workerの残骸identityを含みうる)を
-読み直し、それを基準として`pipeline_run`と共有する`_launch_and_await`を呼ぶ
-(`launch_pipeline_worker`と`_await_launch_handshake`を1つにまとめた中間関数。
-基準を「launch直前」に揃えないと、前回workerの残骸identityを新規launchの
-証拠と誤認しうる)。`rerun_upstream=True`を明示しない限りConsole実行はやり直さない。
-訂正できるのは試料の対応表(`sample_manifest`、2 極性なら `units.<極性>.sample_manifest`)
-だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。`updates` の知らないキー(消えた下流のキーを
-含む)は `PIPELINE_REQUEST_INVALID`(下流のキーなら `details.replacements`)、上流の条件のキー(`method_file` ほか)は
-`NEW_PIPELINE_REQUIRED`。
-ただし worker が生きていて(`_worker_health` が `ok`)上流が `running` の単位は、その
-Console を捨てない——やり直しの対象にも、`UPSTREAM_RERUN_REQUIRED` の理由にも数えない
-(`rerun_upstream=True` で外した単位は戻り値の `held_units` と `hint` で言う)
-(稼働中の Console の最中に届いたシートの訂正は受け付け、受領だけを戻す)。worker が
-居なくなった run の `running` は、今までどおり `rerun_upstream=true` を求める。ただし Console の順番待ちの間に
-worker が消え、Console をまだ起こしていない単位(`_console_never_started`。job は順番が来てから Console を起こす前に
-`store.console_attempt_dir` の下へ書くので、今の attempt の job が無ければ起きていない。単位の `console_job_path` は
-見ない: Console の終了後にしか書かれず `rerun_upstream=true` も消さないので、走っている attempt では空か前の
-attempt を指すだけ)は状態が分かっているので数えず、`upstream` と `validate_outputs` だけを戻して
-`rerun_upstream` なしで最初の Console から続ける(戻り値の `console_not_started_units`)。
-同じ `request_id` の再送は、`prepare_resume` が `resume_log[request_id]` に残した内訳(`not_retried_units` /
-`held_units` / `console_not_started_units`。空なら持たない)を `_resume_receipt` に渡し、1 回目と同じ内訳を
-`reused: true` で返す(再送で、Console を最初から起こす単位の知らせを落とさない)。
+`prepare_resume` は新しい attempt / revision を用意し、どの stage を `pending` へ戻すかを決めて保存するだけで、worker を起動
+しない。`resume_pipeline` は `prepare_resume` の戻り値の `status` が `"planned"` のときだけ、`load_run` で launch 直前の記録
+(前回 worker の残骸の identity を含みうる)を読み直し、それを基準に `_launch_and_await` を呼ぶ(pipeline_run の節)。
+
+- `rerun_upstream=True` を明示しない限り Console はやり直さない。訂正できるのは試料の対応表(`sample_manifest`、2 極性なら
+  `units.<極性>.sample_manifest`)だけで、戻すのは受領の工程だけ。`rerun_upstream=True` は失敗した単位の 3 工程と受領を戻す。
+- `updates` の知らないキー(消えた下流のキーを含む)は `PIPELINE_REQUEST_INVALID`(下流のキーなら `details.replacements`)、
+  上流の条件のキー(`method_file` ほか)は `NEW_PIPELINE_REQUIRED`。
+- worker が生きていて(`_worker_health` が `ok`)上流が `running` の単位は、その Console を捨てない: やり直しの対象にも
+  `UPSTREAM_RERUN_REQUIRED` の理由にも数えない(`rerun_upstream=True` で外した単位は戻り値の `held_units` と `hint`)。稼働中の
+  Console の最中に届いたシートの訂正は受け付け、受領だけを戻す。
+- worker が居なくなった run の `running` は `rerun_upstream=true` を求める。ただし Console の順番待ちの間に worker が消え、
+  Console をまだ起こしていない単位(`_console_never_started`。判定は pipeline_status の節)は数えず、`upstream` と
+  `validate_outputs` だけを戻して `rerun_upstream` なしで最初の Console から続ける(戻り値の `console_not_started_units`)。
+- 同じ `request_id` の再送は、`prepare_resume` が `resume_log[request_id]` に残した内訳(`not_retried_units` / `held_units` /
+  `console_not_started_units`。空なら持たない)を `_resume_receipt` に渡し、1 回目と同じ内訳を `reused: true` で返す。
 
 ## pipeline_cancel
 
@@ -260,19 +213,16 @@ attempt を指すだけ)は状態が分かっているので数えず、`upstrea
 3.    └─ metabolomix/pipeline/store.py  load_run()
 4.    └─ metabolomix/pipeline/engine.py  cancel_request_path()
 
-保存するのは協調的な取消フラグ(小さなJSON)だけで、ここでは一切のプロセスを
-直接終了させない。**rawデータは削除しない。** 上流Consoleの停止は既存の
-`execution.supervise`の`cancel_path`監視に、工程の停止はengineのstage境界
-チェックに委ねる。旧 v1 の run(`pipeline-run.v1`。読むだけの記録)は `PIPELINE_RUN_LEGACY` で
-断る(再開も同じ)。受理(このツールが成功したこと)と実際の停止確定
-(`cancelled`)は別状態で、後者は`pipeline_status`で確認する。
+保存するのは協調的な取消フラグ(小さな JSON)だけで、プロセスを直接終了させない。**raw データは削除しない。** Console の停止は
+`execution.supervise` の `cancel_path` 監視、工程の停止は engine の stage 境界の確認が行う。旧 v1 の run(`pipeline-run.v1`)は
+`PIPELINE_RUN_LEGACY` で断る(再開も同じ)。受理(このツールの成功)と停止の確定(`cancelled`)は別の状態で、後者は
+`pipeline_status` で確かめる。
 
 ## pipeline_sample_sheet
 
-前提: なし(データセットも run も要らない)。状態変更: なし(セッションには書かない)。raw フォルダに
-`sample-manifest.tsv`(`output_name`)を 1 つ書くだけ。raw ごとに取得時刻の見出しを開く(数百のファイルや
-ネットワークの共有では数十秒かかりうる)ので、`handle_dispatch.ALWAYS_THREADED` に載せてワーカースレッドで回す
-(その間もイベントループは `job_status` などに答える)。
+前提: なし(データセットも run も要らない)。状態変更: なし(セッションに書かない)。raw フォルダに `sample-manifest.tsv`
+(`output_name`)を 1 つ書く。raw ごとに取得時刻の見出しを開く(数百のファイルやネットワークの共有では数十秒)ので、
+`handle_dispatch.ALWAYS_THREADED` でワーカースレッドに回す(その間もイベントループは `job_status` などに答える)。
 
 1. metabolomix/tools/sample_sheet_tools.py  pipeline_sample_sheet()
 2. └─ metabolomix/pipeline/inputs.py  list_primary_names()
@@ -294,26 +244,25 @@ attempt を指すだけ)は状態が分かっているので数えず、`upstrea
 18. └─ metabolomix/tools/sample_sheet_tools.py  _notes()
 19. └─ metabolomix/rawmeta/acquisition.py  gaps_over()
 
-raw の一覧は受付(`pipeline_plan` / `pipeline_run`)と同じ `list_primary_names` で取り、各 raw を試料の表の
-行へ(ISA は assay 表の Raw Spectral Data File と Derived Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の
-RAW_FILE_NAME、どちらも無ければ試料名と raw の語幹で)対応づける。表のファイル名と合わなければ幹で引く
-(`_file_index`。名前・幹が別々の試料に当たるファイルは対応に入れない。ISA も mwTab も同じ)。同じ Sample Name の
-行どうしで因子(と役割を決める列)の値が食い違う試料は行を決められない(`_table_rows`)。群は選んだ因子の値の組
-(`factor_group`)で、群の決まらない生体試料は群 `unassigned`・`include=false`(統計に入れない)。生体試料のどれも群が
-決まらなければ書かずに `SAMPLE_TABLE_INVALID`(`_unmatched_error`)。因子の列名がシートの既知の列と完全に同じなら
-`factor_<名>` に改める(`_sheet_factor_names`)。注入順は raw の取得時刻の順(`acquisition_order`。スペクトルは
-読まず、ファイルの見出しのメタデータだけ)で、読めない raw があっても読めた raw の順位は残し、読めない raw の
-注入順だけを空にして読めなかったファイル名と理由を返す。1 つでも読めれば schema の行の直後に宣言の行
-`# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の出所の記録に `derived_from` を
-足す(試料の表と統計の出所が `raw_acquisition_time` になる)。一部だけ空のときは空の行にも `derived_from` を付け
-(`sample_manifest.sheet_order_unknown`)、`_merge_row` と統計エンジンはその空欄を `.mddata`・mzTab-M の番号で
-埋めない(付け方の違う順を混ぜない)。試料の表が UTF-8 で
-読めなければ `SAMPLE_TABLE_INVALID`。書く前に
-受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで通し、通ったものだけを原子的に書く。既にあれば
-`overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS` で止まる。`_notes` は、順の欠けた生体試料か QC が統計に入る
-(`include=true`)ときだけ「ドリフト補正と注入順の偏りの判定は行われない」と書く(前処理の `_select` が
-`include=false` の試料を先に外すので、外した試料の欠けた順はどちらも止めない)。`.wiff2` の取得時刻は同じ幹の
-`.wiff`(SCIEX OS が並べて書く OLE のファイル)から読む(`acquisition._read_wiff2`)。
+raw の一覧は受付(`pipeline_plan` / `pipeline_run`)と同じ `list_primary_names`。各 raw を試料の表の行へ対応づける(ISA は
+assay 表の Raw Spectral Data File と Derived Spectral Data File、mwTab は SUBJECT_SAMPLE_FACTORS の RAW_FILE_NAME、どちらも
+無ければ試料名と raw の語幹)。表のファイル名と合わなければ語幹で引く(`_file_index`。名前・語幹が別々の試料に当たるファイルは
+対応に入れない)。同じ Sample Name の行どうしで因子(と役割を決める列)の値が食い違う試料は行を決められない(`_table_rows`)。
+群は選んだ因子の値の組(`factor_group`)。群の決まらない生体試料は群 `unassigned`・`include=false`。生体試料のどれも群が
+決まらなければ書かずに `SAMPLE_TABLE_INVALID`(`_unmatched_error`)。因子の列名がシートの既知の列と同じなら `factor_<名>` に
+改める(`_sheet_factor_names`)。
+
+注入順は raw の取得時刻の順(`acquisition_order`。スペクトルは読まず、ファイルの見出しのメタデータだけ)。読めない raw は注入順を
+空にしてファイル名と理由を返し、読めた raw の順位は残す。1 つでも読めれば schema の行の直後に宣言の行
+`# injection_order_source = raw_acquisition_time` を書き、`parse_manifest` が注入順の出所の記録に `derived_from` を足す(試料の
+表と統計の出所が `raw_acquisition_time` になる)。一部だけ空のときは空の行にも `derived_from` を付け
+(`sample_manifest.sheet_order_unknown`)、`_merge_row` と統計エンジンはその空欄を `.mddata`・mzTab-M の番号で埋めない。
+`.wiff2` の取得時刻は同じ語幹の `.wiff`(SCIEX OS が並べて書く OLE のファイル。`acquisition._read_wiff2`)から読む。
+
+試料の表が UTF-8 で読めなければ `SAMPLE_TABLE_INVALID`。書く前に受付と同じ厳密な読み手(`parse_manifest`)へ一時ファイルで
+通し、通ったものだけを原子的に書く。既にあれば `overwrite=True` が無い限り `SAMPLE_SHEET_EXISTS`。`_notes` は、順の欠けた
+生体試料か QC が統計に入る(`include=true`)ときだけ「ドリフト補正と注入順の偏りの判定は行われない」と書く(前処理の `_select`
+が `include=false` の試料を先に外す)。
 
 ## console_method_candidates
 
@@ -332,19 +281,16 @@ RAW_FILE_NAME、どちらも無ければ試料名と raw の語幹で)対応づ�
 11.    └─ metabolomix/tools/console_tools.py  _candidate_payload()
 12. └─ metabolomix/tools/console_tools.py  _candidates_next_hint()
 
-`polarity` は `normalize_polarity` で `positive` / `negative` に読み替える(`pos` / `neg` / `+` / `-` も可、
-大文字小文字を問わない)。読めない値は `POLARITY_INVALID`(黙って「どの候補とも一致しない」にしない)。
+`polarity` は `normalize_polarity` で `positive` / `negative` に読み替える(`pos` / `neg` / `+` / `-` も可、大文字小文字を
+問わない)。読めない値は `POLARITY_INVALID`。
 
-MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.txt` を、`dataset_root` 直下 →
-兄弟フォルダ直下 → `search_dirs`(`method_search_dirs`)の順に探す。**再帰はしない**(深く掘ると無関係な
-プロジェクトのパラメータが混ざる)。加えて `dataset_root/runs/*/analysis-job.json` の `software.method_file`
-(`past_run_method_files`。旧 Console 単独実行のジョブが実際に使ったメソッド)も候補にする——pipeline の run の
-ジョブ(`runs/pipeline_*/<極性>/console/attempt-*/analysis-job.json`)は 1 段深いので、今は拾わない。
-極性で候補を落とさない: `polarity` を渡すと各候補に `usable`(`direct` / `needs_polarity_conversion`)が付き、
-別極性は `console_method_template` を通させる(黙って別の解析にしない)。候補が
-`KEY_PARAMS_MAX_CANDIDATES` を超えると `key_params` を付けず、`MAX_REPORTED_CANDIDATES` で切って
-`truncated: true` を立てる(並びは `direct` 優先・新しい順なので、先頭が最も使える候補)。`next` は
-`pipeline_plan` の `request.method_file` へ渡す道を言う。
+MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.txt` を、`dataset_root` 直下 → 兄弟フォルダ直下 →
+`search_dirs`(`method_search_dirs`)の順に探す。**再帰はしない**。`dataset_root/runs/*/analysis-job.json` の
+`software.method_file`(`past_run_method_files`。Console 単独実行のジョブが使ったメソッド)も候補にする。pipeline の run の
+ジョブ(`runs/pipeline_*/<極性>/console/attempt-*/analysis-job.json`)は 1 段深いので拾わない。極性で候補を落とさない:
+`polarity` を渡すと各候補に `usable`(`direct` / `needs_polarity_conversion`)が付き、別極性は `console_method_template` を
+通す。候補が `KEY_PARAMS_MAX_CANDIDATES` を超えると `key_params` を付けず、`MAX_REPORTED_CANDIDATES` で切って `truncated: true`
+(並びは `direct` 優先・新しい順)。`next` は `pipeline_plan` の `request.method_file` へ渡す道を言う。
 
 ## console_method_template
 
@@ -367,29 +313,28 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 15. └─ metabolomix/tools/console_tools.py  _non_ascii_override_error()
 16. └─ metabolomix/console/method_file.py  write_effective_method_file()
 
-既存のパラメータから別極性のメソッドファイルを作る最後の手段。`polarity` は `console_method_candidates` と
-同じく `normalize_polarity` で読み替え、読めない値は `POLARITY_INVALID`。まず `pipeline_plan` の要求で `method_file` を
-省いて試す(その極性で GUI 実行が一度でもあれば作る必要は無い)。`based_on` を省くと
-`discover_method_candidates` を**極性で絞らずに**呼び(別極性から作るのが用途)、候補が 1 件ならそれ、
-複数なら `METHOD_FILE_CHOICE_REQUIRED`(土台の選択は解析条件そのものなので最新を黙って採らない)。
-差し替えるのは `Ion mode` と `Searched adduct ions`(`STANDARD_ADDUCTS`)だけで、検出・アライメント条件は
-元のまま。`.mdproject` / `.mddata` のような ASCII テキストでない土台は `_looks_like_method_text` が
-先頭 8192 バイトだけを見て `METHOD_FILE_NOT_TEXT` で断る(GB 級の ZIP を全部読まない)。
-実行体(`get_exe_path`)はビルド生成物・実行体のフォルダからの LBM の推定にだけ使い、未設定でも止めない
-(設定ファイルが読めない `CONFIG_INVALID` だけは止める)。`_resolve_libraries` は相対で宣言されたパスを
-原本基準の絶対パスへ直し(別フォルダへ書き出すため)、`auto` では空の `Lbm file path` を pipeline と同じ
-解決順で埋め、`msp_only` では LBM を空にして作りたい極性の研究室 MSP を書き、Text DB と注釈器設定表の
-宣言を空にする。研究室の LBM・MSP は戻り値・エラーにファイル名だけを出す。実効メソッドへ書く値に ASCII で
-表せない文字があれば `METHOD_ENCODING_UNSUPPORTED`(Console はメソッドを ASCII で読み、黙って同定 0 件に
-なる)。戻り値の `next` は `pipeline_plan(dataset_root=..., request={'method_file': ..., 'polarity': ...})`
-(`msp_only` ならそのモードも引き継ぐ)。
+既存のパラメータから別極性のメソッドファイルを作る。その極性で GUI 実行が一度でもあれば、`method_file` を省いた
+`pipeline_plan` で足りる。`polarity` は `console_method_candidates` と同じく読み替え、読めない値は `POLARITY_INVALID`。
+- `based_on` を省くと `discover_method_candidates` を**極性で絞らずに**呼び、候補が 1 件ならそれ、複数なら
+  `METHOD_FILE_CHOICE_REQUIRED`(最新を黙って採らない)。
+- 差し替えるのは `Ion mode` と `Searched adduct ions`(`STANDARD_ADDUCTS`)だけで、検出・アライメント条件は元のまま。
+- ASCII テキストでない土台(`.mdproject` / `.mddata` など)は `_looks_like_method_text` が先頭 8192 バイトだけを見て
+  `METHOD_FILE_NOT_TEXT` で断る。
+- 実行体(`get_exe_path`)はビルド生成物・実行体のフォルダからの LBM の推定にだけ使い、未設定でも止めない(設定ファイルが
+  読めない `CONFIG_INVALID` だけは止める)。
+- `_resolve_libraries` は相対で宣言されたパスを原本基準の絶対パスへ直し、`auto` では空の `Lbm file path` を pipeline と同じ
+  解決順で埋め、`msp_only` では LBM を空にして作りたい極性の研究室 MSP を書き、Text DB と注釈器設定表の宣言を空にする。研究室の
+  LBM・MSP は戻り値・エラーにファイル名だけを出す。
+- 実効メソッドへ書く値に ASCII で表せない文字があれば `METHOD_ENCODING_UNSUPPORTED`(Console はメソッドを ASCII で読み、黙って
+  同定 0 件になる)。
+- 戻り値の `next` は `pipeline_plan(dataset_root=..., request={'method_file': ..., 'polarity': ...})`(`msp_only` ならその
+  モードも引き継ぐ)。
 
 ## workerが1回分を進める経路(別プロセス。pipeline の5ツールとは別に進行する)
 
-`pipeline_run`/`pipeline_resume`が起動したworkerプロセス自身の経路。MCP接続や
-グローバルsessionには一切触れない(`metabolomix.core.session_state` /
-`metabolomix.core.mcp_core` / `metabolomix.tools.*` を意図的にimportしない設計——
-`tests/test_pipeline_engine.py`のASTテストがこれを固定する)。
+`pipeline_run` / `pipeline_resume` が起動した worker プロセスの経路。MCP 接続とグローバル session に触れない
+(`metabolomix.core.session_state` / `metabolomix.core.mcp_core` / `metabolomix.tools.*` を import しない。
+`tests/test_pipeline_engine.py` の AST テストが固定する)。
 
 1. metabolomix/pipeline/worker.py  run_worker()
 2. └─ metabolomix/core/process_control.py  current_job_state()
@@ -420,79 +365,64 @@ MS-DIAL GUI が解析のたびに保存する `<project>_param_<終了時刻>.tx
 27.   └─ metabolomix/pipeline/engine.py  finish_success()
 28.      └─ metabolomix/pipeline/engine.py  final_status()
 
-手順2で worker は自分がまだ Windows の Job に入っているか(何段目でも)を確かめ、手順4で run の記録の
-`worker.in_job` / `worker.nearest_job` に残す(閉じたら止めるか分からない Job なら警告 `WORKER_IN_JOB`。
-直近の Job が `inherited_job` なら警告せず、外側の段を確かめていない注記 `worker.outer_jobs: "unchecked"` /
-`worker.outer_jobs_note` を残す。試験の harness は `run_engine` を直に呼ぶので確かめない)。
-手順9は受付と同じ切れた mzML の検査を配置の前にもう一度行う(受付の後に切れたものも Console の前で止める)。
+手順 2・4: worker は自分が Windows の Job に入っているか(何段目でも)と直近の Job の制限を確かめ
+(`process_control.current_job_state`)、run の記録の `worker.in_job` / `worker.nearest_job` に残す。閉じたら止めるか分からない
+Job なら警告 `WORKER_IN_JOB`(run に 1 つ。`details.nearest_job`)、直近の Job が `inherited_job` なら警告せず注記
+`worker.outer_jobs: "unchecked"` / `worker.outer_jobs_note` を残す。どちらも止めない。試験の harness は `run_engine` を直に
+呼ぶので確かめない。
+手順 9 は受付と同じ切れた mzML の検査を配置の前にもう一度行う(受付の後に切れたものも Console の前で止める)。
 
-工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` →
-`upstream:<極性>` → `validate_outputs:<極性>` を要求の順に並べ、最後に `receipt` を
-1 つ置く。手順6の `_run_stage_loop` はこの計画順で回す(`record["stages"]` の挿入順では
-ない)。ある単位が失敗したら、その単位の残りの工程は飛ばしてもう片方の単位へ進む
-(Console を同時に 2 本走らせない)。validated の単位が 1 つも無ければ受領は書かない。
+工程の計画(`engine.build_stages`)は単位ごとの `prepare_input:<極性>` → `upstream:<極性>` → `validate_outputs:<極性>` を
+要求の順に並べ、最後に `receipt` を 1 つ置く。`_run_stage_loop`(手順 6)はこの計画順で回す(`record["stages"]` の挿入順では
+ない)。ある単位が失敗したら、その単位の残りの工程を飛ばして次の単位へ進む(Console を同時に 2 本走らせない)。validated の
+単位が 1 つも無ければ受領は書かない。
 
-`_run_stage_loop`は**各stageの直前に最新のrun recordを読み直す**。要求版
-(`_request_identity`＝revision/content_hash/saved_path)が変わっているか、
-このpassで既に通過したstageが外から`pending`へ戻されている
-(`_resume_reset_seen`)場合は、その場でpassをやり直す。走っている最中に届いた
-`pipeline_resume`は——`prepare_resume`が稼働中workerのstatusを動かさないため
-`resume_pipeline`が新しいworkerを起こさない——このworkerが取り込むしかない。
-組み直しは有限回(`_REQUEST_RELOAD_MAX_PASSES`)までで、超えたら
-`REQUEST_REVISION_CHURN`で止める。
+`_run_stage_loop` は**各 stage の直前に run の記録を読み直し**、要求の版(`_request_identity`＝revision / content_hash /
+saved_path)が変わったか、この pass で通過した stage が外から `pending` へ戻された(`_resume_reset_seen`)ら pass をやり直す。
+走っている最中の `pipeline_resume` は新しい worker を起こさない(`prepare_resume` が稼働中の worker の status を動かさない)ので、
+この worker が取り込む。やり直しは `_REQUEST_RELOAD_MAX_PASSES` 回までで、超えたら `REQUEST_REVISION_CHURN` で止める。
 
-`_handle_upstream`は`execution.supervise`を直接呼ぶ(Console用workerを二重起動しない)。
-`console_job_path`は`analysis-job.json`そのものへの、pipeline_root 相対のパス
-(`run_dir = Path(job_path).parent`)として単位の `upstream` に記録する。run_dirは
-**単位とattemptごとに分ける**(`<pipeline_root>/<極性>/console/attempt-NNNN/`)——固定パス
-にすると`rerun_upstream=true`の再実行が前回の終了証跡・ログ・実行前スナップショットを
-上書きしてしまう。Console の `-i` は `<pipeline_root>/<極性>/input/`(配置した raw)で、
-MS-DIAL はここへ `.arf` などを書く——このフォルダがそのまま解析フォルダになる。
+`_handle_upstream` は `execution.supervise` を直接呼ぶ(Console 用の worker を二重に起こさない)。`console_job_path` は
+`analysis-job.json` への pipeline_root 相対のパス(`run_dir = Path(job_path).parent`)で、単位の `upstream` に記録する。run_dir は
+**単位と attempt ごとに分ける**(`<pipeline_root>/<極性>/console/attempt-NNNN/`。再実行は前回の終了証跡・ログ・実行前
+スナップショットを上書きしない)。Console の `-i` は `<pipeline_root>/<極性>/input/`(配置した raw)で、MS-DIAL はここへ `.arf`
+などを書く。このフォルダが解析フォルダになる。
 
-**機械全体で Console は 1 本**: 1 本の run の中では単位を 1 つずつ回すが、極性ごとに別の run を起こすと
-Console が並ぶ(研究室の MSP・LBM を読む脂質の run は 1 本で 20 GB 以上の commit を確保し、並ぶと遅くなる
-うえ commit の上限で Windows のエラー 1450 で落ちうる)。そこで `_handle_upstream` は Console を起こす前に
-`machine_slot.console_slot`(OS のファイルロック `process_control.wait_for_lock`。持っている worker が死ねば
-OS が外す)で順番を取る。ロックは設定ファイルのフォルダの `data/.msdial-console.lock` にあり、同じ設定
-ファイルを読むサーバ・worker の間で取り合う(main ツリーのサーバと、`LIPIDMIX_CONFIG` で main ツリーの
-`lipidmix.local.toml` を指す worktree)。自分の設定ファイルを読む別のクローンは別のロックになり、Console が
-2 本並びうる(そのクローンも `LIPIDMIX_CONFIG` で同じ設定ファイルを指せば 1 本になる)。機械で 1 つの固定の
-場所にしないのは、テストが設定ファイルをテストごとの tmp へ向けることで本物の run と取り合わずに済んで
-いるため。待つ間は engine が context に渡す `report_waiting` から `report_stage_waiting`(手順13)で工程の
-`waiting` に書き(status は `running` のまま。`pipeline_status` の `waiting`)、順番が来たら消す。
-待っている間に取消が来たら Console を起こさず `CONSOLE_WAIT_CANCELLED` で失敗にする(run は `cancelled`)。
-順番が来たら commit の空き(`GlobalMemoryStatusEx` の `ullAvailPageFile`)を測り(手順15-16)、
-下限(設定 `[msdial] min_free_commit_gb`、既定 8、0 で測らない)を下回れば警告 `LOW_COMMIT_MEMORY`
-を残す(止めない)。測った値は単位の `upstream.memory_before`、待った秒数は
-`upstream.console_slot_waited_s` に残る。
+**機械全体で Console は 1 本**: run の中では単位を 1 つずつ回すが、極性ごとに別の run を起こすと Console が並ぶ(脂質の run は
+1 本で 20 GB 以上の commit を確保し、並ぶと Windows のエラー 1450 で落ちうる)。`_handle_upstream` は Console を起こす前に
+`machine_slot.console_slot`(OS のファイルロック
+`process_control.wait_for_lock`。持っている worker が死ねば OS が外す)で順番を取る。
+- ロックは設定ファイルのフォルダの `data/.msdial-console.lock` で、同じ設定ファイルを読むサーバ・worker の間で取り合う(main
+  ツリーのサーバと、`LIPIDMIX_CONFIG` で main ツリーの `lipidmix.local.toml` を指す worktree)。自分の設定ファイルを読む別の
+  クローンは別のロックになり、Console が 2 本並びうる(`LIPIDMIX_CONFIG` で同じ設定ファイルを指せば 1 本)。
+- 待つ間は engine が context に渡す `report_waiting` から `report_stage_waiting`(手順 13)で工程の `waiting` に書き(status は
+  `running` のまま。`pipeline_status` の `waiting`)、順番が来たら消す。待つ間に取消が来たら Console を起こさず
+  `CONSOLE_WAIT_CANCELLED` で失敗にする(run は `cancelled`)。
+- 順番が来たら commit の空き(`GlobalMemoryStatusEx` の `ullAvailPageFile`)を測り(手順 15-16)、下限(設定
+  `[msdial] min_free_commit_gb`、既定 8、0 で測らない)を下回れば警告 `LOW_COMMIT_MEMORY` を残す(止めない)。測った値は単位の
+  `upstream.memory_before`、待った秒数は `upstream.console_slot_waited_s`。
 
-Console が完了しなかったとき(終わり方が `exited` / `worker_lost`)は `failure_diagnosis.diagnose_failure`
-(手順18)の見立てを `MSDIAL_EXECUTION_FAILED` の `details.diagnosis` に、原因の分類を `details.cause` に載せる:
-終了コード 1450(`ERROR_NO_SYSTEM_RESOURCES`)かログのメモリ不足は `system_resources`、配置済みの mzML が
-切れていれば `broken_input`、`msdial.log` のエラーの行(無ければ最初のエラーより前に最後に名前の出た行)に
-計測ファイルの名前があれば `input_suspected`(見立てで確定ではない)。返すログの行は絶対パスをファイル名に
-する(研究室の参照ライブラリの置き場所を出さない): ドライブ・UNC・`file:` の URL で始まるパスの頭から
-最後の区切りまでを消す(フォルダの名前の空白で切らないので `OneDrive - 大学名` のような断片も残らない)。
-原因と疑わしいファイルは `pipeline_status` の `errors` と受領の単位の `error` にも出る
-(`receipt.stage_error_summary`)。
+Console が完了しなかったとき(終わり方が `exited` / `worker_lost`)は `failure_diagnosis.diagnose_failure`(手順 18)の見立てを
+`MSDIAL_EXECUTION_FAILED` の `details.diagnosis` に、原因の分類を `details.cause` に載せる: 終了コード 1450
+(`ERROR_NO_SYSTEM_RESOURCES`)かログのメモリ不足は `system_resources`、配置済みの mzML が切れていれば `broken_input`、
+`msdial.log` のエラーの行(無ければ最初のエラーより前に最後に名前の出た行)に計測ファイルの名前があれば `input_suspected`
+(見立てで確定ではない)。返すログの行は絶対パスをファイル名にする: ドライブ・UNC・`file:` の URL で始まるパスの頭から最後の
+区切りまでを消す(フォルダ名の空白で切らない)。原因と疑わしいファイルは `pipeline_status` の `errors` と受領の単位の `error` にも
+出る(`receipt.stage_error_summary`)。
 
-`_handle_validate_outputs` は正準 mzTab-M(`job_gate`。ジョブが完了していなければ失敗)を
-確かめ、解析フォルダの `.arf` のうち mzTab-M と同じアラインメントだと確かめられたもの
-(`mztab.evidence.matching_arfs`)がちょうど 1 本なら `outputs.alignment` に
-`{"arf", "arf2"}` を記録する。候補の選び方は `dataset/opening._matching_arf` と共有の
-`mztab.evidence.first_matching_arfs`: まずジョブの `peak_matrix_source`(と mzTab-M の隣)、
-どれも通らなければ解析フォルダのバッチを `AlignmentResult_<時刻>` の新しい順に 1 本ずつ試し、
-最初に通ったところで止める——`rerun_upstream=true` の後は前の実行のバッチが同じフォルダに
-残るので、全バッチを並べると「同じアラインメントが 2 本」になる。合わなければ失敗にせず警告
-`ANALYSIS_FOLDER_UNMATCHED`(`source="mztab"` なら読める)で、run は `partial` になる。
+`_handle_validate_outputs` は正準 mzTab-M(`job_gate`。ジョブが完了していなければ失敗)を確かめ、解析フォルダの `.arf` のうち
+mzTab-M と同じアラインメントと確かめられたもの(`mztab.evidence.matching_arfs`)がちょうど 1 本なら `outputs.alignment` に
+`{"arf", "arf2"}` を記録する。候補の選び方は `dataset/opening._matching_arf` と共有の `mztab.evidence.first_matching_arfs`:
+まずジョブの `peak_matrix_source`(と mzTab-M の隣)、どれも通らなければ解析フォルダのバッチを `AlignmentResult_<時刻>` の
+新しい順に 1 本ずつ試し、最初に通ったところで止める(`rerun_upstream=true` の後も前の実行のバッチが残るため)。
+合わなければ失敗にせず警告 `ANALYSIS_FOLDER_UNMATCHED`(`source="mztab"` なら読める)で、run は `partial`。
 
-`finish_success` の最終判定(`final_status`): 全単位が validated・受領が成功・全単位の
-解析フォルダが照合できた → `completed`。validated が 1 つ以上で欠けがある → `partial`。
-validated が 0 → `failed`。worker の中の `needs_input` は無い(受付の事前検査だけが保存する)。
+`finish_success` の最終判定(`final_status`): 全単位が validated・受領が成功・全単位の解析フォルダが照合できた → `completed`。
+validated が 1 つ以上で欠けがある → `partial`。validated が 0 → `failed`。worker の中の `needs_input` は無い(受付の事前検査
+だけが保存する)。
 
-受領(`results/receipt.json`、`lipidmix.pipeline-receipt.v1`)は単位ごとの解析フォルダ・
-照合した `.arf`・メソッドとライブラリ(研究室の資産はファイル名と sha256 だけ)・試料の
-対応表・検証の結果と、次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)を載せる。
-Console の実行体はファイル名と sha256 で示す(ジョブは Console の版を記録しないので、版の欄は無い)。
-解析フォルダが照合できなかった単位(`alignment: null`)の次の呼び出しには `source="mztab"` を付ける
-(既定の解析フォルダでは `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まるため)。
+受領(`results/receipt.json`、`lipidmix.pipeline-receipt.v1`)は単位ごとの解析フォルダ・照合した `.arf`・メソッドとライブラリ
+(研究室の資産はファイル名と sha256 だけ)・試料の対応表・検証の結果・次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)
+を載せる。Console の実行体はファイル名と sha256 で示す(版の欄は無い)。解析フォルダが
+照合できなかった単位(`alignment: null`)の次の呼び出しには `source="mztab"` を付ける(既定の解析フォルダでは
+`ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まる)。
