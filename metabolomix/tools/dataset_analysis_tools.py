@@ -49,56 +49,29 @@ def dataset_export_differential(output_path: str,
                                 dataset_handle: str | None = None,
                                 contrast_id: str | None = None,
                                 exclude_feature_ids: list[str | int] | None = None) -> str:
-    """指定した差次的結果を InChIKey 付きの 1 ファイルへ書き出す。
+    """指定した差次的結果（`dataset_compare` の後）を InChIKey 付きの 1 ファイルへ書き出す。
 
-    先に dataset_preprocess → dataset_compare を実行しておくこと。
-    出力は差次的エクスポートの契約（`analysis/export_contract.py`。15 列 + contract_version
-    メタ行）に従うので、下流のパスウェイ解析にそのまま渡せる。
-    探索専用のデータセット（中断された実行・検証を通っていない pipeline の単位を `allow_incomplete=True` で
-    読んだもの）も書き出し、メタ行 `# exploratory = true` と `exploratory_reason` を足す（戻り値にも
-    `exploratory`）。
+    出力は差次的エクスポートの契約（15 列 + contract_version などのメタ行）で、下流のパスウェイ解析にそのまま渡せる。
+    有意な行だけでなく InChIKey が付いた全行を出す。`q_value` はいつも Benjamini–Hochberg の q（比較が `bonferroni` /
+    `holm` / `none` なら同じ母集団の p から計算し直し、`significant` もその q で読む。戻り値の `q_value_source` と `notes`）。
+    `ontology` と `msi_level` は空欄（メタ行が宣言する）。メタ行に `result_id` と `preprocess_id`（その結果が読んだ行列の
+    `matrix_id`）も入る。探索専用のデータセットも書き出し、メタ行 `# exploratory = true` と `exploratory_reason` を足す
+    （戻り値にも `exploratory`）。列とメタ行の意味は `docs_read(topic="dataset")` の 11.4。
 
-    apply_curation（既定 true）: curation_submit で wrong を付けたスポットを
-    同定なしとして扱い、出力から外す。フラグがあればメタ行 # curation = ... で
-    適用状況を宣言する。フラグが無ければ出力は変わらない。成功 payload の
-    `curation` は `{state, wrong_excluded, suspect, orphaned}`。assign（curation_submit の候補付け）は同定を置き換え（name_source /
-    inchikey_source = curation）、redundant は除外する。どちらかがあれば `curation` に
-    `assigned` と `redundant_excluded` が足される。
-    フラグ記録に読めない行があれば書き出さずに `CURATION_FLAGS_INVALID`。
-
-    result_id: 書き出す結果を名指しする（省略時は直近の差次的結果）。
-        **除外・試料の表の変更で古くなった結果は書き出しません**（`STALE_ANALYSIS_RESULT`）。
-        古い数字に現在の条件のラベルが付いた TSV は、どちらも正しく見えて
-        ずれが分からなくなります。
-
-    InChIKey は DatasetState.feature_metadata から取る（mzTab-M の
-    database_identifier / InChI / SMILES 由来。.arf2 との結合は不要）。
-    濃縮解析の背景を保つため、有意な行だけでなく InChIKey が付いた全行を出す。
-    ontology と msi_level は mzTab-M に対応物が無いため空欄で、その旨をメタ行に
-    書く（空欄を「該当なし」と読み違えさせない）。メタ行には result_id と
-    preprocess_id（その結果が読んだ行列の `matrix_id`）も入るので、あとから「どの計算の出力か」を辿れる。
-
-    contrast_id: `dataset_compare` の結果が対比を複数持つときに書き出す対比の ID（`T_vs_C` など。
-        `result_id#contrast_id` の形でも渡せる）。対比が 1 つなら省略できる。複数で省けば `needs_input`
-        （`argument="contrast_id"`、選択肢は対比の一覧）、未知の ID は `CONTRAST_REQUIRED`（details に候補）。
-        2×2 の交互作用の対比（差の差）も書ける: `group_a` / `group_b` は基準の 2 cell・比較の 2 cell、
-        `log2fc` は差の差、`mean_a` / `mean_b` は空欄で、メタ行 `contrast_kind = interaction` と定義が付く
-        （契約の版と `log2fc_sign` は 2 群と同じなので、交互作用の印はこの 2 行だけ）。
-        15 列の後ろ（`msi_note` の後）に検定・判定規則・比較の補正の方法（`p_adjust_method`）・単位などのメタ行が
-        付く（列と契約の版は同じ。`mean_a` / `mean_b` は前処理後の線形値の算術平均）。
-
-    `q_value` は契約どおりいつも Benjamini–Hochberg の q（FDR）。比較が `p_adjust=bonferroni` / `holm` / `none`
-    なら、同じ補正の母集団で記録の p から BH の q を計算し直し、`significant` もその q で判定を読み直す（メタ行
-    `q_value_method = bh` と `q_value_source`、戻り値の `q_value_source` と `notes`）。
-
-    exclude_feature_ids: 検定の**後で**書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さない
-        （多重比較の母集団は検定のときのまま）ことと落とした件数を、メタ行 `n_excluded_after_test` に書く。
-        `n_features_total` は落とした行も数える（`n_with_inchikey + n_unannotated + n_excluded_after_test`）。
-        結果に無い ID は戻り値の `exclude_feature_ids_not_found`（誤りにはしない）。解析そのものから外すなら
+    result_id: 書き出す結果（省略時は直近の差次的結果）。除外・試料の表の変更で古くなった結果は書き出さない
+        （`STALE_ANALYSIS_RESULT`）。
+    contrast_id: 結果が対比を複数持つときに書き出す対比の ID（`T_vs_C` など。`result_id#contrast_id` の形でも渡せる）。
+        対比が 1 つなら省略できる。複数で省けば `needs_input`（`argument="contrast_id"`、選択肢は対比の一覧）、未知の ID は
+        `CONTRAST_REQUIRED`（details に候補）。2×2 の交互作用の対比（差の差）も書ける（メタ行 `contrast_kind = interaction`）。
+    apply_curation（既定 true）: `curation_submit` のフラグを当てる。wrong のスポットは同定なしとして出力から外し、assign は
+        同定を置き換え（name_source / inchikey_source = curation）、redundant は外す。フラグがあればメタ行 `# curation = ...` で
+        適用状況を宣言し、戻り値の `curation` は `{state, wrong_excluded, suspect, orphaned}`（assign か redundant があれば
+        `assigned`・`redundant_excluded` も）。フラグが無ければ出力は変わらない。フラグ記録に読めない行があれば書き出さずに
+        `CURATION_FLAGS_INVALID`。
+    exclude_feature_ids: 検定の後で書き出しから落とす特徴 ID（外来の分子など）。q は計算し直さず、落とした件数をメタ行
+        `n_excluded_after_test` に書く。結果に無い ID は戻り値の `exclude_feature_ids_not_found`（誤りにはしない）。解析から外すなら
         `dataset_exclude`（結果は古くなり、検定からやり直す）。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -177,46 +150,27 @@ def dataset_export_differential(output_path: str,
     readOnlyHint=False, destructiveHint=False, idempotentHint=True),
     structured_output=False)
 def dataset_set_sample_metadata(manifest_path: str, dataset_handle: str | None = None) -> str:
-    """実験情報シート(sample-manifest.v1)を読み込み、検証してから DatasetState へ
-    一括適用する（spec §7.3）。
+    """実験情報シート（sample-manifest.v1 / v2）を読み込み、全件を検証してから DatasetState へ一括適用する。
 
-    上流のConsole実行をやり直さずに、群・バッチ・注入順・qc_pool などの誤記入を
-    このツール単体で訂正できる。列の意味・拒否条件は sample-manifest.v1 の仕様
-    （`docs/superpowers/specs/2026-09-05-raw-folder-pipeline-integrity-and-metadata-design.md`
-    §7.2）を参照。
+    上流の Console をやり直さずに、群・バッチ・注入順・qc_pool などの誤記入を訂正できる。シートに不備があればデータセットを一切
+    変えずにエラーを返す（一部だけ適用される状態は作らない）。v2 のシートは既知の列（と任意の `subject_id`）の後ろに因子の列
+    （`Genotype`・`Treatment` など）を足せる（列名が空か、既知の列・足した列どうしと重なれば `SAMPLE_MANIFEST_INVALID`）。値は
+    そのまま試料の表に載り、analysis-spec v2 の `design.factors`・`covariates` が列名で引く。任意の列 `subject_id`（反復測定の
+    被験者）は `sample_meta` に持ち、`dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を 1 個体に
+    まとめる鍵、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵になる。列が無ければ反復をまとめず、注入が単位。
 
-    検証は全件そろってから一括反映する（**一部だけ適用される状態は作らない**）。
-    シートに不備があれば `session.dataset` を一切変更せずエラーを返すので、
-    そのまま再送してよい。
+    試料の表が変われば（`group` だけ・`subject_id` だけの変更でも）、登録した行列（`matrix_id`）・`dataset_compare` の結果・
+    `dataset_pca` の結果はすべて古くなる（何が変わったかは `changed_fields`。古い `matrix_id` は `missing_state`）。
+    `dataset_preprocess` を前と同じ引数で呼び直し、返った新しい `matrix_id` を `dataset_compare` / `dataset_pca` に渡す
+    （`matrix_id` を省くと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる）。
 
-    任意の列 `subject_id`（見出しの末尾に足す。反復測定の被験者）も読み、`sample_meta` に持つ。
-    v2 のシートは、既知の列（と任意の `subject_id`）の後ろに因子の列（`Genotype`・`Treatment` など）を足せる。
-    列名は空でなく、既知の列・足した列どうしと重ならないこと（重なれば `SAMPLE_MANIFEST_INVALID`）。値はそのまま
-    試料の表に載り、analysis-spec v2 の `design.factors`・`covariates` が列名で引く。
-    統計エンジンはこれを使う: `dataset_preprocess`（`collapse_replicates=True` が既定）が同じ個体の反復注入を
-    1 個体にまとめる鍵で、`dataset_compare(block="subject_id")` が同じ個体を対応づける鍵。列が無いシートは
-    今までどおり（反復をまとめず、注入が単位）。
+    陽陰を統合したデータセット（`dataset_merge_polarities`）では、シートは陽イオンの raw を挙げ、`batch`・`injection_order` は
+    陽イオンの測定だけを決める（群・役割・include・subject_id・因子の列は両極性に効く）。陰イオンの測定を変えるなら、陰イオンの
+    ハンドルに陰イオンの raw を挙げたシートを当ててから統合し直す。統合し直すと統合したハンドルへ当てたシートと除外
+    （`dataset_exclude`）は引き継がれないので、陽イオンのシートは統合し直してできたハンドルか統合し直す前の陽イオンのハンドルに、
+    除外は統合し直してできたハンドルに当て直す。統合したデータセットに当てたときは戻り値の `notes` にこの旨を書く。
 
-    試料の表が変われば（`group` だけの変更・`subject_id` だけの変更でも）、統計エンジンの登録した行列
-    （`matrix_id`）・`dataset_compare` の結果・`dataset_pca` の結果はすべて古くなる（`changed_fields` で
-    何が変わったかを確認できる。古い `matrix_id` を渡すと `missing_state`）。やり直しは
-    `dataset_preprocess` を前と同じ引数で（既定でよいならそれを明示して）呼び直し、返った新しい
-    `matrix_id` を `dataset_compare` / `dataset_pca` に渡す。`matrix_id` を省いて `dataset_compare` だけを
-    呼び直すと既定の前処理で行列を作り直すので、前に選んだ前処理とは別の行列になりうる。
-    比較の前提検証は `dataset_compare`（統計エンジン。既定は moderated t）が守る: 群の明示を求め・
-    `include=false` と非 sample の役割を外し・完全交絡は既定では比べて印を付ける（`allow_confounded=false` で止める）。
-
-    陽陰を統合したデータセット（`dataset_merge_polarities`）では、シートは陽イオンの raw を挙げる（統合したデータセットの
-    試料の表は陽イオンのもの）ので、`batch`・`injection_order` は**陽イオンの測定だけ**を決める（群・役割・include・
-    subject_id・因子の列は試料ごとなので両極性の特徴に効く）。陰イオンの測定は統合が残した値のままで、変えるなら陰イオンの
-    ハンドルに陰イオンの raw を挙げたシートを当ててから `dataset_merge_polarities` で統合し直す。統合し直すと統合した
-    ハンドルへ当てたシートと除外（`dataset_exclude`）は引き継がれない（統合は陽イオンのハンドルの試料の表と、極性ごとの
-    ハンドルの除外を引き継ぐ）ので、陽イオンのシートは統合し直してできたハンドルか、統合し直す前の陽イオンのハンドルに
-    当て、統合したハンドルに当てていた除外は統合し直してできたハンドルに当て直す。統合したデータセットに当てたときは
-    戻り値の `notes` にこの旨を書く。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -398,112 +352,60 @@ def dataset_feature_search(
 ) -> str:
     """DatasetState の特徴を探し、目的の物質に当たる特徴を規則で判定する（読み取り専用）。
 
-    2 つの使い方があり、`targets` の有無で切り替わる（同時指定は `DATASET_BAD_REQUEST`）。
+    `targets` の有無で窓検索と目標照合が切り替わる（同時指定は `DATASET_BAD_REQUEST`）。戻り値の欄・判定・`rt_offset`・
+    `merge_split` の意味は `docs_read(topic="mztab")` の 13.8。
 
-    **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致）・`min_mz`/`max_mz`・
-    `min_rt`/`max_rt`（分）の AND。境界を含む。何も指定しなければ `FEATURE_SEARCH_EMPTY_QUERY`
-    （全件を返さない。`sort="intensity"` なら条件なしで上位 `max_results` 件）。`feature_ids=[]` は
-    「どの ID でもない」条件で 0 件。`dataset_exclude` した特徴は出さない。
-    並びは `sort="mz"`（既定）で m/z 昇順、`sort="intensity"` で強度の降順。強度は検出セル
-    （gap-fill でない実測。除外した試料の列を除く）の値の**最大**で、ピークの高さ（データセットの
-    測定値）の最大——EIC のクロマトグラムの最大ではない。検出セルが無い特徴は最後。検出の印が無いデータセットは全セルの最大で並べ、`notes` に書く。
-    戻り値 `features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
-    n_detected normalized msi_level`。`evidence` は `sme`/`sml`/`none`、`n_detected` は検出セルの数
-    （除外した試料を除く。検出状態が無ければ空）、`normalized`（GOSLIN で標準化した名前）と
-    `msi_level` は解析フォルダのデータセットだけが持ち、mzTab-M では空。意味は
-    `lipidmix://docs/output-format/identity`）。注釈の無い特徴にも統計を付ける。
+    **窓検索**（`targets` なし）: `feature_ids`（SMF_ID の完全一致。`[]` は 0 件）・`min_mz`/`max_mz`・`min_rt`/`max_rt`（分）の
+    AND（境界を含む）。条件が無ければ `FEATURE_SEARCH_EMPTY_QUERY`（`sort="intensity"` なら条件なしで上位 `max_results` 件）。
+    `dataset_exclude` した特徴は出さない。`features` は TSV（`feature_id mz rt evidence name inchikey adduct n_sme ontology
+    n_detected normalized msi_level`）。注釈の無い特徴にも統計を付ける。
 
-    **目標照合**（`targets` あり、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。
-    先頭 14 文字で照合）と、`formula` か（`expected_mz` と `adduct`）。InChIKey が一意に決まらない
-    脂質の種は `inchikey` の代わりに `lipid_species`（`PC 34:4`・`PC 18:3_16:1`。GOSLIN の種の
-    レベルに直し、SME 候補の名前の種と照らす。分子種は確かめない。opt-in。同位体の標識のある内部標準の名前
-    （`PC 15:0_18:1(d7)`）は候補の側でも種に読まないので `FEATURE_TARGET_INVALID`——内部標準は窓検索で探す）。任意で `name` `ppm`
-    （既定 10）`rt_min` `rt_tol_min`（既定 0.3）`adduct_tiers` `polarity`。付加体の層を上から、
-    証拠の水準 `sme_match` → `sml_match` → `unannotated` の順に見て、qualified がちょうど 1 つの
-    ときだけ `resolved`。2 つ以上なら `needs_input`（`multiple_qualified_candidates`）、無ければ
-    `needs_input`（`no_qualified_candidate`）。**強度・ppm・RT の近さでは選ばない。**
-    `unannotated` は `rt_min` があるときだけ qualified。SME（MS/MS 同定）が別物質なら落とす。
-    極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決め、`rule.polarity_source` に書く。
-    目標の極性は `polarity`、省けば明示した付加体（`adduct`/`adduct_tiers`）の符号で、
-    データセットと違う目標は `not_applicable`（陽陰が混ざる付加体は `FEATURE_TARGET_INVALID`）。
-    戻り値 `targets`（目標ごとの判定と段ごとの件数）・`candidates`（TSV。目標ごとに
-    `max_results` 件まで）・`rule`（正規化した規則と `rule_hash`。result_id・表示名 `name`・
-    目標の並び順を含まないので、同じ目標・同じ極性なら別の session でも同じ hash）。hash は表示用の丸め（理論 m/z を
-    4 桁に）より前の値から作るので、返された `rule.targets` から計算し直すことはできない
-    ——照合は `rule_hash` の値どうしで行う。付加体の層の既定は、陽イオン `[M+H]+ [M]+` ／
-    `[M+Na]+ [M+NH4]+ [M+H-H2O]+ [M+H-NH3]+ [2M+H]+ [M+2H]2+ [M+CH3OH+H]+ [M+H-2H2O]+`、陰イオン
-    `[M-H]-` ／ `[M-H2O-H]- [M+Cl]- [M+FA-H]- [M+CH3COO]- [2M-H]- [M+Na-2H]-`。
-    `rt_offset`（目標照合だけ）: 目標の `rt_min` と特徴の一意の一致（質量の窓・`rt_min` の ±2 分・MS/MS が
-    別物質でない特徴が付加体ごとにたかだか 1 つで、それらが 0.05 分以内に同時溶出し、その特徴に合う目標も
-    1 つ。同じ化合物の `[M+H]+` と `[M+Na]+` などは 1 組）から推定した系統的な RT のずれ（特徴 − 目標、分）。
-    `{n_pairs, median_min, q1_min, q3_min, shift_min, criteria}`。`shift_min` は一意の一致が 10 以上かつ
-    |中央値| > 0.2 分のときだけ値が入り（ほかは null と `reason`）、照合には当てない。
+    **目標照合**（`targets`、1 回 50 件まで）: 各要素は `target_id`・`inchikey`（必須。先頭 14 文字で照合）と、`formula` か
+    （`expected_mz` と `adduct`）。InChIKey が一意に決まらない脂質の種は `inchikey` の代わりに `lipid_species`（`PC 34:4`・
+    `PC 18:3_16:1`。opt-in。分子種は確かめない。同位体の標識のある内部標準の名前は `FEATURE_TARGET_INVALID`——窓検索で探す）。
+    任意で `name`・`ppm`（既定 10）・`rt_min`・`rt_tol_min`（既定 0.3）・`adduct_tiers`・`polarity`（省けば明示した付加体の符号。
+    データセットと違う目標は `not_applicable`、陽陰が混ざる付加体は `FEATURE_TARGET_INVALID`）。付加体の層を上から、証拠の水準
+    `sme_match` → `sml_match` → `unannotated`（`rt_min` があるときだけ qualified）の順に見て、qualified がちょうど 1 つのときだけ
+    `resolved`、2 つ以上なら `needs_input`（`multiple_qualified_candidates`）、無ければ `needs_input`（`no_qualified_candidate`）。
+    強度・ppm・RT の近さでは選ばない。データセットの極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決める
+    （`rule.polarity_source`）。戻り値は `targets`・`candidates`（TSV。目標ごとに `max_results` 件まで）・`rule`（正規化した規則と
+    `rule_hash`。`rule.targets` から hash を計算し直せないので、照合は `rule_hash` の値どうしで行う）・`rt_offset`（系統的な
+    RT のずれの見積もり。照合には当てない）。付加体の層の既定は、陽イオン `[M+H]+ [M]+` ／ `[M+Na]+ [M+NH4]+ [M+H-H2O]+
+    [M+H-NH3]+ [2M+H]+ [M+2H]2+ [M+CH3OH+H]+ [M+H-2H2O]+`、陰イオン `[M-H]-` ／ `[M-H2O-H]- [M+Cl]- [M+FA-H]- [M+CH3COO]-
+    [2M-H]- [M+Na-2H]-`。
 
-    include_statistics: False なら比較の統計（`stats`・`stats_unmerged`・`results`・`stats_source`）を
-        付けない（前処理などを決める前に群の差を見ないため。既定 True）。
-    result_ids: 統計を付ける 2 群比較（`dataset_compare` の結果の対比）。省略時は
-        今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。`dataset_compare` の結果は対比ごとに
-        1 つの比較として数え、ID は対比が 1 つなら `result_id`、複数なら `result_id#contrast_id`
-        （交互作用の対比は 2 群の形にならないので使わない）。名指しした ID が無い・古いときは
-        `missing_state`。差次的結果が 1 件も無ければ統計なしで返す。比較の統計が付かない呼び出し
-        （結果が無い・`include_statistics=false`・`result_ids=[]`）では、統計にだけ効く引数
-        （`with_group_labels`・`contrast_id`・`result_ids`、窓検索の `alignment_qc_path`・`merge_split=false`）を
-        誤りにせず、効かなかったことを `notes` に書く。
-    contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。
-        どの結果にも無い対比・名指しと食い違う対比は誤り（`CONTRAST_REQUIRED` / `DATASET_BAD_REQUEST`）。
-        対比を選ばないと読めない曖昧さは誤りでなく `needs_input`（`argument="contrast_id"`、選択肢は対比の一覧。
-        ほかの対比を選ぶツールと同じ `contrast_envelope`）。
+    include_statistics: False なら比較の統計（`stats`・`stats_unmerged`・`results`・`stats_source`）を付けない（前処理などを
+        決める前に群の差を見ないとき。既定 True）。
+    result_ids: 統計を付ける 2 群比較。省略時は今も有効な 2 群比較の全部（古いものは使わず `notes` に挙げる）。ID は対比が 1 つなら
+        `result_id`、複数なら `result_id#contrast_id`（交互作用の対比は使わない）。名指しした ID が無い・古いときは `missing_state`。
+        差次的結果が 1 件も無ければ統計なしで返す。統計の付かない呼び出しでは、統計にだけ効く引数（`with_group_labels`・
+        `contrast_id`・`result_ids`、窓検索の `alignment_qc_path`・`merge_split=false`）を誤りにせず `notes` に書く。
+    contrast_id: `dataset_compare` の結果から使う対比を 1 つに絞る（その対比が無い結果は飛ばす）。どの結果にも無い対比・名指しと
+        食い違う対比は `CONTRAST_REQUIRED` / `DATASET_BAD_REQUEST`。対比を選ばないと読めない曖昧さは `needs_input`
+        （`argument="contrast_id"`、選択肢は対比の一覧）。
     max_results: 窓検索の行数・目標ごとの候補数の上限（既定 20）。打ち切りは `notes` に書く。
-    sort: 窓検索の並び（`mz` 既定 / `intensity`）。目標照合（`targets`）では効かない（規則の順で並べる。
-        誤りにせず `notes` に書く）。`mz` / `intensity` 以外は `DATASET_BAD_REQUEST`。
+    sort: 窓検索の並び（`mz` 既定 = m/z 昇順 / `intensity` = 検出セルの値の最大の降順）。目標照合では効かない（`notes` に書く）。
+        ほかの値は `DATASET_BAD_REQUEST`。
+    with_group_labels: True（opt-in）なら `stats` の末尾に `comparison`（`<group_b>_vs_<group_a>`）・`group_a`・`group_b`・
+        `log2fc_test_over_ref` を足す。既定 False では列は変わらない。
+    merge_split: True（既定）なら、割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）を試料ごとの大きい方の
+        値で 1 列にまとめた行列で、差次的結果と同じ前処理・同じ検定・まとめた後の全特徴での BH をやり直した値を `stats` に出す
+        （組が 1 つでもあれば全行。組が無ければやり直さない）。目標照合でも組の 2 スポットを 1 つの候補と数える。まとめる前の値は
+        `stats_unmerged`、組は `merged_from`。やり直せないときは `FEATURE_MERGE_UNAVAILABLE`。False なら従来どおり。
+    alignment_qc_path: `dataset_alignment_qc` が今のデータセットで書いた JSON。省略時はこのハンドルで `dataset_alignment_qc` が
+        最後に出した結果（データ・試料の表・除外が変わっていないもの）、無ければその場で既定の閾値で探す（使った方は
+        `merge_split.source`）。`merge_split=False` では読まずに `notes` に書く。
+    rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする（幅 `rt_tol_min` と
+        `candidates.delta_rt` 列は変えない）。`rt_min` のある目標にだけ効き、渡したときだけ `rule_hash` に入る。どの目標にも
+        `rt_min` が無いとき・窓検索では使わずに `notes` に書く。有限の数でなければ `DATASET_BAD_REQUEST`。
+    ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200, "offset": -8.3}]}`。中心は
+        「実測 − 理論」の ppm で、帯は理論 m/z が `max_mz` 未満の最初の帯（無ければ `default`）。幅（目標の `ppm`）と候補の `ppm`
+        列は変えず、渡したときだけ `rule_hash` に入る。窓検索では効かない（`notes`）。形の誤りは `DATASET_BAD_REQUEST`。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
 
-    `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b
-    detected_units_a detected_units_b presence_p detection_driven`）。
-    `status` は `tested` / `not_in_matrix`（前処理で落ちた）/ `not_testable`（p が無い）で、
-    後の 2 つは数値欄が空（「差が無かった」ではない）。`detected_*` は群ごとの実検出例数
-    （注入単位。gap-fill を数えない。検出状態が無ければ空）。`detected_units_*` は比較の記録の個体単位の検出数
-    （反復注入をまとめていなければ `detected_*` と同じ）、`presence_p` は検出の有無の Fisher の正確検定の
-    p（比較の記録の値。個体単位。有効 4 桁）、`detection_driven` は差が値の大小でなく検出の有無から
-    来ているか（高い側の群の検出が個体の半数未満か、低い側の検出が 0。`tested` の行だけ）。`results` に BH の母集団
-    （`bh_population`）と caveat。キュレーションのフラグは反映しない（あれば `notes`）。
-    欄の意味は `lipidmix://docs/output-format/mztab`。
-
-    with_group_labels: True（opt-in。再解析で使う）なら `stats` の末尾に `comparison`
-        （`<group_b>_vs_<group_a>`）・
-        `group_a`・`group_b`・`log2fc_test_over_ref`（`log2fc` と同じ値を、比較名と同じ向きの
-        名前で）を足す。既定 False では列は変わらない。
-
-    merge_split: True（既定）なら、1 つの物質が 2 つに割れたアライメントスポット
-        （`dataset_alignment_qc` の `merge_groups`。互いに最も近い mergeable な 2 スポット）を
-        試料ごとの大きい方の値で 1 列にまとめた行列で、差次的結果と同じ前処理のレシピ・同じ検定
-        （`dataset_compare` の記録した spec を当て直す）・**まとめた後の全特徴**での BH をやり直した値を `stats` に出す。
-        まとめる組がデータセットに 1 つでもあれば**すべての行**をやり直した値にする（1 つの表の q は
-        1 つの BH の母集団から）。組が無ければやり直さず従来の値。目標照合でも組の 2 スポットを
-        1 つの候補（残す ID。`targets[].merged_from`・`candidates` の末尾の `merged_from`）と数える。
-        `stats` の末尾に `merged_from`（まとめた 2 つの ID を `;` で。先頭が残す ID＝受け持ちの多い側、同数なら小さい ID で、消える
-        側の ID を頼んでも残す ID の行に解く）、`stats_unmerged` にまとめる前の従来の `stats`
-        （同じ列・頼んだ ID のまま）、`merge_split` に出所・まとめた組・やり直した結果と BH の
-        母集団。False なら従来どおり（`stats_unmerged` も `merged_from` 列も無い）。
-    alignment_qc_path: `dataset_alignment_qc` が書いた JSON（今のデータセットで作ったものだけ）。
-        省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果（データ・試料の表・除外が
-        変わっていないもの）、無ければその場で割れを探す（既定の閾値）。使った方は `merge_split.source`
-        （`alignment_qc` / `last_alignment_qc` / `find_split_pairs`）。`merge_split=False` では効かないので、
-        読まずに `notes` に書く（誤りにしない）。
-
-    rt_offset_min: 目標照合の RT の窓の中心のずれ（分、任意）。中心を `rt_min + rt_offset_min` にする
-        （幅 `rt_tol_min` と `candidates.delta_rt` 列（RT − rt_min）は変えない）。`rt_min` のある目標にだけ効き、
-        その目標の `rt_offset_min` と `rule.rt_offset_min` に出て `rule_hash` に入る（省けば従来と同じ hash）。
-        `rt_min` の無い目標には効かず、どの目標にも `rt_min` が無ければ使わずに `notes` に書く（`rule` にも
-        `rule_hash` にも入らない。一部の目標だけに無ければ、その `target_id` を `notes` に挙げる）。
-        窓検索では効かない（誤りにせず `notes` に書く）。有限の数でなければ `DATASET_BAD_REQUEST`。
-    ppm_offset: 目標照合の質量の窓の中心のずれ（任意）。`{"default": 0.0, "bands": [{"max_mz": 200,
-        "offset": -8.3}]}`。中心は「実測 − 理論」の ppm の符号つきの値で、帯は理論 m/z が `max_mz`
-        未満の最初の帯（無ければ `default`）。幅（目標の `ppm`）は変えず、候補の `ppm` 列も実測 − 理論の
-        まま。`rule.ppm_offset` と各目標の `ppm_offset`（付加体ごと）に出て `rule_hash` に入る。
-        窓検索（`targets` なし）では効かない（誤りにせず `notes` に書く）。形の誤りは `DATASET_BAD_REQUEST`。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    `stats` は TSV（`feature_id result_id status log2fc p q mean_a mean_b detected_a detected_b detected_units_a detected_units_b
+    presence_p detection_driven`）。`status` が `not_in_matrix` / `not_testable` の行は数値欄が空（「差が無かった」ではない）。
+    キュレーションのフラグは反映しない。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -796,26 +698,18 @@ def dataset_export_evidence_bundle(output_dir: str, result_id: str | None = None
                                    contrast_id: str | None = None) -> str:
     """2 群結果を根拠バンドル v3（samples・intensities・adduct・comparison.polarity）へ出力する。
 
-    `result_id`（`dataset_compare` の結果。省けば直近の差次的結果。`result_id#contrast_id` の形も受ける）は
-    `contrast_id` で対比を 1 つ選ぶ（対比が 1 つなら省略可。複数で省けば `needs_input`
-    〔`argument="contrast_id"`、選択肢は対比の一覧〕、未知の ID は `CONTRAST_REQUIRED`、交互作用は
-    `CONTRAST_NOT_TWO_GROUP`）。`comparison.method` は実際の検定名（`moderated_t` など）。`features.tsv` の
-    `q_value` と `significant` は契約どおり BH の q とその q で読んだ判定で、`comparison.correction` はいつも `BH`
-    （比較が `bonferroni` / `holm` / `none` なら同じ母集団で p から計算し直し、`comparison.p_adjust_method` と
-    `q_value_source`、戻り値の `notes` に書く）。`comparison.statistics`
-    に検定・CI 水準・判定規則・BH の母集団・単位。`intensities.tsv` は結果が読んだ行列の線形値
-    （正規化の後・log2 の前、補完なし＝`pre_imputation`）。探索専用のデータセットも断らず、manifest の
-    最上位と `comparison` に `exploratory`（`{exploratory_only: true, reason}`）を足す（戻り値にも）。
-    `annotations.tsv` の `msdial_sme` 行の来歴の `theoretical_mass_to_charge` はライブラリの記録のプリカーサー m/z
-    （mzTab-M の SME の値）だけ。`directory=` で開いたデータセットが組成式と付加体から計算した値は写さない（`null`）。
+    result_id: `dataset_compare` の結果（省けば直近の差次的結果。`result_id#contrast_id` の形も受ける）。
+    contrast_id: 対比を 1 つ選ぶ（対比が 1 つなら省略可）。複数で省けば `needs_input`（`argument="contrast_id"`、選択肢は対比の
+        一覧）、未知の ID は `CONTRAST_REQUIRED`、交互作用は `CONTRAST_NOT_TWO_GROUP`。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
 
-    spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で
-    結び、m/z・RT は検証にだけ使う。`.arf2` / `.dcl` はハンドルならそのハンドルのもの、対話の
-    セッションなら `load_dataset` と同じ探し方で決める。結べないときは links を空にし、
-    manifest の `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+    `features.tsv` の `q_value` と `significant` は BH の q とその q で読んだ判定（比較が `bonferroni` / `holm` / `none` なら同じ
+    母集団で p から計算し直し、戻り値の `notes` に書く）。`intensities.tsv` は結果が読んだ行列の線形値（正規化の後・log2 の前、
+    補完なし）。探索専用のデータセットも断らず、manifest の最上位と `comparison` に `exploratory` を足す（戻り値にも）。
+    spectrum_links は同じアラインメントの `.dcl` へ ID（SMF_ID == AlignmentID == `.dcl` の番号）で結ぶ（`.arf2` / `.dcl` は
+    ハンドルならそのハンドルのもの、対話のセッションなら `load_dataset` と同じ探し方）。結べないときは links を空にし、manifest の
+    `provenance.spectrum_links_status` と `spectrum_links_reason` に理由を書く。manifest と各ファイルの欄は
+    `docs_read(topic="reanalysis", section="根拠バンドル")`。
     """
     from metabolomix.analysis.evidence_export import export_dataset_evidence
     from metabolomix.curation import apply as curation_apply

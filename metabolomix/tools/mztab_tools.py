@@ -93,41 +93,25 @@ def sample_group_role_counts(ds) -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_status(dataset_handle: str | None = None, view: str = "summary",
                    query: str | None = None) -> str:
-    """現在の DatasetState の状態を返す。`view` で何を見るかを選ぶ。
+    """現在の DatasetState の状態を返す。`view` で何を見るかを選ぶ。データセットが無ければ missing_state（先に load_dataset）。
 
     view:
-      - `"summary"`（既定）: 概要。`samples` に name/role の TSV が入る。群（Class ID）ごとの件数 `groups` に
-        dataset_compare の reference_group / test_group の群名が並ぶ（そのまま使う）・
-        役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数 `tags`・
-        除外の件数 `excluded`（`dataset_exclude`）を含む。`groups` と `n_ungrouped` は統計に入る試料だけを
-        数え、外した試料は群 → 件数で分ける: 実験情報シートの include=false の試料（群 `unassigned` など）は
-        `excluded_by_sheet`、`dataset_exclude` で外した試料は `excluded_by_dataset_exclude`（シートでも外した
-        試料はシートの側だけ。どちらも 1 件も無ければ鍵ごと出さない）。
-      - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・
-        injection_order_source・subject_id・excluded。`*_source` は値の出所 sheet / mddata / mzTab /
-        raw_acquisition_time / filename（後の 2 つはシートの宣言 `# injection_order_source = ...`）
-        （シートの空欄を .mddata・mzTab-M で埋めた値もその出所で示す）。バッチが空で試料名に 8 桁があれば
-        batch_source は `candidate:<8 桁>`（候補。統計には当てない）。`excluded` は除外の理由、
-        除外していなければ空）。`query` で絞れる。
-      - `"tags"`: タグごとの特徴 ID（各タグ先頭 50 件まで。`n_features` は全件数）。`query` に
-        タグ名を渡すとそのタグだけ。
-      - `"results"`: このハンドルの統計の行列と結果の一覧（TSV 2 本）。`matrices` は
-        `matrix_id current drift filters normalize n_features n_units excluded_samples excluded_features
-        group_overrides`（`current` は今の除外・試料の表で作った行列か。古い行列 ID はツールが
-        missing_state で断る）、`results` は `result_id kind matrix_id contrasts origin current last`
-        （`contrasts` は compare の対比 ID、`origin` は overview なら最初の概観が回したもの、`last` は
-        図・書き出しの既定の直近の結果か）。掘るときは `result_id`（と `contrast_id`）を渡す。
-    query: `view="samples"` では因子トークン。`_` 区切りで全トークンを含む試料に一致（順不同の AND）し、
-        `,` で区切った複数の指定は OR。トークンは試料名・群（Class ID）から取る（日付や拡張子の
-        処理タイムスタンプは除く）。QC・ブランクも落とさない（role 列で見分ける）。例 `"ILG_6h"`、
-        `"ILG_6h,control_6h"`。1 件も一致しなければ使えるトークンの語彙を添えて拒む。
-        `view="summary"` / `"results"` では効かないので、使わずにその旨を `notes` に書く（断らない）。
-
-    load_dataset を先に実行しておくこと。
-    未実行の場合は missing_state エンベロープを返す。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
+      - `"summary"`（既定）: 概要。`samples` に name/role の TSV。群（Class ID）ごとの件数 `groups`（dataset_compare の
+        reference_group / test_group にそのまま使う群名）・役割ごとの件数 `roles`・群の無い試料の数 `n_ungrouped`・特徴のタグごとの件数
+        `tags`・除外の件数 `excluded`。`groups` と `n_ungrouped` は統計に入る試料だけを数え、外した試料は群 → 件数で
+        `excluded_by_sheet`（シートの include=false）と `excluded_by_dataset_exclude` に分ける。
+      - `"samples"`: 試料の TSV（name・group・role・batch・batch_source・injection_order・injection_order_source・subject_id・
+        excluded）。`*_source` は値の出所（sheet / mddata / mzTab / raw_acquisition_time / filename。後の 2 つはシートの宣言
+        `# injection_order_source = ...`。シートの空欄を .mddata・mzTab-M で埋めた値もその出所）。`query` で絞れる。
+      - `"tags"`: タグごとの特徴 ID（各タグ先頭 50 件まで。`n_features` は全件数）。`query` にタグ名を渡すとそのタグだけ。
+      - `"results"`: このハンドルの統計の行列 `matrices` と結果 `results` の TSV 2 本（`current` は今の除外・試料の表で作ったものか。
+        古い行列 ID はツールが missing_state で断る）。掘るときは `result_id`（と `contrast_id`）を渡す。
+      各欄の意味は `docs_read(topic="mztab")` の 13.5b。
+    query: `view="samples"` では因子トークン。`_` 区切りで全トークンを含む試料に一致（順不同の AND）し、`,` で区切った複数の指定は
+        OR（例 `"ILG_6h"`、`"ILG_6h,control_6h"`）。トークンは試料名・群（Class ID）から取る（日付や拡張子の処理タイムスタンプは除く）。
+        QC・ブランクも落とさない。1 件も一致しなければ使えるトークンの語彙を添えて拒む。`view="summary"` / `"results"` では効かない
+        ので、使わずに `notes` に書く（断らない）。
+    dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。ハンドルの状態だけを読み書きする。
     """
     from metabolomix.tools._holder import resolve_holder
 
