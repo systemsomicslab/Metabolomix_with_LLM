@@ -76,7 +76,7 @@ def _not_remembered(record: dict | None) -> dict:
     """`LIBRARY_NOT_REMEMBERED`: データセットが同定に使ったライブラリを覚えていない。
 
     候補は**ファイル名だけ**（研究室ライブラリの置き場所は戻り値に出さない）: 記憶が絞り切れなかった
-    候補と、設定の極性ごとの MSP の名前。どれも自動では開かない——選ぶのは利用者で、`file_path` で渡す。
+    候補と、設定の極性ごとの MSP の名前。どれも自動では開かない（`file_path` で渡す）。
     """
     names = list((record or {}).get("candidates") or [])
     for key in user_config.MSP_SETTING_KEYS.values():

@@ -309,9 +309,8 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
     一致ピーク 0 は順位を下げる。MS-DIAL の脂質規則は評価していない（鎖組成は保証しない）ので、
     既定では和組成で記録する。
     戻り値は 1 スポット 1 行の TSV（強い説明のあるものが先、先頭 `max_rows` 行）・件数・`html_path`。
-    ユーザーには `html_path` をブラウザで開いてもらい、選んだ内容をビューアの **送信** で送ってもらう
-    （記録と `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを
-    貼るよう頼まない。Copy のテキストが貼られたとき（受け口の時間切れ・`submit.via == "copy"`）は
+    `html_path` はブラウザで開くビューア。ビューアの **送信** が記録と `_tags.xml` の反映を直接行う
+    （`submit.via == "viewer"`）。Copy のテキスト（受け口の時間切れ・`submit.via == "copy"`）は
     curation_submit(submission_text=...) に渡す。
     戻り値の `library` は使った参照ライブラリのファイル名（`file`）と `sha256`（置き場所は出さない）。
     """
@@ -370,14 +369,14 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
                     dataset_handle: str | None = None) -> str:
     """キュレーションのフラグを記録する（追記。フラグの無いスポットは「間違っていない」で何も書かない）。
 
-    ユーザーがビューアの「送信用テキストをコピー」で貼った文をそのまま `submission_text` に渡す
-    （`CURATION_SUBMIT ` で始まる行だけを読む。書き写さないこと）。直接渡すなら `review_id` と
+    ビューアの「送信用テキストをコピー」の文は、そのまま `submission_text` に渡す
+    （`CURATION_SUBMIT ` で始まる行だけを読む）。直接渡すなら `review_id` と
     `flags=[{"spot_id": 12, "flag": "wrong" | "suspect" | "confirmed" | "clear", "note": "..."}]`
     （confirmed = 注釈が正しいと確かめた。wrong / suspect と排他）。
     候補付け（`cs-…`）の送信は `flags=[{spot_id, flag: assign|redundant|clear, candidate: "L1"|"R1",
     level: sum|species, note}]`。候補の中身（名前・InChIKey）は保存済みの候補付けから展開するので、
     送信側で名前を書かない。assign / redundant は `_tags.xml` を変えない。
-    `source` は判断の出どころ: ユーザーが出した判断は "user"（既定。ビューアの送信はいつも "user"）、
+    `source` は判断の出どころ: 人の判断は "user"（既定。ビューアの送信はいつも "user"）、
     LLM が出した判断は "llm"。記録の各行に残り、curation_flags の source 列に出る。
     `review_id` を省くと（送信用テキストも無いとき）、データセット（`dataset_handle`、省けば直近）の
     `.arf2` に対する最新のレビュー（`cr-…`）を使い、戻り値の `review_id` と `review_id_source: "latest"` で示す
@@ -396,7 +395,7 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
     控えは `curation/tags-backup/`）。結果は `tags_xml`（`added` / `removed` は Misannotation、
     `confirmed` は Confirmed の変化）。
     反映に失敗しても記録は残る。MS-DIAL でプロジェクトを開いたままだと GUI の保存で
-    上書きされるので、`tags_xml.note` をユーザーに伝える。
+    上書きされる（`tags_xml.note` に書く）。
     """
     if source not in ("user", "llm"):
         return _error("source は 'user' か 'llm' にしてください。")

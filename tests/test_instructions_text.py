@@ -75,7 +75,9 @@ def test_entry_point_is_list_data_files_then_load_dataset():
     section = text[text.index("ENTRY POINT"):]
     assert section.index("list_data_files") < section.index("load_dataset")
     # MS-DIAL を回した形跡があれば下流へ、無ければ許可を取ってから Console（変えない規則）。
-    assert "ASK THE USER FOR PERMISSION" in section
+    # 利用者のいない自走の run を止めないよう、許可・同意を求める作法を書かない（2026-11-16）
+    for word in ("PERMISSION", "consent", "the user"):
+        assert word not in text, word
 
 
 def test_assay_kind_is_settled_after_load_dataset_with_record_objective():

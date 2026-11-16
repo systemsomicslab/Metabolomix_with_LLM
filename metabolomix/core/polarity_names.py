@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-__all__ = ["POLARITIES", "normalize_polarity"]
+__all__ = ["POLARITIES", "canonical_polarity", "normalize_polarity"]
 
 POLARITIES = ("positive", "negative")
 
@@ -25,3 +25,12 @@ def normalize_polarity(value, *, field: str = "polarity") -> str:
             return _ALIASES[key]
     raise ValueError(
         f'{field} は "positive" / "negative"（"pos" / "neg" / "+" / "-" も可）のいずれかです: {value!r}')
+
+
+def canonical_polarity(value):
+    """読める表記（`normalize_polarity` と同じ別名）は `"positive"` / `"negative"` に、それ以外
+    （None・読めない値）はそのまま返す。受け口の検証が、読めない値を元の綴りで名指しして断る。"""
+    try:
+        return normalize_polarity(value)
+    except ValueError:
+        return value

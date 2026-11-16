@@ -150,14 +150,14 @@ def dataset_preprocess(
         "all"（全体）。検出の別が無いデータでは評価できない旨を steps に出す。
     max_qc_rsd: QC の RSD がこれを超える特徴を除く（既定 0.30）。max_d_ratio: D-ratio の上限（既定 0.5）。
     上の 4 つの足切りは None でその足切りを行わない。
-    normalize: "auto"（既定。換算済みなら何もしない）/ "none" / "tic" / "median" / "pqn"。
-        PQN の参照は QC があれば QC の、無ければ生体試料（全群）の特徴ごとの中央値（QC が無いときは
-        steps の `reference_definition` と warnings の `pqn_reference_is_samples` で明示する）。
+    normalize: "auto"（既定。換算済みか QC が無ければ何もしない。それ以外は PQN）/ "none" / "tic" /
+        "median" / "pqn"。QC が無いデータで "pqn" を明示すると、参照は生体試料（全群）の特徴ごとの中央値
+        （steps の `reference_definition` と warnings の `pqn_reference_is_samples`）。
     normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。
         内部標準など）。normalization_exclude_features: 係数の計算から外す特徴 ID。どちらも係数の計算だけで、
-        外した特徴も行列には残り、係数で割られる。normalize="none"（と、換算済みのデータで "none" に決まった
-        "auto"）では効かないので使わず、warnings の `normalization_features_ignored`（reason が method_none /
-        quant_normalized）に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
+        外した特徴も行列には残り、係数で割られる。normalize="none"（と、"none" に決まった "auto"）では
+        効かないので使わず、warnings の `normalization_features_ignored`（reason が method_none /
+        quant_normalized / no_qc）に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
         （`normalization_features_empty`）。
     collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。

@@ -847,15 +847,15 @@ _NO_FILTERS = {"drift": {"mode": "off"},
                "filters": {"blank_ratio": None, "detection": None, "qc_rsd": None, "d_ratio": None}}
 
 
-def test_constant_in_group_reads_raw_injections_under_default_normalization():
-    """D4 は読んだ値（正規化の前）で探す: 既定の正規化（auto → PQN）は試料ごとの係数で埋め値を散らす。"""
+def test_constant_in_group_reads_raw_injections_under_pqn():
+    """D4 は読んだ値（正規化の前）で探す: PQN は試料ごとの係数で埋め値を散らす。"""
     from metabolomix.analysis.stats.preprocess import preprocess
 
     rng = np.random.default_rng(7)
     values = rng.lognormal(10.0, 0.4, (10, 6))
     values[:5, 0] = 1000.0                                  # A の 5 試料を同じ値で埋めた
     rows = [(f"s{i}", "sample", "A" if i < 5 else "B", None) for i in range(10)]
-    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"]})
+    prep = preprocess(_study(values, rows), {"filters": _NO_FILTERS["filters"], "normalize": {"method": "pqn"}})
     assert next(s for s in prep.steps if s["step"] == "normalize")["method"] == "pqn"
     assert np.ptp(prep.log2[:5, 0]) > 0.05                  # 検定する log2 では A の f0 はもう一定でない
     assert np.array_equal(prep.sample_raw_values, values)   # 読んだ値（注入 × 特徴）

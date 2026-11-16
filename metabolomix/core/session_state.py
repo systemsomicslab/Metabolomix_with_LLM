@@ -65,7 +65,7 @@ def normalize_assay_kind(assay_kind: str) -> str:
 _ASSAY_CAVEAT_LINE = {
     "lipid": "- 脂質名: 34:1(species)と 16:0/18:1(molecular)は別粒度。P-/O-は曖昧(§2.1)。",
     "metabolite": "- 一般代謝物: 名前1件は候補の代表。アダクト/異性体/候補順位を確認。脂質名文法(§2.1)は不適用。",
-    "unknown": "- アッセイ種別が未確定。確定するまで脂質名文法(§2.1)も脂質クラス知識も当てない。",
+    "unknown": "- アッセイ種別は未確定（record_objective(assay_kind=...) で記録）。脂質名文法(§2.1)は脂質だけに当てはまる。",
 }
 
 

@@ -27,9 +27,8 @@ def server_update() -> str:
     """このMCPサーバ自身を origin/main へ更新する（git 早送り＋必要なら依存の再導入）。
 
     更新通知（`load_dataset` / `dataset_status` の
-    `update_available`）が出たときに呼ぶ。プロセスは触らないので、**適用後は
-    利用者が Claude Desktop を再起動する必要がある**——戻り値の `message` を
-    そのまま利用者へ伝えること。
+    `update_available`）が出たときに使う。プロセスは触らないので、**適用は Claude Desktop を
+    再起動するまで効かない**（戻り値の `message` に書く）。
 
     手元の未コミット変更がある・main 以外にいる・早送りできない・オフラインの
     いずれでも何もせずに `status="refused"` と `reason` を返す（例外は投げない）。

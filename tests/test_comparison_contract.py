@@ -74,6 +74,23 @@ def test_dataset_set_sample_metadata_reuses_pca_and_invalidates_differential(tmp
     assert ds.sample_metadata_rows[3]["group"] == "treated"
 
 
+def test_sample_manifest_updates_roles_read_by_other_tools(tmp_path):
+    """シートの役割は ds.roles にも入る（pathway_project などは ds.roles を読む）。
+    名前から qc と推した試料をシートで sample に直すと、行列と同じく ds.roles でも sample になる。"""
+    from metabolomix.analysis.sample_manifest import apply_sample_manifest
+
+    ds = _job_dataset_with_raws(tmp_path)
+    first = ds.sample_names[0]
+    ds.roles = {name: "sample" for name in ds.sample_names}
+    ds.roles[first] = "qc"                      # 名前から推した古い役割
+    manifest = tmp_path / "sample-manifest.tsv"
+    manifest.write_text(_manifest_text(ds, ["control"] * 4 + ["treated"] * 4), encoding="utf-8")
+    apply_sample_manifest(ds, str(manifest))
+
+    assert ds.roles[first] == "sample"
+    assert set(ds.roles) == set(ds.sample_names)
+
+
 def test_dataset_set_sample_metadata_does_not_mutate_session_on_failure(tmp_path):
     """シートが不正なら、apply_metadataの契約どおりdsを一切変更しない。"""
     from metabolomix.analysis.sample_manifest import apply_sample_manifest

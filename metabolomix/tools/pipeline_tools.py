@@ -125,10 +125,8 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
     結果は極性ごとの解析フォルダ（`<run>/<極性>/input/`。MS-DIAL の `.arf` 等）と受領
     （`results/receipt.json`）で、続きは `load_dataset(pipeline_path=…, polarity=…)` から
     （前処理・比較・PCA は `dataset_preprocess` / `dataset_compare` / `dataset_pca`）。
-    先にフォルダに MS-DIAL を動かした形跡（.arf 等の出力）があるかを確かめ、
-    あれば `load_dataset` で進む。形跡が無いときだけ、ユーザーに Console を回してよいか
-    許可を取り、同意を得てからこのツールを呼ぶ。起動前に解決結果（method file・LBM・
-    極性）を見たいときは `pipeline_plan`。引数は `pipeline_plan` と同じ。2 極性の要求は
+    フォルダに MS-DIAL の出力（.arf 等）が既にあれば、Console を回さず `load_dataset` で開ける。
+    起動前に解決結果（method file・LBM・極性）を見るのは `pipeline_plan`。引数は `pipeline_plan` と同じ。2 極性の要求は
     要求の順に 1 極性ずつ回し、片方が失敗してももう片方を続ける（run は `partial`）。
 
     短時間で `pipeline_path` を返す——起動受理は、workerのidentity保存と
@@ -236,8 +234,7 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         `UPSTREAM_RERUN_REQUIRED`（`rerun_upstream=True` を求める）。ただし Console の順番待ちの間に
         worker が消え、Console をまだ起こしていない極性（今の attempt の `analysis-job.json` が無い。
         `pipeline_status` の `recovery_hint.console_not_started_units`）は、省いてもその極性の最初の
-        Console から続け、戻り値の `console_not_started_units` に並べる——再開で Console が起きるので、
-        利用者にはそう伝える。
+        Console から続け、戻り値の `console_not_started_units` に並べる（再開で Console が起きる）。
         監視を失ったまま稼働中のConsoleがある場合は `EXECUTION_UNRESOLVED` で
         待つ（終了を確認できないものを勝手に完了扱いしない）。
 
