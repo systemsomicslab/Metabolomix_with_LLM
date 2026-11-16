@@ -1,62 +1,25 @@
 # ワークフロー: 参照ライブラリ（MS/MS スペクトル照合）
 
-`.dcl` の測定 MS/MS を参照ライブラリ（データセットが同定に使ったもの、または `file_path` で渡した
-`.msp` / `.dbs`）と突き合わせ、MS-DIAL の個別スコア定義を移植して採点し、対向プロットで確認する経路。
-前提状態の連鎖は 1 本道: `library_load` → `library_match_feature` →
-`library_plot_mirror`。どちらも未実行なら `missing_state` 封筒が前段のツール名を指す。
-
-`session.library`（他スロットとは独立）に `store`（開いたままの `LibraryStore`）と
-`last_match`（直近の照合結果。座標を含む）を持つ。値の**意味**は
-[library.md（output_format）](../output_format/library.md) を見ること。ここは
-呼び出し連鎖だけを記録する。
-
-```mermaid
-flowchart TD
-    LL[library_load] --> RES[path_resolvers.resolve_library_path<br/>明示パスの確認だけ]
-    LL --> OS[library.store.open_store]
-    OS --> BLD[library.store._build]
-    BLD --> ITR[library.store._iter_records_for]
-    ITR -->|.msp| MSP[library.msp.iter_records]
-    ITR -->|.dbs/.lbm2| DBS[library.dbs.iter_records]
-    BLD --> META[library.dbs.read_storage_meta]
-    LL -->|session.library.store| LM[library_match_feature]
-    LM --> MS[dcl.reader.get_msms_by_precursor]
-    LM --> WIN[analysis.spectral_match.fix_mass_tolerance<br/>前駆体の窓]
-    LM --> CAND[library.store.LibraryStore.candidates]
-    LM --> SCORE[analysis.spectral_match.match_spectrum]
-    LM --> TOT[analysis.spectral_match.total_score]
-    LM --> AGR[library.matching.msdial_agreement]
-    LM -->|session.library.last_match| LP[library_plot_mirror]
-    LP -.->|spot_id| RUN[library.tools._run_match]
-    LP --> MIR[plots.mirror.build_mirror_payload]
-    LP --> REND[plots.mirror.render_mirror]
-```
+`.dcl` の測定 MS/MS を参照ライブラリ（データセットが同定に使ったもの、または `file_path` で渡した `.msp` / `.dbs`）と
+突き合わせ、MS-DIAL の個別スコア定義で採点し、対向プロットで確かめる経路。前提状態の連鎖は
+`library_load` → `library_match_feature` → `library_plot_mirror`。前段が未実行なら `missing_state` 封筒が前段のツール名を指す。
+`session.library`（他スロットとは独立）に `store`（開いたままの `LibraryStore`）と `last_match`（直近の照合結果。座標を
+含む）を持つ。値の意味は [library.md（output_format）](../output_format/library.md)（以下の §14.N はその節）。
 
 ## library_load
 
-前提: なし（`file_path` を渡すか、直近のデータセットが同定のライブラリを覚えていること）。
-**探索は無い**（B-2b）: `file_path` の明示、無ければ直近のデータセット（または `dataset_handle`）が
-覚えた同定のライブラリ（`library_record`。`verify_record` が通った `known` だけ）。`mismatch`
-（`LIBRARY_RECORD_MISMATCH`）/ `lbm_only`（`LIBRARY_RECORD_LBM_ONLY`）は理由を返し、`unknown` なら
-`LIBRARY_NOT_REMEMBERED`（候補のファイル名と「`file_path` を渡す」の案内。名前だけで置き場所は出さない）。
-データセットが無ければ `missing_state("dataset", ["load_dataset"])`。`ion_mode` 引数も、データフォルダの
-`.dbs` / `.msp` の探索も、設定の極性の MSP（`[library] msp_positive` / `msp_negative`。Console にどれを
-使わせるかだけに残る）への後退も無い。明示の `file_path` が無いファイルなら `LibraryPathError` を `code` 付きの
-エラー戻り値（`LIBRARY_NOT_FOUND`）にする。
-状態変更: `session.library.store` / `source_path` を格納。`last_match` は
-`None` にリセットする（別ライブラリへの切り替えで、古い照合結果を新ライブラリの
-ものと取り違えないため）。
+前提: `file_path` を渡すか、直近のデータセット（または `dataset_handle`）が同定のライブラリ（`library_record`）を覚えて
+いること（`verify_record` が通った `known` だけ）。探索は無い（`ion_mode` 引数・データフォルダの `.dbs` / `.msp`・設定の
+極性の MSP〔`[library] msp_positive` / `msp_negative`。Console に使わせるものだけ〕への後退は無い）。記憶が `mismatch` なら
+`LIBRARY_RECORD_MISMATCH`、`lbm_only` なら `LIBRARY_RECORD_LBM_ONLY`、`unknown` なら `LIBRARY_NOT_REMEMBERED`、データセットが
+無ければ `missing_state("dataset", ["load_dataset"])`、明示の `file_path` が無ければ `LibraryPathError` を `LIBRARY_NOT_FOUND` の
+エラー戻り値に（§14.5）。
+状態変更: `session.library.store` / `source_path` を格納し、`last_match` を `None` に戻す（別ライブラリの照合結果と取り違えないため）。
 
-構築は元ファイルの sha256 をキーにした SQLite キャッシュへの初回変換で、
-2 回目以降（同一ファイル）は再構築しない。`rebuild=True` で強制再構築する。
-sha256 はキャッシュ置き場の対応表（`.library-digests.json`）に
-サイズ・更新時刻と組で覚え、両方が変わっていなければ計算し直さない
-（`_digest_for()`。`rebuild=True` のときは覚えた値を信じない）。
-`.msp` は 1 行ずつ読み、文字コードは行ごとに UTF-8 → cp932 → latin-1。
-
-同じ構築は MCP の外からも走らせられる（`python -m metabolomix.library.store`、
-`store.main()`。`--file` か `--ion-mode` の設定で指す）。初回の構築が
-MCP クライアントのタイムアウトに当たるときに使う。
+store は元ファイルの sha256 をキーにした SQLite キャッシュで、同じファイルは作り直さない（`rebuild=True` で作り直す）。sha256 は
+キャッシュ置き場の対応表（`.library-digests.json`）にサイズ・更新時刻と組で覚え、両方が変わらなければ測り直さない
+（`_digest_for()`。`rebuild=True` では覚えた値を使わない）。`.msp` は 1 行ずつ読み、文字コードは行ごとに UTF-8 → cp932 → latin-1。
+同じ構築を MCP の外で走らせる入口は `store.main()`（[cli.md](../cli.md) の `metabolomix.library.store`）。
 
 1. metabolomix/library/tools.py  library_load()
 2. ├─ [file_path を省いたとき] metabolomix/dataset/library_memory.py  verify_record()
@@ -74,33 +37,22 @@ MCP クライアントのタイムアウトに当たるときに使う。
 
 ## library_match_feature
 
-前提: `library_load` 実行済み（未実行なら手順 1 で `MissingState`。
-`session.library.store` が `None` のときに返す）
-状態変更: `session.library.last_match` を更新（測定スペクトル・候補ごとの参照
-スペクトルと alignment を保持。**戻り値には座標を含めない**）。
+前提: `library_load` 実行済み（`session.library.store` が `None` なら手順 1 で `MissingState`）。
+状態変更: `session.library.last_match` を更新（測定スペクトル・候補ごとの参照スペクトルと alignment。戻り値には座標を含めない）。
 
-許容幅（`mz_tol` / `ms2_tol` / `rt_tol`）は明示指定 > store の `search_params`
-（`.dbs` 由来のときだけ実値がある） > 既定値、の順で決める（`pick_tol()`、
-`metabolomix/library/defaults.py`）。**これはライブラリ候補検索（`store.candidates()`）
-にだけ効く**——`.dcl` から測定 MS/MS を引く窓（`_measured_spectrum`）はこれらを
-受け取らず、常に `dcl/reader.py` と同じ固定既定（`mz_tol=0.01`/`rt_tol=0.2`）を
-使う（Task 11 最終レビュー Important 7: ライブラリ用の広い許容幅——`.dbs` の
-`RtTolerance` 既定 100.0 など——を `.dcl` 側に流用すると、precursor m/z が近い
-別ピークの測定スペクトルを黙って拾ってしまうため分離した）。`.dcl` に MS/MS が
-無ければ `status="not_found"` を返し、候補が 0 件なら `status="no_candidates"` を
-返す——どちらも例外にはしない。
-
-照合対象は `precursor_mz` か `spot_id` のどちらか一方（両方・どちらも無しは
-`status="invalid_arguments"`）。`spot_id` のときは手順 2 で precursor m/z・RT・極性を
-`.arf2`（省けばデータセットの `.arf2`。データフォルダは探さない）から取り、測定スペクトルをアラインメント `.dcl` の `dcl[spot_id]` から
-直接読む（手順 8 の precursor 検索は通らない。同じ m/z の別スポットを拾わないため）。
-precursor・RT が ARF2 と ±0.05 Da・±0.2 分で合わなければ `dcl_precursor_mismatch`、ID が無ければ
-`spot_not_found` を返して照合しない。`ion_mode` は手順 4 で正規化し（`pos` / `neg` / `+` / `-` も可）、
-読めない値は `invalid_arguments`。`.arf2` の極性が `Both` / `Unknown` なら絞らない（`_arf2_polarity()`）。
-照合の芯（手順 6〜）は `_run_match()` で、`library_plot_mirror(spot_id=…)` も同じものを呼ぶ。照合を試みて
-失敗したら（ファイルが無い・`spot_not_found`・`dcl_precursor_mismatch`・`not_found`・`no_candidates`）
-`_clear_last_match()` が直前の `last_match` を捨てる。前駆体の窓は手順 16 で MS-DIAL と同じく
-m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
+- 許容幅（`mz_tol` / `ms2_tol` / `rt_tol`）は `pick_tol()`（`metabolomix/library/defaults.py`）が明示 > store の
+  `search_params`（`.dbs` 由来のときだけ）> 既定値の順で決め、`store.candidates()` にだけ効く。`.dcl` の測定 MS/MS を引く窓
+  （`_measured_spectrum`）は固定の `mz_tol=0.01` / `rt_tol=0.2`（§14.4）。
+- 照合対象は `precursor_mz` か `spot_id` のどちらか一方（両方・どちらも無しは `status="invalid_arguments"`）。`spot_id` では
+  手順 2 で precursor m/z・RT・極性を `.arf2`（省けばデータセットの `.arf2`。データフォルダは探さない）から取り、測定スペクトルを
+  アラインメント `.dcl` の `dcl[spot_id]` から直接読む（手順 8 の precursor 検索は通らない）。ARF2 と ±0.05 Da・±0.2 分で
+  合わなければ `dcl_precursor_mismatch`、ID が無ければ `spot_not_found`。`.arf2` の極性が `Both` / `Unknown` なら絞らない
+  （`_arf2_polarity()`）。
+- `ion_mode` は手順 4 で正規化（`pos` / `neg` / `+` / `-` も可。読めない値は `invalid_arguments`）。
+- `.dcl` に MS/MS が無ければ `status="not_found"`、候補が 0 件なら `status="no_candidates"`（例外にしない）。
+- 照合の芯（手順 6〜）は `_run_match()` で、`library_plot_mirror(spot_id=…)` も呼ぶ。照合を試みて失敗したら（ファイルが
+  無い・`spot_not_found`・`dcl_precursor_mismatch`・`not_found`・`no_candidates`）`_clear_last_match()` が `last_match` を捨てる。
+- 前駆体の窓は手順 18 で MS-DIAL と同じく m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
 
 1. metabolomix/library/tools.py  library_match_feature()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
@@ -144,38 +96,24 @@ m/z 500 を超えたら同じ ppm に広げる（`query.mz_window`）。
 40. └─ metabolomix/library/tools.py  identified_by_lbm()
 41.    └─ metabolomix/dataset/library_memory.py  is_lbm_annotator()  [記憶が lbm_also で spot_id の照合のとき]
 
-手順 20 の `cutoff_mask()` は候補ループの外で 1 回だけ呼ぶ（測定スペクトルと
-`.dbs` の足切りだけで決まり、候補には依存しないため）。ここで求めた
-「採点に入らなかったピークの m/z」を `last_match["unscored_mz"]` に持ち、
-`library_plot_mirror` が図の上でそれらを区別する。
-
-候補は `total_score` の降順（`_RANK_KEY`）＝ MS-DIAL の総合スコア。RT 項を足すか
-どうかは store の `search_params["use_time_for_annotation_scoring"]`（`.dbs` の
-`Key(16)`。`.msp` には無いので上流既定の `False`）で決まり、戻り値の `scoring` が
-その判断を明示する。TSV の列組み立てに `arf2/reader.py` の
-`format_spots_as_table()` を借用している（`.arf2` 専用ではなく汎用の TSV 整形ヘルパ）。
+手順 20 の `cutoff_mask()` は候補ループの外で 1 回だけ呼び（測定スペクトルと `.dbs` の足切りだけで決まる）、採点に
+入らなかったピークの m/z を `last_match["unscored_mz"]` に持つ（`library_plot_mirror` が区別して描く）。候補は `total_score` の
+降順（`_RANK_KEY`）。RT 項を足すかは store の `search_params["use_time_for_annotation_scoring"]`（`.dbs` の `Key(16)`。`.msp` は
+`False`）で、戻り値の `scoring` に出る（§14.9）。TSV の列は汎用の整形ヘルパ `arf2/reader.py` の `format_spots_as_table()` で組む。
 
 ## library_plot_mirror
 
-前提: `library_match_feature` の直近結果があること（未実行、または直前の照合が失敗して捨てられたなら
-手順 1 で `MissingState`）。`spot_id` を渡したときは、ライブラリだけが要る（手順 2 で照合し直す）。
+前提: `library_match_feature` の直近結果（未実行、または直前の照合が失敗して捨てられたなら手順 1 で `MissingState`）。
+`spot_id` を渡したときはライブラリだけが要る（手順 2 で照合し直す）。
 状態変更: `spot_id` を渡したときだけ `last_match` を書き換える（全候補。照合に失敗したら捨てて、その封筒を返す）。
 
-`candidate`（InChIKey か名前）を渡すと手順 3 で描く候補を選ぶ（`rank` より優先）。全体の InChIKey は
-全体の一致を先に探し、無いときだけ先頭ブロックで探す（選び方は `match.picked_by`）。どのスポット・前駆体・
-候補の図かを caption（画像）と `match`（payload）に出す。
-
-`ms2_tol` は `library_match_feature` が使った値（`last_match` に保持済み）を自動で
-引き継ぐ。`last_match["unscored_mz"]`（足切りで採点から外れた測定ピーク）も同じく
-引き継ぎ、その層は灰色で薄く描いて凡例と caption に件数を出す——足切りが 0 の
-run（既定）では空なので、図も caption も従来と変わらない。既定は画像（PNG）、
-`output="payload"` で座標 JSON（`lipidmix.mirror.v2`）を返す。`scale`（`"relative"` / `"sqrt"` / `"log10"`）は
-縦軸の写し方で、`render_mirror()` の中で `scale_intensity()` が各点に掛ける
-（`output="payload"` の座標は正規化前の生値なので `scale` の影響を受けない）。
-`label_policy`（`"auto"` / `"msdial"`）は m/z ラベルの衝突回避の方式で、
-`_draw_labels()` が**スペクトル全点**を強度降順に走査して重ならないものだけ描く
-（ピクセル座標が要るので描画時にしかできない——`payload["labels"]` は
-自前で描くクライアント向けの要約で、画像はこれを使わない）。
+- `candidate`（InChIKey か名前）は手順 3 で描く候補を選ぶ（`rank` より優先。選び方は `match.picked_by`）。図の主は
+  caption（画像）と `match`（payload）に出る（§14.7）。
+- `ms2_tol` と `unscored_mz` は `last_match` から引き継ぐ（足切りで外れたピークは灰色で薄く描き、凡例と caption に件数）。
+- 既定は画像（PNG）、`output="payload"` で座標 JSON（`lipidmix.mirror.v2`）。`scale`（`"relative"` / `"sqrt"` / `"log10"`）は
+  `render_mirror()` の中で `scale_intensity()` が各点に掛ける（payload の座標は正規化前の生値）。
+- `label_policy`（`"auto"` / `"msdial"`）は `_draw_labels()` がスペクトル全点を強度降順に走査して重ならないものだけ描く
+  （描画時だけ。`payload["labels"]` は画像には使わない）。
 
 1. metabolomix/library/tools.py  library_plot_mirror()
 2. └─ [spot_id] metabolomix/library/tools.py  _run_match()（`library_match_feature` の手順 6 と同じ。`top_n=-1`）
@@ -192,7 +130,7 @@ run（既定）では空なので、図も caption も従来と変わらない�
 ## library_search
 
 前提: `library_load` 済み（ハンドルならライブラリつきで開いたこと）。無ければ `missing_state`。
-状態変更: なし。読み取りだけ（`SELECT`）。ハンドルの store は `mode=ro` で開いてある。
+状態変更: なし（`SELECT` だけ。ハンドルの store は `mode=ro`）。
 
 1. metabolomix/library/tools.py  library_search()
 2. └─ metabolomix/tools/_holder.py  resolve_holder()
