@@ -113,20 +113,17 @@ def _pick_section(topic: str, text: str, section: str):
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def docs_read(topic: str | None = None, section: str | None = None, outline: bool = False) -> str:
-    """output-format の文書（出力の意味の定義）を Markdown で返す。読み取り専用。
+    """output-format の文書（出力の意味の定義）を Markdown で返す（読み取り専用）。
 
-    MCP のリソース `lipidmix://docs/output-format`（topic なし＝共通核）と
-    `lipidmix://docs/output-format/{topic}` のツール版。リソースを読めないクライアント
-    （Workflow の役など）は、こちらで同じ本文を読む。`section` と `outline` を省けば、
-    リソースと同じ文字列を返す。
+    リソース `lipidmix://docs/output-format`（共通核）と `lipidmix://docs/output-format/{topic}` を、リソースを
+    読めないクライアントが読むための道具。`section` と `outline` を省けばリソースと同じ文字列を返す。
 
-    topic: 省略すると共通核（行の粒度・脂質名の文法・必須の注意）。有効な topic は
-    `core`・`dataset`・`dcl`・`eic`・`identity`・`mztab`・`library`・`curation`・`pathway`・
-    `reanalysis`・`quant`。解釈する出力に合う topic を読む。知らない topic は
-    `DATASET_BAD_REQUEST` の誤りで、有効な topic の一覧を返す。
-    section: `## ` 見出しを 1 つ指して、その節（小節を含む）だけを返す。見出しの完全一致、無ければ
-        大文字小文字を無視した部分一致で選ぶ。0 個か複数に当たれば `DATASET_BAD_REQUEST` で、
-        候補の見出しを返す。大きな topic（dataset・reanalysis は約 5 万字）を分けて読むときに使う。
+    topic: 省けば共通核（行の粒度・脂質名の文法・必須の注意）。有効な topic は `core`・`dataset`・`dcl`・`eic`・
+        `identity`・`mztab`・`library`・`curation`・`pathway`・`reanalysis`・`quant`。知らない topic は
+        `DATASET_BAD_REQUEST`（有効な topic の一覧つき）。
+    section: `## ` 見出しを 1 つ指して、その節（小節を含む）だけを返す。完全一致、無ければ大文字小文字を無視した
+        部分一致で選ぶ。0 個か複数に当たれば `DATASET_BAD_REQUEST`（候補の見出しつき）。dataset・reanalysis
+        （約 5 万字）など大きな topic を分けて読むのに使う。
     outline: True なら本文の代わりに `## ` 見出しと字数の TSV を返す（section より先に効く）。
     """
     if topic is None and section is None and not outline:

@@ -329,40 +329,30 @@ def pathway_project(group_a: str | list[str] | None = None,
                     wait_seconds: float = 20.0) -> str:
     """前処理済みの脂質データを MSLipidMapper のパスウェイへ投影し、2 群を比べる。
 
-    返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は
-    解析フォルダの reports/pathway/<run_id>/ に残る。図は pathway_plot。
+    返すのは小さな表だけ（ノード表と、逆向きに動く隣接ペア）。JSON-LD・中間 mzTab-M は解析フォルダの
+    reports/pathway/<run_id>/ に残る。図は pathway_plot。入力は直近（か `dataset_handle`）のデータセットの統計
+    エンジンの行列で、run の置き場所もそのデータセットの解析フォルダ。
 
-    - 入力は `load_dataset` で開いた直近のデータセットの統計エンジンの行列
-      （`dataset_handle` でハンドルを選べる。run の置き場所もそのデータセットの解析フォルダ）。
-    - matrix_id: dataset_preprocess が返した行列 ID。省略時は dataset_compare / dataset_pca と同じく、この
-      ハンドルで dataset_preprocess が最後に作った行列、無ければ既定の前処理で行列を作って登録する（drift=auto
-      が補正を当てなかった行列なら、戻り値と manifest の warnings に drift_not_applied_by_default（理由と
-      呼び直し方。dataset_pca と同じ。補正するなら dataset_preprocess(drift_mode="on") の matrix_id を渡す））。
-      使った行列は戻り値と manifest の matrix_id と matrix_source
-      （"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id /
-      matrix_source）。古い・無い ID は missing_state。
-      MSLipidMapper へは行列の注入ごとの値（欠測は 0）を渡す。比べる単位は行列の units に従う:
-      collapse_replicates=True（既定）の行列で、試料の表に subject_id がある注入だけが log2 の平均で
-      1 個体にまとまる。collapse_replicates=False の行列（dataset_compare に渡したのと同じ matrix_id）
-      なら注入ごと。戻り値の n_units が群ごとの単位の数。
-    - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名になる）。
-      行列に無い試料（QC・ブランク・除外）を指すと PATHWAY_BAD_REQUEST。
+    - matrix_id: dataset_preprocess が返した行列 ID。省けば dataset_compare / dataset_pca と同じく、このハンドルで
+      dataset_preprocess が最後に作った行列、無ければ既定の前処理で行列を作って登録する（使った行列は戻り値と
+      manifest の matrix_id・matrix_source。drift=auto が補正を当てなかった行列なら warnings に
+      drift_not_applied_by_default）。古い・無い ID は missing_state。比べる単位（個体か注入か）は行列の units に
+      従い、群ごとの単位の数は n_units。
+    - group_a / group_b: サンプル名のリスト（group_a_label / group_b_label が群名）。行列に無い試料（QC・ブランク・
+      除外）を指すと PATHWAY_BAD_REQUEST。
     - pathways: remodeling / ceramide / global（既定は 3 つ全部）。
-    - acyl_chains: 例 ["18:0","20:4"]。指定すると鎖サブセットのスコープも比べる。分子種の入った鎖スコープが
-      どのパスウェイにも無い鎖は、その鎖のスコープが行にならないだけで run は返す（戻り値と manifest の
-      missing_chains と notes.acyl_chains）。
+    - acyl_chains: 例 ["18:0","20:4"]。鎖サブセットのスコープも比べる。分子種の入った鎖スコープがどのパスウェイにも
+      無い鎖は、そのスコープが行にならないだけで run は返す（missing_chains と notes.acyl_chains）。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
-    - method: スコープの比較の検定。dataset_compare の method と同じ値（moderated_t 既定 / welch /
-      student / mannwhitney）。主の比較と同じ検定にするなら同じ値を渡す。
-    検定はスコープ値の log2 で、BH はパスウェイ×スコープ種別ごと。log2fc は正なら group_b が高い。
-    call は verdict が changed なら up / down、検定できなければ NA、それ以外は ns。
-    ノードの値（とその和）はクラスの総量ではない（足切り後の特徴のうち、脂質として受け渡せた行だけ）。
-    MSLipidMapper はクラス（Ontology）と脂質の略記の名前を前提にする。assay_kind が lipid でなくても
-    動き、そのときは notes.assay_kind にその前提を書く（読めない行は handoff の dropped_* に数える）。
-    MSLipidMapper は [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い、使えなければローカルの R
-    （[mslipidmapper] rscript）で動かす。どちらで動いたかは戻り値の backend。
-    wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
-    返す（結果は `job_status(job_id=...)`。`handle_dispatch.LONG_RUNNING`）。
+    - method: スコープの比較の検定。dataset_compare の method と同じ値（moderated_t 既定 / welch / student /
+      mannwhitney）。
+    - wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を返す
+      （結果は `job_status(job_id=...)`）。
+
+    assay_kind を問わず動く（lipid でなければ notes.assay_kind に前提を書く）。[mslipidmapper] mslipidmapper_api_url
+    の研究室サーバを先に使い、使えなければローカルの R（[mslipidmapper] rscript）で動かす（どちらかは戻り値の
+    backend）。ノード表の列（log2fc・q・call など）、値の意味（クラスの総量ではない）、単位と行列の選び方は
+    `docs_read(topic="pathway")`。
     """
     from metabolomix.tools._holder import resolve_holder
 
@@ -537,19 +527,15 @@ def pathway_plot(run_id: str | None = None, pathways: list[str] | None = None,
                  dataset_handle: str | None = None):
     """pathway_project の run をパスウェイ図（PDF）に描く。既定は図のファイルの場所と要約だけを返す。
 
-    PDF と PNG（<pathway>.png）は run のディレクトリに書く。チャットに図を出したいときは
-    inline_image=true（PNG を画像で添えて返す。1 枚約 2,400 画像トークン）。
-
-    - run_id: 省略時は直近の run。
+    PDF と PNG（<pathway>.png）は run のディレクトリに書く。
+    - run_id: 省けば直近の run。
     - pathways: その run に含まれるものから選ぶ（既定は全部）。
-    - inline_image: true なら [要約の JSON, 画像…] を返す。既定 false は要約の JSON 文字列だけ。
-    - dataset_handle: run の置き場所（そのデータセットの解析フォルダ配下 reports/pathway）を決めるハンドル
-      （省略時は直近）。
-    - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順
-      （上流は config の plot.x_order を軸順と配色の両方に使う）。
-    [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、
-    使えなければローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と
-    unpkg.com への接続が要る。
+    - plot_type: dot | box | violin（ノード内のグラフ）。横軸の群は group_a, group_b, その他の群の順。
+    - inline_image: true なら [要約の JSON, PNG の画像…] を返す（1 枚約 2,400 画像トークン）。既定 false は要約の
+      JSON 文字列だけ。
+    - dataset_handle: run の置き場所（その解析フォルダ配下 reports/pathway）を決めるハンドル（省けば直近）。
+    [mslipidmapper] mslipidmapper_api_url の研究室サーバを先に使い（サーバは 3 パスウェイ全部を描く）、使えなければ
+    ローカルの R で描く。ローカルではヘッドレス Chromium（[mslipidmapper] browser）と unpkg.com への接続が要る。
     """
     from metabolomix.tools._holder import resolve_holder
 

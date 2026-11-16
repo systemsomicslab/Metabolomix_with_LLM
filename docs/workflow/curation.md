@@ -1,57 +1,15 @@
 # ワークフロー: アラインメントのキュレーション
 
-注釈付きスポットの証拠を集めて機械判別し、ビューアを書き出し、ユーザーのフラグを記録する経路。
-値の**意味**は [curation.md（output_format）](../output_format/curation.md)。
-
-```mermaid
-flowchart TD
-    CR[curation_review] --> LOAD[arf2.reader.load_catalog]
-    LOAD --> SEL[curation.evidence.select_spots]
-    CR --> RUN[curation.review.run_review]
-    RUN --> COL[curation.evidence.collect]
-    COL --> ANN[arf2.match_results.load_spot_annotations]
-    COL --> REF[library.store.LibraryStore.record_by_scan_id]
-    COL --> EIC[eic.reader.read_eic_spot_css1]
-    COL --> SHP[curation.eic_shape.spot_shape]
-    COL --> MS[analysis.spectral_match.match_spectrum]
-    COL --> MIR[plots.mirror.build_mirror_payload]
-    RUN --> TR[curation.trend.fit_trends]
-    RUN --> AI[curation.adduct_isomer.find_adduct_isomer]
-    RUN --> JG[curation.judge.judge_spot]
-    CR --> REG[curation.submit_server.register]
-    CR --> SAV[curation.review.save_review]
-    SAV --> HTML[curation.viewer.render_html]
-    CS[curation_submit] --> PAR[curation.flags.parse_submission_text]
-    CS --> SUB[curation.submission.submit_flags]
-    SUB --> VAL[curation.flags.validate_entries]
-    SUB --> APP[curation.flags.FlagStore.append]
-    SUB --> WB[curation.msdial_writeback.sync_tags]
-    WB --> TAG[msdial.tags.update_alignment_tag]
-    CG[curation_suggest] --> LRV[curation.suggest.latest_review]
-    CG --> RS[curation.suggest.run_suggestion]
-    RS --> TG[curation.suggest.select_targets]
-    RS --> IF[arf2.ion_features.load_ion_features]
-    RS --> AP[msdial.analysis_params.resolve_analysis_params]
-    RS --> COL
-    RS --> LC[curation.candidates.build_library_candidates]
-    RS --> FR[curation.relations.find_relations]
-    CG --> REG
-    CG --> SS[curation.suggest.save_suggestion]
-    SS --> SH[curation.viewer.render_suggest_html]
-    HTTP[viewer Submit] --> SUB
-    CS --> LD[curation.submission.load_saved]
-    LD --> LS[curation.suggest.load_suggestion]
-    SUB --> EX[curation.suggest.expand_entries]
-```
+注釈付きスポットの証拠を集めて機械判別し、ビューアを書き出し、人が付けたフラグを記録する経路。
+値の意味は [curation.md（output_format）](../output_format/curation.md)。
 
 ## curation_review
 
-前提: データセットがあること（`dataset_handle`、省けば直近。無い・閉じていれば
-`missing_state("dataset", ["load_dataset"])` か `DATASET_HANDLE_NOT_FOUND`。`data/` や別のハンドルへは落ちない）、
-そのデータセットが `.arf2` を持つこと（mzTab-M だけなら理由つきのエラー）、データセットのライブラリ
-（`holder.library.store`）があること（無ければ `missing_state("library", ["library_load"])`）。
-状態変更: `session.curation.last_review_id` と `review_dirs[review_id]`。ディスクに
-`<arf2 のフォルダ>/curation/review-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
+前提: データセット（`dataset_handle`、省けば直近。無い・閉じていれば `missing_state("dataset", ["load_dataset"])` か
+`DATASET_HANDLE_NOT_FOUND`。`data/` や別のハンドルへは落ちない）、その `.arf2`（mzTab-M だけなら理由つきのエラー）、
+データセットのライブラリ（`holder.library.store`。無ければ `missing_state("library", ["library_load"])`）。
+状態変更: `session.curation.last_review_id` と `review_dirs[review_id]`。`<arf2 のフォルダ>/curation/review-<id>.json` と
+`.html` を書き、受け口の登録表にトークンを足す（プロセス内）。
 
 1. metabolomix/tools/curation_tools.py  _dataset_context()
 2. └─ metabolomix/dataset/artifacts.py  artifact_path()（`.arf2` はハンドルの `arf2_path`、無ければデータセットの記録）
@@ -105,10 +63,9 @@ flowchart TD
 
 ## curation_suggest
 
-前提: `curation_review` と同じ（データセットとその `.arf2`、データセットのライブラリ）に加えて、
-このアラインメントのレビューがあること（無ければ
+前提: `curation_review` と同じに加えて、このアラインメントのレビュー（無ければ
 `missing_state("curation_review", ["curation_review"])`）。状態変更: `session.curation.review_dirs[suggestion_id]`。
-ディスクに `<arf2 のフォルダ>/curation/suggest-<id>.json` と `.html` を書く。受け口の登録表にトークンを足す（プロセス内）。
+`<arf2 のフォルダ>/curation/suggest-<id>.json` と `.html` を書き、受け口の登録表にトークンを足す（プロセス内）。
 
 1. metabolomix/tools/curation_tools.py  _dataset_context()
 2. metabolomix/tools/curation_tools.py  _library_store()
@@ -130,23 +87,17 @@ flowchart TD
 17. └─ metabolomix/curation/viewer.py  render_suggest_html()
 18. metabolomix/curation/suggest.py  summary_tsv()（`max_rows` で先頭だけ）
 
-`curation_submit` は `review_id` が `cs-…` のとき、`curation.flags.validate_entries` の代わりに
-`curation.suggest.expand_entries` で候補 ID を記録行へ展開する。
-
 ## curation_submit
 
-前提: `review_id` のレビューがディスクにあること。状態変更: `flags.jsonl` へ追記し、
-アラインメントの `_tags.xml` の Misannotation と Confirmed を書き換える（書く前に `curation/tags-backup/` へ控え）。
-レビューの探し先は、セッションの `review_dirs` → 送信用テキストの `arf2_path` →
-データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダの順（`data/` は探さない。
-サーバ再起動の後でも、貼った文なら送れる）。どれも無ければ `missing_state("dataset", ["load_dataset"])`。
-送信用テキストも `review_id` も無ければ、データセットの `.arf2` に対する最新のレビューを使う
-（`_latest_review_for_submit()` → `suggest.latest_review()`。無ければ `missing_state("curation_review")`。
-`assign` / `redundant` の要素があれば `cs-…` を求めるエラー）。そうして選んだレビューに `submit_flags()` が
-拒んだとき（対象外のスポットなど）も、エラーに `review_id` と `review_id_source: "latest"` を添える。
-書いた後、同じ `.arf2` を持つ開いているハンドルすべての `curation_flags` を読み直す
-（`submission.after_write` → `curation_tools._refresh_open_handles`。ハンドルごとにそのハンドルのロックの下で
-1 つずつ、`REFRESH_LOCK_TIMEOUT` 秒だけ待つ。取れなければ `open_handles.not_refreshed`）。
+前提: `review_id` のレビューがディスクにあること。状態変更: `flags.jsonl` へ追記し、アラインメントの `_tags.xml` の
+Misannotation と Confirmed を書き換える（書く前に `curation/tags-backup/` へ控え）。
+レビューの探し先: セッションの `review_dirs` → 送信用テキストの `arf2_path`（サーバ再起動の後でも、貼った文なら送れる）→
+データセット（`dataset_handle`、省けば直近）の `.arf2` のフォルダ。`data/` は探さない。どれも無ければ
+`missing_state("dataset", ["load_dataset"])`。送信用テキストも `review_id` も無ければ最新のレビュー
+（`_latest_review_for_submit()` → `suggest.latest_review()`。output_format の「`curation_submit` の `review_id` を省いたとき」）。
+書いた後、同じ `.arf2` を持つ開いているハンドルの `curation_flags` を、ハンドルごとにそのロックの下で 1 つずつ読み直す
+（`submission.after_write` → `curation_tools._refresh_open_handles`。`REFRESH_LOCK_TIMEOUT` 秒で取れなければ
+`open_handles.not_refreshed`）。
 
 1. metabolomix/curation/flags.py  parse_submission_text()（`submission_text` のとき）
 1. metabolomix/tools/curation_tools.py  _latest_review_for_submit()（`review_id` も送信用テキストも無いとき）
@@ -175,7 +126,8 @@ flowchart TD
 
 ### ビューアからの直接送信（HTTP。MCP ツールではない）
 
-`POST /v1/submit` は登録時の `review_id` / `arf2_path` だけを使い、`source="user"` で記録する。
+`POST /v1/submit` は登録時の `review_id` / `arf2_path` だけを使い、`source="user"` で記録する。状態コードと受け口の寿命は
+output_format の「ビューアからの直接送信」。
 
 1. metabolomix/curation/submit_server.py  _Handler.do_POST()（`Host` → パス → 本文の上限と JSON → トークン）
 2. └─ metabolomix/curation/submit_server.py  _touch()（定数時間で照合し、期限を延ばす）

@@ -48,6 +48,7 @@ import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from metabolomix.core.atomic_io import DomainError, canonical_hash
+from metabolomix.core.polarity_names import canonical_polarity
 
 __all__ = [
     "DOWNSTREAM_KEYS",
@@ -204,7 +205,7 @@ def _normalize_raw_dir(value, index: int) -> str:
 
 def _unit_entry(source: dict, raw_dir: str) -> dict:
     return {
-        "polarity": source.get("polarity"),
+        "polarity": canonical_polarity(source.get("polarity")),
         "raw_dir": raw_dir,
         "method_file": source.get("method_file"),
         "lbm_file": source.get("lbm_file"),
@@ -248,7 +249,8 @@ def _validate_units(data: dict) -> None:
             _fail(f"units[{index}]の形が正規形ではありません。", index=index)
         polarity = unit["polarity"]
         if polarity is not None and polarity not in _POLARITY_VALUES:
-            _fail(f"polarityが不正です: {polarity!r}", polarity=polarity, index=index)
+            _fail(f"polarityが不正です（positive / negative。pos / neg / + / - も可）: {polarity!r}",
+                  polarity=polarity, index=index)
         if polarity is None and len(units) > 1:
             _fail(f"units[{index}].polarity は必須です（2 単位の要求）。", index=index)
         for field in ("method_file", "lbm_file", "msp_file", "sample_manifest", "keep_extension"):
@@ -437,6 +439,7 @@ def resolve_request(source_root: Path, explicit: dict | None = None) -> dict:
 
 def unit_index(request: dict, polarity: str) -> int:
     """`polarity` の単位の添字。無ければ `PIPELINE_REQUEST_INVALID`。"""
+    polarity = canonical_polarity(polarity)
     for index, unit in enumerate(request.get("units") or []):
         if unit.get("polarity") == polarity:
             return index

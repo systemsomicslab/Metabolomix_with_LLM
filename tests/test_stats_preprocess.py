@@ -413,11 +413,17 @@ def test_no_qc_skips_qc_steps_with_reasons():
     assert filt["qc_rsd"]["status"] == "skipped" and filt["qc_rsd"]["reason"] == "too_few_qc"
     assert filt["d_ratio"]["status"] == "skipped" and filt["d_ratio"]["reason"] == "too_few_qc"
     norm = _step(prep, "normalize")
-    assert norm["method"] == "pqn" and norm["reference"] == "sample"
+    # QC が無いと auto は正規化しない（2026-11-16 の決定。PQN の参照が生体試料になるため）
+    assert norm["method"] == "none" and norm["status"] == "skipped" and norm["reason"] == "no_qc"
     assert prep.qc_log2.shape == (0, 3) and prep.qc_ids == []
-    # QC が無い PQN の参照（生体試料・全群の中央値）は明示する（A7）
+    assert _warning(prep, "normalize_auto_no_qc") is not None
+    assert _warning(prep, "pqn_reference_is_samples") is None
+    # 明示の PQN は当て、参照（生体試料・全群の中央値）を明示する（A7）
+    explicit = P.preprocess(_simple(with_qc=False), {"normalize": {"method": "pqn"}})
+    norm = _step(explicit, "normalize")
+    assert norm["method"] == "pqn" and norm["reference"] == "sample"
     assert norm["reference_definition"] == "median_of_samples_all_groups"
-    assert _warning(prep, "pqn_reference_is_samples") is not None
+    assert _warning(explicit, "pqn_reference_is_samples") is not None
     with_qc = P.preprocess(_simple(), {})
     assert _step(with_qc, "normalize")["reference"] == "qc"
     assert "reference_definition" not in _step(with_qc, "normalize")      # QC があるときの形は変えない

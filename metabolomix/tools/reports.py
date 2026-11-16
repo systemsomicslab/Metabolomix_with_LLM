@@ -34,17 +34,14 @@ def write_report(
     status: str = "draft",
     dataset_handle: str | None = None,
 ) -> str:
-    """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する（成果物＋記録）。
+    """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する。
 
-    body は frontmatter を含まない Markdown 本文（見出しは自由）。所見が増えたら本文を作り直して再度呼ぶ
-    （ファイルは毎回上書き）。
-    lipidmix.local.toml の [paths] reports_dir の明示先を優先し、書込不可なら解析フォルダ配下reports/。
-    未指定時は解析フォルダ配下reports/だけを使う（リポジトリ側へは退避しない）。
-    解析フォルダは直近のデータセット（または dataset_handle）のもの。設定の置き場所も
-    データセットも無いときは missing_state（load_dataset）。
-
-    analysis_id はファイル名 slug の元になるため ASCII で一意に。別IDが同一slugに潰れて既存
-    レポートを上書きしそうな場合は保存を中止して通知する（objectiveレコードと同じIDを推奨）。
+    body: frontmatter を除く Markdown 本文（見出しは自由）。所見が増えたら本文を作り直して呼び直す。
+    置き場所: lipidmix.local.toml の [paths] reports_dir を優先し、書けなければ解析フォルダ配下 reports/。
+    未設定なら解析フォルダ配下 reports/ だけ（リポジトリへは退避しない）。解析フォルダは直近のデータセット
+    （か dataset_handle）のもの。設定の置き場所もデータセットも無ければ missing_state（load_dataset）。
+    analysis_id: ファイル名の slug の元なので ASCII で一意に（objective と同じ ID を推奨）。別の ID が同じ slug に
+    潰れて既存のレポートを上書きしそうなら保存を中止して知らせる。
     """
     holder = _resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -73,14 +70,10 @@ def write_report(
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 @config_invalid_as_envelope
 def read_report(analysis_id: str | None = None, dataset_handle: str | None = None) -> str:
-    """過去レポートを読み戻す。analysis_id を省くと既存レポートの 1 行索引を返す。
+    """レポートを読み戻す。analysis_id を省くと既存レポートの 1 行ずつの索引（`analysis_id / date / status`）。
 
-    dataset_handle: 解析フォルダを決めるハンドル（省略時は直近）。
-    analysis_id を渡すと、候補ディレクトリ横断で最新更新のものの本文を返す（セッション継続用）。
-    解析フォルダ配下と退避先の両方に同名レポートが残る場合（書き込み可否が途中で変化した等）、
-    古い方を返さないよう mtime が最新のファイルを採用する。
-    省いた場合の索引は 1 行ずつ `analysis_id / date / status`。候補ディレクトリ横断で同一
-    analysis_id が重複するときは mtime が最新の 1 件を採用する。
+    dataset_handle: 解析フォルダを決めるハンドル（省けば直近）。
+    候補の置き場所（解析フォルダ配下と退避先）に同じ analysis_id が複数あれば mtime が最新のものを使う。
     """
     holder = _resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -142,40 +135,31 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                 contrast_id: str | None = None) -> str:
     """データセットの図を reports/figures/<analysis_id>_<kind>.png に保存する（報告書に埋め込む図）。
 
-    kind は `dataset_plot` の kind: "pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
-    "species" / "species_pca" / "eic" / "eic_compounds"。loadings / group_intensity / species / species_pca は
-    dpi 300 の PNG と同名 .svg、pca / volcano / eic / eic_compounds は dpi 120 の PNG だけ。`dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。
-    まだ一度も描いていなければ missing_state（`dataset_plot` を案内）。結果から作った図（pca / volcano / loadings /
-    species_pca）は、その結果が現在のものでなければ保存せず `STALE_FIGURE`（理由と `required_tools=["dataset_plot"]`。
-    前処理・解析をやり直してから描き直す）。除外（`dataset_exclude`）と試料の表の更新
-    （`dataset_set_sample_metadata`。前処理の入力の列なら pca / loadings / species_pca / volcano、群・足した因子の列
-    だけなら volcano）は図ごと捨てるが、捨てた図も `STALE_FIGURE`（`details.reason` に実際に変わったもの: `exclusion`
-    や列名）で、
-    描いたことの無い図（missing_state）と見分けられる。group_intensity / species / species_pca は群を図に焼き込むので、
-    試料の情報（群・役割）が更新されたあとも `STALE_FIGURE`（species_pca は結果から作った図でもある）。
-    eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（あとで `dataset_exclude` しても変わらない）。
-    result_id: kind が pca / volcano / loadings で効く。登録された結果を名指しして描く
-      （`dataset_plot` を呼ばなくてよい。古い結果は STALE_ANALYSIS_RESULT）。volcano では
-      `"result_id#contrast_id"`（`dataset_feature_search` が出す形）でも対比を選べる。species_pca では描き直しに
-      使わず（項目の指定から作る結果）、置き場の図がその結果から描いたものかを確かめる: 同じなら保存し（同じ指定で
-      描き直しただけの別の結果なら、置き場の図を保存して `notes:` 行にそう書く）、違えば保存せず `STALE_FIGURE`
-      （`details.held_result_id` に置き場の図の結果、`details.mismatch` に違いの種類）。`settings`（項目の指定が違う）は
-      `details.settings` の指定で `dataset_plot(kind="species_pca", ...)` を描き直してから保存する。`stale`（名指しした
-      結果が除外・試料の表の更新より前のもの）と `input`（同じ指定だが、キュレーションの判断の更新などで入力の行列が
-      違う）はその結果の図をもう描けないので、置き場の図を保存するなら `held_result_id` を渡すか省く（`stale` で指定も
-      違えば `details.settings` も付く）。分子種の PCA の結果でなければ DATASET_BAD_REQUEST。そのハンドルの結果に
-      無い ID も DATASET_BAD_REQUEST で、開いているほかのハンドルの分子種の PCA の結果なら `details.result_handle` に
-      そのハンドル（その `dataset_handle` で呼び直す）。ほかのハンドルの別の種類の結果（比較・PCA・概観）なら呼び直しを
-      案内せず、分子種の PCA の結果ではないと言ってそのハンドルを文で名指す（`details.result_kind` にその種類）。
-      ほかの kind（group_intensity / species / eic / eic_compounds）では使わず、置き場の図を保存して戻り値の
-      `notes:` 行にそう書く。
-    contrast_id: kind が volcano で効く。`dataset_compare` の結果の対比（`T_vs_C` など）を選んで描き直す
-      （`result_id` を省けば直近の差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。
-      2 群の対比が複数ある結果で対比を選ばなければ `needs_input`（選択肢は対比の一覧）。ほかの kind では使わず、
-      戻り値の `notes:` 行にそう書く。
-    dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
-    画面に出すだけなら `dataset_plot`（画像を返す。`output_path` で任意の場所にも書ける）。返り値の相対パスは
-    write_report の本文に `![...](figures/<analysis_id>_<kind>.png)` として埋め込める。
+    `dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。一度も描いていなければ missing_state
+    （`dataset_plot`）。画面に出すだけなら `dataset_plot`（`output_path` で任意の場所にも書ける）。戻りの相対パスは
+    write_report の本文に `![...](figures/<analysis_id>_<kind>.png)` で埋め込める。
+
+    kind: `dataset_plot` の kind。"pca" / "volcano"（間引き前の全点）/ "loadings" / "group_intensity" /
+      "species" / "species_pca" / "eic" / "eic_compounds"。loadings / group_intensity / species / species_pca は
+      dpi 300 の PNG と同名 .svg、pca / volcano / eic / eic_compounds は dpi 120 の PNG だけ。
+    result_id: pca / volcano / loadings で、登録された結果を名指しして描く（`dataset_plot` は要らない。古い結果は
+      STALE_ANALYSIS_RESULT）。volcano は `"result_id#contrast_id"`（`dataset_feature_search` の形）でも対比を
+      選べる。species_pca では描き直さず、置き場の図がその結果から描いたものなら保存し、違えば `STALE_FIGURE`
+      （`details.held_result_id`・`details.mismatch`。次の手は `docs_read(topic="dataset")` の §11.7）。分子種の
+      PCA の結果でない ID と、そのハンドルに無い ID は DATASET_BAD_REQUEST（ほかのハンドルの分子種の PCA の結果なら
+      `details.result_handle` で、その `dataset_handle` で呼び直す。別の種類の結果なら `details.result_kind`）。
+    contrast_id: volcano で、`dataset_compare` の結果の対比（`T_vs_C` など）を選ぶ（`result_id` を省けば直近の
+      差次的結果）。`result_id#contrast_id` と食い違えば DATASET_BAD_REQUEST。2 群の対比が複数あって選ばなければ
+      `needs_input`（選択肢は対比の一覧）。
+    その kind が使わない `result_id` / `contrast_id` は断らず、置き場の図を保存して戻り値の `notes:` 行に書く。
+    dataset_handle: 省けば直近。
+
+    保存しない（`STALE_FIGURE`。`required_tools=["dataset_plot"]`）とき: 結果から作った図（pca / volcano /
+    loadings / species_pca）の結果が今のものでない。除外（`dataset_exclude`）か試料の表の更新
+    （`dataset_set_sample_metadata`）が図を捨てた（`details.reason` に変わったもの。描いたことの無い図の
+    missing_state と見分けられる）。群を焼き込む図（group_intensity / species / species_pca）の後に試料の情報
+    （群・役割）が更新された。eic / eic_compounds は結果から作った図ではないので、描いたとおりに保存する（後で
+    `dataset_exclude` しても変わらない）。どの更新がどの図を捨てるかは `docs_read(topic="dataset")` の §11.4.9。
     """
     from metabolomix.core.atomic_io import DomainError
     from metabolomix.tools import plot_tools

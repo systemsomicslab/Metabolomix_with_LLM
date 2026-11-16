@@ -73,15 +73,15 @@ def dataset_quant_preview(reference_path: str, bindings: dict | None = None,
                           dataset_handle: str | None = None) -> str:
     """内部標準の参照表で、どのクラスをどの内部標準・係数で割るかを確かめる（値は作らない）。
 
-    reference_path: 内部標準の参照表 CSV（毎回指定。設定の既定は無い）。戻り値は表の sha256・
-    単位・ファイル名の末尾だけで、パスと表の中身は返さない。classes はデータセットに現れた
-    クラスだけ。内部標準の候補が複数・無いものは unresolved に候補を並べ status は needs_input。
-    bindings は {内部標準の名前: 特徴 ID}（unresolved の standard_name が鍵）で候補を選ぶ。濃度から係数を作るなら
-    concentrations（{内部標準名: 濃度}）と solvent_volume・cells_millions（unit 任意）。
-    polarity は極性が決まらないデータセットのとき必須。規則プラグイン（[quant] rules）が要る。
-    MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットだけ（ほかは QUANT_SOURCE_UNSUPPORTED。
-    陽陰を統合したものは QUANT_ALREADY_MERGED）。
-    dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
+    reference_path: 内部標準の参照表 CSV（毎回指定。設定の既定は無い）。戻り値は表の sha256・単位・ファイル名の
+    末尾だけで、パスと表の中身は返さない。classes はデータセットに現れたクラスだけ。内部標準の候補が複数・無い
+    ものは unresolved に候補を並べ、status は needs_input。
+    bindings: {内部標準の名前: 特徴 ID}（unresolved の standard_name が鍵）で候補を選ぶ。
+    濃度から係数を作るなら concentrations（{内部標準名: 濃度}）と solvent_volume・cells_millions（unit は任意）。
+    polarity: 極性が決まらないデータセットでは必須。
+    MS-DIAL の解析フォルダ（.arf / .arf2）から読んだデータセットだけ（ほかは QUANT_SOURCE_UNSUPPORTED、陽陰を統合
+    したものは QUANT_ALREADY_MERGED）。規則プラグイン（[quant] rules）が要る。
+    dataset_handle: 省けば直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
     if isinstance(ctx, str):
@@ -104,18 +104,16 @@ def dataset_quant_apply(reference_path: str | None = None, bindings: dict | None
                         dataset_handle: str | None = None) -> str:
     """内部標準で正規化し、新しいハンドルの派生データセットを作る（元は変えない）。
 
-    引数は dataset_quant_preview と同じ。内部標準が未解決（needs_input）なら何もせず
-    preview と同じ封筒を返す。成功なら解析フォルダの reports/quant/ に記録を書き、新しい
-    dataset_handle・status_counts・単位・record_id を返す（gap-fill のセルも値を計算し、
-    detected_mask で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を数える）。
-    正規化済みのデータセットには掛けない。skip=True は値を変えず「正規化を飛ばした」記録と
-    派生を作る（reference_path は skip=True のときだけ省ける。読まない）。選別済みの
-    データセットには掛けない（QUANT_ALREADY_SELECTED）。陽陰を統合したデータセットにも掛けない
-    （QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う。統合し直すと
-    統合したハンドルに当てていた除外とシートは引き継がれないので、統合し直してできたハンドルに当て直す。
-    極性ごとのハンドルの除外は統合が引き継ぐ）。
-    新しいハンドルの極性は解いた polarity。親が探索専用なら派生も探索専用（戻り値の exploratory）。
-    dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
+    引数は dataset_quant_preview と同じ。内部標準が未解決（needs_input）なら何もせず preview と同じ封筒を返す。
+    成功なら解析フォルダの reports/quant/ に記録を書き、新しい dataset_handle・status_counts・単位・record_id を返す
+    （gap-fill のセルも値を計算し、detected_mask で印を引き継ぐ。内部標準が 0・負・欠測の試料は欠測にして理由を
+    数える）。新しいハンドルの極性は解いた polarity。親が探索専用なら派生も探索専用（戻り値の exploratory）。
+    skip: True は値を変えず「正規化を飛ばした」記録と派生を作る（reference_path は skip=True のときだけ省け、読まない）。
+    掛けないデータセット: 正規化済み（QUANT_ALREADY_NORMALIZED）・選別済み（QUANT_ALREADY_SELECTED）・陽陰を統合
+    したもの（QUANT_ALREADY_MERGED。内部標準は極性ごとなので、正規化は統合の前に極性ごとに行う）。統合し直すと、
+    統合したハンドルに当てていた除外とシートは引き継がれない（極性ごとのハンドルの除外は引き継ぐ）ので、統合し直して
+    できたハンドルに当て直す。
+    dataset_handle: 省けば直近のデータセット。
     """
     ctx = _context(dataset_handle, polarity)
     if isinstance(ctx, str):
@@ -139,37 +137,26 @@ def dataset_merge_polarities(positive_handle: str, negative_handle: str,
                              record_folder: str | None = None) -> str:
     """陽イオンと陰イオンのデータセットを 1 つに統合し、新しいハンドルを作る（元は変えない）。
 
-    positive_handle / negative_handle: load_dataset などで開いたハンドル。正規化の状態
-    （normalized・method・unit）が同じでなければ統合しない。dataset_quant_apply を通していない
-    側は未正規化として扱う（skip=True を挟まなくてよい）ので、両方とも未正規化ならそのまま
-    統合する。各側の通り方は戻り値と記録の normalize（applied / skipped / not_run）。
-    特徴 ID は positive:<id> / negative:<id>、行は POS の特徴のあとに NEG の特徴、試料の列は
-    共通 ID（POS の順）。試料は名前（極性の印を除いた名前）で照合し、食い違えば needs_input
-    （only_in に片側にしか無い試料）で止まる。mapping_csv（列: mode, source_sample, sample_id,
-    group, sample_type）で対応づけて再実行する。mapping_csv の mode 列は positive / negative
-    （pos / neg も可）。group / sample_type 列は規則が検証するだけで適用しない（試料の実験情報は
-    POS のものを使う。試料の表は陽イオンのもので、陽イオンに当てたシートも引き継ぐ）。陰イオンは別の注入
-    なので、試料ごとの陰イオンのバッチと注入順（陰イオンのハンドルに当てたシートを含む試料の表から読む）を
-    残し（統計の前処理がドリフト補正を極性ごとに当てる）、統合したデータセットが陽イオンの測定として読む値と
-    同じかを戻り値と記録の negative_runs（injection_order: same / different / unknown、batch: same /
-    different、n_samples_differ）に書く。極性ごとの実際の注入順・バッチは、統合の前にそれぞれのハンドルへ
-    dataset_set_sample_metadata で入れる（統合後のハンドルへのシートは陽イオンの raw を挙げるので陽イオンの
-    測定だけを決める。陰イオンを直すなら陰イオンのハンドルに当てて統合し直す）。
-    極性ごとのハンドルの除外（dataset_exclude）は統合後の ID に写して引き継ぐ: 特徴は positive:<id> /
-    negative:<id>、試料は共通 ID の和（片方の極性だけで外した試料も両極性の特徴から外れる。理由に外した極性が付く）。
-    引き継いだときだけ戻り値に exclusions（特徴・試料の件数）と notes、記録の summary.exclusions に ID。
-    前の統合したハンドルに当てたシートと除外は、統合し直すと引き継がれない（統合は極性ごとのハンドルから作る）。
-    記録は 2 つの解析フォルダの共通の親の reports/quant/。共通の親が決められなければ
-    needs_input で record_folder（既存のフォルダ）を求める。規則プラグイン（[quant] rules）が要る。
-    キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを読む。
-    どちらかが探索専用なら統合も探索専用（戻り値の exploratory に極性付きの理由）。
-    アッセイ種別（戻り値の assay_kind）は両側から: 陽陰で同じならその値、片方が unknown ならもう片方、lipid と
-    metabolite で食い違えば unknown（陽陰で違えば notes。食い違いは、誤っている側の極性のハンドルへ
-    record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...) で記録し直してから統合し直す。統合した
-    ハンドルの解析フォルダは陽イオンのものなので、そこへ記録すると陽イオンのデータセットの種別まで変わる）。
-    2 つのハンドルのロックを待つのは合わせて最長 25 秒（handle_dispatch.HANDLE_LOCK_WAIT）。待ちきれなければ
-    何もせずに HANDLE_BUSY（ほかのツールと同じ封筒。長い道具の仕事がロックを持っていれば details.job_id /
-    tool と required_tools=["job_status"]。job_status で終わりを待ってから呼び直す）。
+    positive_handle / negative_handle: load_dataset などで開いたハンドル。正規化の状態（normalized・method・unit）が
+        違えば統合しない（QUANT_MERGE_STATE_MISMATCH）。dataset_quant_apply を通していない側は未正規化として扱う
+        （skip=True を挟まなくてよい）。
+    mapping_csv: 試料の対応（列: mode, source_sample, sample_id, group, sample_type。mode は positive / negative、
+        pos / neg も可。group / sample_type は規則が検証するだけで適用しない）。試料は名前（極性の印を除いた名前）で
+        照合し、食い違えば needs_input（only_in に片側にしか無い試料）で止まるので、これで対応づけて呼び直す。
+    record_folder: 記録の置き場（既存のフォルダ）。既定は 2 つの解析フォルダの共通の親の reports/quant/ で、
+        決められなければ needs_input で求める。
+
+    特徴 ID は positive:<id> / negative:<id>（行は POS の特徴のあとに NEG）、試料の列は共通 ID（POS の順）。試料の
+    表は陽イオンのもの（陽イオンに当てたシートも引き継ぐ）で、陰イオンは試料ごとのバッチと注入順を残す
+    （negative_runs に陽イオンとの違い）。極性ごとの注入順・バッチは統合の前にそれぞれのハンドルへ
+    dataset_set_sample_metadata で入れる（統合後のハンドルへのシートは陽イオンの測定だけを決める）。
+    極性ごとのハンドルの除外（dataset_exclude）は統合後の ID に写して引き継ぐ。前の統合したハンドルに当てたシートと
+    除外は、統合し直すと引き継がれない。キュレーションのフラグは写さず、選別が極性ごとの .arf2 からその時点のものを
+    読む。どちらかが探索専用なら統合も探索専用。assay_kind は両側から決め、lipid と metabolite で食い違えば unknown
+    （直すなら誤っている側の極性のハンドルへ record_objective で記録し直して統合し直す）。規則プラグイン
+    （[quant] rules）が要る。2 つのハンドルのロックを待つのは合わせて最長 25 秒（待ちきれなければ何もせず
+    HANDLE_BUSY）。戻り値の欄（normalize・negative_runs・exclusions・assay_kind など）と needs_input の答え方は
+    `docs_read(topic="quant")` の §4・§5。
     """
     pos = resolve_holder(positive_handle)
     if isinstance(pos, str):
@@ -188,16 +175,15 @@ def dataset_select_features(skip_adduct_filter: bool = False, apply_curation: bo
                             dataset_handle: str | None = None) -> str:
     """付加体の採用表と除外規則で特徴を選別し、残る行だけの新しいハンドルを作る（元は変えない）。
 
-    順序: キュレーション（apply_curation=True のとき。選別の時点の flags.jsonl を読み直す。
-    wrong / redundant は除外、assign は名前・クラスの差し替え）→ 内部標準（正規化した記録の内部標準。正規化していなければ内部標準は
-    除かない）→ 名前・コメント・MS/MS の除外 → 付加体の採用表（lipidmix.local.toml の
-    [quant] adducts）。採用表が未設定なら needs_input（設定するか skip_adduct_filter=True で
-    付加体の選別だけ飛ばす）。統合前のデータセットにも使える（mode はそのデータセットの極性。
-    決まらなければ polarity が必須。統合後は各特徴の出自の極性）。
-    全判断は解析フォルダの reports/quant/<record_id>.audit.json に書き、戻り値は理由ごとの
-    件数と例 5 件・record_id・採用表の sha256 とファイル名だけ。規則プラグイン（[quant] rules）が要る。
-    親が探索専用なら派生も探索専用（戻り値の exploratory）。
-    dataset_handle: ハンドルのデータセット。省略時は直近のデータセット。
+    順序: キュレーション（apply_curation=True のとき。選別の時点の flags.jsonl を読み直し、wrong / redundant は除外、
+    assign は名前・クラスの差し替え）→ 内部標準（正規化した記録の内部標準。正規化していなければ除かない）→ 名前・
+    コメント・MS/MS の除外 → 付加体の採用表（lipidmix.local.toml の [quant] adducts）。採用表が未設定なら
+    needs_input（設定するか skip_adduct_filter=True で付加体の選別だけ飛ばす）。統合前のデータセットにも使える
+    （mode はそのデータセットの極性。決まらなければ polarity が必須。統合後は各特徴の出自の極性）。
+    全判断は解析フォルダの reports/quant/<record_id>.audit.json に書き、戻り値は理由ごとの件数と例 5 件・record_id・
+    採用表の sha256 とファイル名だけ。規則プラグイン（[quant] rules）が要る。親が探索専用なら派生も探索専用
+    （戻り値の exploratory）。
+    dataset_handle: 省けば直近のデータセット。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):

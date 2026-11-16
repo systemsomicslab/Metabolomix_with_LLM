@@ -565,62 +565,52 @@ def dataset_plot(
     contrast_id: str | None = None,
     output_path: str | None = None,
 ) -> list | str:
-    """データセットの図を描く — 既定は PNG 画像と 1 行の説明。`output_path` を渡せば同じ図をファイルにも書く。
+    """データセットの図を描く。既定は PNG 画像と 1 行の説明。`output_path` を渡せば同じ図をファイルにも書く。
 
-    kind と、その kind だけの引数（別の kind の引数は断らずに使わず、説明の最後の `notes:` 行〔payload は `notes`。
-    描けなかった誤りの封筒は `missing_state` も含めて `details.notes`。誤りでない `needs_input` は持たない〕に
-    どの kind の引数かを書く）:
-      - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`）。`result_id` で名指しもできる。対比が複数の結果は
-        `contrast_id`（`T_vs_C` など。`result_id#contrast_id` の形でも可）で 1 つ選ぶ（2 群の対比が複数で省くと
-        `needs_input`〔選択肢は対比の一覧〕、交互作用は `CONTRAST_NOT_TWO_GROUP`）。題と説明の並びは
-        `test vs reference`（log2fc は正なら test が高い）。
+    kind と、その kind だけの引数（別の kind の引数は断らずに使わず、説明の最後の `notes:` 行〔payload は `notes`、描けなかった
+    誤りの封筒は `missing_state` も含めて `details.notes`〕にどの kind の引数かを書く）:
+      - `volcano`: 直近の 2 群の差次的結果（`dataset_compare`。`result_id` で名指しもできる）。対比が複数の結果は `contrast_id`
+        （`T_vs_C` など。`result_id#contrast_id` の形でも可）で 1 つ選ぶ（2 群の対比が複数で省くと `needs_input`〔選択肢は対比の
+        一覧〕、交互作用は `CONTRAST_NOT_TWO_GROUP`）。並びは `test vs reference`（log2fc は正なら test が高い）。
       - `pca`: 直近の `dataset_pca`（`result_id` で名指し）。`color_by="group"`（既定）/ `"batch"` / `"role"`。
-      - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。`pcs`（既定 [1, 2]、
-        1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、
-        `value="r"`（既定。特徴量と主成分スコアの相関）/ `"coefficient"`。
-      - `eic`: `feature_id`（`dataset_feature_search` の ID）の試料別クロマトグラム。`file_ids` で試料を絞る
-        （省けば全試料。12 を超えるときは要指定。除外した試料は省いた呼び出しから外れる）。
-      - `eic_compounds`: 1 試料（`file_id`）に、同定済みの物質（`names` は名前の部分一致、`ontologies` は
-        クラスの完全一致。どちらかが要る）を重ねる。RT と m/z が特徴表と合わない物質は描かず、理由は
-        payload の `selection.dropped`。
-      - `group_intensity`: 項目（`items` = クラス名〔`ontology` に完全一致。配下の全特徴の合計〕・分子種名〔`|` で
-        分けた候補名に完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）
-        ごとに、群（`groups` = 試料名・Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を
-        書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。縦軸は log10 で全パネル共通、群は log10 の
-        平均 ± SD。検定はしない（`dataset_compare`）。`detection_limit` は検出下限の破線（省略時は
-        param ファイルの Minimum peak height）。
-      - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。
-        試料ごとの 値 ÷ 分母の合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は形式を保つため `"height"`）。
-        `share_basis` は割合の分母にする項目（省略時は `items`。当たらない部品があると分母が変わるので描かずに
-        エラー）。`require_msms=True` で MS/MS の裏付けの無い分子種も（分母からも）除く。
-      - `species_pca`: 選んだ分子種（`species` と同じ `items` `groups` `require_msms`）の PCA のスコア図。
-        `normalize="none"`（既定）/ `"total"`、`log_transform`（既定 True）、`orient_by`（群名。その群の平均
-        スコアが正になる向きにそろえる）。`low_reliability_samples` は計算に使わず投影だけ。結果は
-        `result_id`（`lipidmix.species_pca.v1`）で登録する。
-      3 つの共通: `low_reliability_samples`（白抜き。平均・SD から外す）、`standard_samples`（その試料にだけ
-        実質的な強度がある分子種をクラスの合計から外す）、`apply_curation`（既定 True。`.arf2` の人の判断
-        〔wrong / redundant 除外・assign の付け替え〕）、`exclude_auto_likely_wrong`（最新の `curation_review` の
-        likely_wrong も除く）。除いたものは payload の `excluded`。内部標準（`(d7)` 等）はクラスの合計に入れない。
-        `dataset_exclude` した試料は描かず、除外した特徴はクラスにも名前指定にも入れない。
+      - `loadings`: 同じ PCA のローディング（`result_id` に `species_pca` の結果も渡せる。横棒、色は特徴のクラス＝`ontology`）。
+        `pcs`（既定 [1, 2]、1〜3 個）、`top_n`（主成分ごとに正負の上位 N。既定 15、0 は全特徴量で 60 まで）、`value="r"`（既定。
+        特徴量と主成分スコアの相関）/ `"coefficient"`。
+      - `eic`: `feature_id`（`dataset_feature_search` の ID）の試料別クロマトグラム。`file_ids` で試料を絞る（省けば全試料。12 を
+        超えるときは要指定。除外した試料は省いた呼び出しから外れる）。
+      - `eic_compounds`: 1 試料（`file_id`）に、同定済みの物質（`names` は名前の部分一致、`ontologies` はクラスの完全一致。どちらかが
+        要る）を重ねる。RT と m/z が特徴表と合わない物質は描かず、理由は payload の `selection.dropped`。
+      - `group_intensity`: 項目（`items` = クラス名〔`ontology` に完全一致。配下の全特徴の合計〕・分子種名〔`|` で分けた候補名に
+        完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）ごとに、群（`groups` = 試料名・
+        Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。
+        縦軸は log10 で全パネル共通、群は log10 の平均 ± SD。検定はしない（`dataset_compare`）。`detection_limit` は検出下限の破線
+        （省略時は param ファイルの Minimum peak height）。
+      - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。試料ごとの 値 ÷ 分母の
+        合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は `"height"`）。`share_basis` は
+        割合の分母にする項目（省略時は `items`。当たらない部品があれば描かずにエラー）。`require_msms=True` で MS/MS の裏付けの無い
+        分子種も（分母からも）除く。
+      - `species_pca`: 選んだ分子種（`species` と同じ `items` `groups` `require_msms`）の PCA のスコア図。`normalize="none"`（既定）/
+        `"total"`、`log_transform`（既定 True）、`orient_by`（群名。その群の平均スコアが正になる向きにそろえる）。
+        `low_reliability_samples` は計算に使わず投影だけ。結果は `result_id`（`lipidmix.species_pca.v1`）で登録する。
+      3 つの共通: `low_reliability_samples`（白抜き。平均・SD から外す）、`standard_samples`（その試料にだけ実質的な強度がある分子種を
+        クラスの合計から外す）、`apply_curation`（既定 True。`.arf2` の人の判断〔wrong / redundant 除外・assign の付け替え〕）、
+        `exclude_auto_likely_wrong`（最新の `curation_review` の likely_wrong も除く）。除いたものは payload の `excluded`。内部標準
+        （`(d7)` 等）はクラスの合計に入れない。`dataset_exclude` した試料は描かず、除外した特徴はクラスにも名前指定にも入れない。
         群・試料の情報は図に焼き込む（試料の情報を更新したあとの図は `save_figure` が古いとして拒む）。
-    `.EIC.aef` の無いデータセット（mzTab-M だけ）の `eic` 系は COMPANION_ARTIFACT_MISSING。
+    `.EIC.aef` の無いデータセット（mzTab-M だけ）の `eic` 系は COMPANION_ARTIFACT_MISSING。前処理・除外・群の変更で古くなった結果の
+    `result_id` は STALE_ANALYSIS_RESULT。`result_id` を省いて直近の結果が無ければ missing_state（作り直すツールを案内）。
 
-    結果は**現在のものだけ**描く: 前処理・除外・群の変更で古くなった結果の `result_id` は
-    STALE_ANALYSIS_RESULT で拒む。`result_id` を省いて直近の結果が無ければ missing_state（作り直すツールを案内）。
-
-    output: `"image"`（既定）= PNG と説明。`"payload"` = 描画中立の点列 JSON（形式名 `lipidmix.volcano.v1`
-      `lipidmix.pca_scores.v1` `lipidmix.pca_loadings.v1` `lipidmix.group_intensity.v1`
-      `lipidmix.species_intensity.v1` `lipidmix.species_pca.v1` `lipidmix.eic.v1` `lipidmix.eic.multi.v1`。
-      volcano は有意な点を全件、ns の点を間引いて返す）。環境変数 `LIPIDMIX_PLOT_OUTPUT` で既定を変えられる。
-      座標を LLM に渡すより画像のほうが桁違いに安いので、画面に出すだけなら image。返す PNG は
-      画素数に上限があり（大きな図は解像度を下げて返す）、ファイルに書く図はそれと別に描く。
-    output_path: 描いた図を書くファイル（`.png`。親のフォルダは作る。同じパスは上書き）。`save_figure` と同じ
-      描き方で、loadings / group_intensity / species / species_pca は dpi 300 の PNG と同名の `.svg`、ほかは
-      dpi 120 の PNG。書いたパスは説明（payload なら `saved_files`）に出る。
+    output: `"image"`（既定）= PNG と説明。`"payload"` = 描画中立の点列 JSON（形式名 `lipidmix.volcano.v1` `lipidmix.pca_scores.v1`
+        `lipidmix.pca_loadings.v1` `lipidmix.group_intensity.v1` `lipidmix.species_intensity.v1` `lipidmix.species_pca.v1`
+        `lipidmix.eic.v1` `lipidmix.eic.multi.v1`。volcano は有意な点を全件、ns の点を間引いて返す）。環境変数
+        `LIPIDMIX_PLOT_OUTPUT` で既定を変えられる。画面に出すだけなら image（payload より桁違いに安い）。返す PNG は画素数に上限が
+        あり、大きな図は解像度を下げて返す。
+    output_path: 描いた図を書くファイル（`.png`。親のフォルダは作る。同じパスは上書き）。`save_figure` と同じ描き方で（返す PNG とは
+        別に描く）、loadings / group_intensity / species / species_pca は dpi 300 の PNG と同名の `.svg`、ほかは dpi 120 の PNG。
+        書いたパスは説明（payload なら `saved_files`）に出る。
     title: 図の題。dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。
 
-    作った図の記録は `ds.figures[kind]` に置き（kind ごとに最後の 1 つ）、`save_figure(kind=...)` が
-    `reports/figures/` へ書く。
+    作った図は kind ごとに最後の 1 つを記録し（`ds.figures[kind]`）、`save_figure(kind=...)` が `reports/figures/` へ書く。
     """
     if feature_id is not None:
         feature_id = str(feature_id)  # MCP クライアントは数字だけの ID を整数で送ることがある

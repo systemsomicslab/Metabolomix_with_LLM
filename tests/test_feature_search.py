@@ -174,7 +174,7 @@ def test_target_of_other_polarity_is_not_applicable():
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "ppm": True}, "ppm"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_tol_min": -1}, "rt_tol_min"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "rt_min": "3"}, "rt_min"),
-    ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "polarity": "pos"}, "polarity"),
+    ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "polarity": "both"}, "polarity"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "expected_mz": 104.07, "adduct": "[nope]"}, "adduct"),
     ({"target_id": "c1", "inchikey": GABA_KEY, "formula": "C4H9NO2", "expected_mz": 104.07,
       "adduct": "[M+H]+"}, "expected_mz"),

@@ -205,33 +205,26 @@ def curation_review(ontology: list[str] | None = None, name_contains: str | None
                     file_ids: list[int] | None = None, max_traces: int = 12,
                     thresholds: dict | None = None, max_rows: int = 100,
                     dataset_handle: str | None = None) -> str:
-    """注釈付きスポットを一覧で確かめるレビューを作る（EIC・対向プロット・Δppm・ΔRT・
-    RT–m/z 傾向と機械判別）。**先に load_dataset と library_load**（アラインメントに使われた
-    `*_Loaded.msp2.dbs` を推奨）。
+    """注釈付きスポットを一覧で確かめるレビューを作る（EIC・対向プロット・Δppm・ΔRT・RT–m/z 傾向と
+    機械判別）。先に `load_dataset` と `library_load`（アラインメントに使われた `*_Loaded.msp2.dbs` を推奨）。
 
-    対象のデータセットは `dataset_handle`（省けば直近）。`.arf2` と、EIC・`.dcl` はそのデータセットが
-    覚えているものを使い、`data/` は探さない。ライブラリもそのデータセットのもの。`.arf2` の無い
-    データセット（mzTab-M だけ）は理由つきのエラー。
+    データセットは `dataset_handle`（省けば直近）。`.arf2`・EIC・`.dcl`・ライブラリはそのデータセットが覚えて
+    いるものを使い、`data/` は探さない。`.arf2` の無いデータセット（mzTab-M だけ）は理由つきの誤り。
 
-    対象: 既定は注釈付き全部。`ontology=["PG"]` でクラス、`name_contains` で名前の部分一致。
-    戻り値は suspect 以上(とフラグ済み)のスポットだけの TSV（判定の重い順に先頭 `max_rows`
-    行、既定 100。総数は `n_table_rows_total`、載せた数は `n_table_rows_shown`。全件は
-    HTML ビューアにある）、判定の件数、クラス別の傾向要約（点数・R²・外れ数）、HTML
-    ビューアのパス。`file_ids` は `.arf` の行にある試料 ID だけ（無い ID はエラー）。
-    **EIC 系列やスペクトルは返さない**——ユーザーには
-    `html_path` をブラウザで開いてもらい、ビューアの **Submit** で送ってもらう（記録と
-    `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを貼るよう
-    頼まない。送った結果は curation_flags で確かめられる。Copy のテキストが貼られたとき
-    （受け口の時間切れ・`submit.via == "copy"`）は従来どおり curation_submit(submission_text=...) に渡す。
+    対象: 既定は注釈付き全部。`ontology=["PG"]` でクラス、`name_contains` で名前の部分一致。`file_ids` は
+    `.arf` の行にある試料 ID だけ（無い ID は誤り）。`thresholds` で既定のしきい値（ppm_pass=5,
+    ppm_borderline=10, drt_pass=0.5 分 など）を上書きする。
+    戻り値: suspect 以上とフラグ済みのスポットの TSV（判定の重い順に先頭 `max_rows` 行、既定 100。総数は
+    `n_table_rows_total`、載せた数は `n_table_rows_shown`）、判定の件数、クラス別の傾向（点数・R²・外れ数）、
+    ビューアの `html_path`（全件）。EIC の系列やスペクトルは返さない。
+    `html_path` はブラウザで開くビューア。人が付けたフラグはビューアの Submit が記録と `_tags.xml` の反映まで
+    直接行う（`submit.via == "viewer"`。結果は `curation_flags`）。受け口の時間切れなどで Copy のテキストが
+    来たら（`submit.via == "copy"`）`curation_submit(submission_text=...)` に渡す。
 
-    判定: likely_wrong（強い不一致: polarity_mismatch / precursor_unmatched / dmz_out /
-    class_rule_rejected（MS-DIAL の脂質クラス規則による棄却で、脂質規則が走ったデータに限る）/
-    adduct_isomer_of:<spot>（m/z が同時溶出する証拠の強い別物質スポットの別アダクトで説明できる。
-    相手はレビューの対象に絞らずアラインメント全体から探す））、
-    suspect（ppm_out / low_score / drt_out / eic_poor / adduct_isomer_minor_of:<spot>、
-    または弱い兆候の重なり）、ok。
-    RT–m/z 傾向（trend_outlier）は補強にしか使わない。UNKNOWN は不一致に数えない。
-    `thresholds` で既定のしきい値（ppm_pass=5, ppm_borderline=10, drt_pass=0.5 分 など）を上書きできる。
+    判定: likely_wrong（強い理由: polarity_mismatch / precursor_unmatched / dmz_out / class_rule_rejected /
+    adduct_isomer_of:<spot>）、suspect（弱い理由: ppm_out / low_score / drt_out / eic_poor /
+    adduct_isomer_minor_of:<spot>、または弱い兆候の重なり）、ok。RT–m/z 傾向（trend_outlier）は補強にしか使わず、
+    UNKNOWN は不一致に数えない。理由コードの意味は `docs_read(topic="curation")` の「判定（`verdict`）と理由コード」。
     """
     holder, arf2_path = _dataset_context(dataset_handle)
     if arf2_path is None:
@@ -295,25 +288,21 @@ def curation_suggest(review_id: str | None = None, wrong: str = "flagged_or_like
                      rt_window: float | None = None, relation_mz_tol: float | None = None,
                      relation_min_r: float | None = None, thresholds: dict | None = None,
                      max_rows: int = 100, dataset_handle: str | None = None) -> str:
-    """キュレーションで「間違い」になったスポットと未注釈スポットに、注釈の候補を並べる
-    （候補付けレビュー）。**先に load_dataset・library_load・curation_review**。
-    対象のデータセットは `dataset_handle`（省けば直近。`curation_review` と同じ規則）。
+    """「間違い」のスポットと未注釈スポットに注釈の候補を並べる（候補付けレビュー）。先に `load_dataset`・
+    `library_load`・`curation_review`。データセットは `dataset_handle`（省けば直近。`curation_review` と同じ）。
 
-    対象: `wrong="flagged_or_likely"`（既定）= wrong フラグ ＋ 元レビューの likely_wrong、
-    `"flagged"` = wrong フラグだけ。`unannotated=True` で未注釈スポットも。判断済み
-    （assign / redundant）のスポットは `include_decided=True` のときだけ含める。
-    元レビューは `review_id`（省略時はこのアラインメントの最新のレビュー）。
-    候補: ① MS-DIAL の下位候補、② 閾値を緩めた再検索（スコアの足切りなし）、
-    ④ 注釈付きの別スポットの同位体・アダクト・インソース断片としての説明。
-    スペクトル類似度で並べ、極性矛盾・|Δm/z| ≥ 10 mDa は削り、非典型アダクト・RT–m/z 傾向の外れ・
-    一致ピーク 0 は順位を下げる。MS-DIAL の脂質規則は評価していない（鎖組成は保証しない）ので、
-    既定では和組成で記録する。
-    戻り値は 1 スポット 1 行の TSV（強い説明のあるものが先、先頭 `max_rows` 行）・件数・`html_path`。
-    ユーザーには `html_path` をブラウザで開いてもらい、選んだ内容をビューアの **送信** で送ってもらう
-    （記録と `_tags.xml` の反映はビューアが直接行う。`submit.via == "viewer"`）。送信用テキストを
-    貼るよう頼まない。Copy のテキストが貼られたとき（受け口の時間切れ・`submit.via == "copy"`）は
-    curation_submit(submission_text=...) に渡す。
-    戻り値の `library` は使った参照ライブラリのファイル名（`file`）と `sha256`（置き場所は出さない）。
+    対象: `wrong="flagged_or_likely"`（既定）は wrong フラグと元レビューの likely_wrong、`"flagged"` は wrong
+    フラグだけ。`unannotated=True` で未注釈スポットも。判断済み（assign / redundant）は `include_decided=True`
+    のときだけ。元レビューは `review_id`（省けばこのアラインメントの最新のレビュー）。
+    候補: ① MS-DIAL の下位候補、② 閾値を緩めた再検索（スコアの足切りなし）、④ 注釈付きの別スポットの同位体・
+    アダクト・インソース断片としての説明。スペクトル類似度で並べ、極性矛盾・|Δm/z| ≥ 10 mDa は削り、非典型
+    アダクト・RT–m/z 傾向の外れ・一致ピーク 0 は順位を下げる。MS-DIAL の脂質規則は評価しない（鎖組成は保証
+    しない）ので、既定は和組成で記録する。
+    戻り値: 1 スポット 1 行の TSV（強い説明のあるものが先、先頭 `max_rows` 行）・件数・`html_path`・`library`
+    （参照ライブラリのファイル名 `file` と `sha256`。置き場所は出さない）。
+    `html_path` はブラウザで開くビューアで、人が押す「送信」が記録と `_tags.xml` の反映を直接行う
+    （`submit.via == "viewer"`）。Copy のテキスト（受け口の時間切れ・`submit.via == "copy"`）は
+    `curation_submit(submission_text=...)` に渡す。欄の意味は `docs_read(topic="curation")`。
     """
     holder, arf2_path = _dataset_context(dataset_handle)
     if arf2_path is None:
@@ -370,33 +359,27 @@ def curation_submit(submission_text: str | None = None, review_id: str | None = 
                     dataset_handle: str | None = None) -> str:
     """キュレーションのフラグを記録する（追記。フラグの無いスポットは「間違っていない」で何も書かない）。
 
-    ユーザーがビューアの「送信用テキストをコピー」で貼った文をそのまま `submission_text` に渡す
-    （`CURATION_SUBMIT ` で始まる行だけを読む。書き写さないこと）。直接渡すなら `review_id` と
-    `flags=[{"spot_id": 12, "flag": "wrong" | "suspect" | "confirmed" | "clear", "note": "..."}]`
-    （confirmed = 注釈が正しいと確かめた。wrong / suspect と排他）。
-    候補付け（`cs-…`）の送信は `flags=[{spot_id, flag: assign|redundant|clear, candidate: "L1"|"R1",
-    level: sum|species, note}]`。候補の中身（名前・InChIKey）は保存済みの候補付けから展開するので、
-    送信側で名前を書かない。assign / redundant は `_tags.xml` を変えない。
-    `source` は判断の出どころ: ユーザーが出した判断は "user"（既定。ビューアの送信はいつも "user"）、
-    LLM が出した判断は "llm"。記録の各行に残り、curation_flags の source 列に出る。
-    `review_id` を省くと（送信用テキストも無いとき）、データセット（`dataset_handle`、省けば直近）の
-    `.arf2` に対する最新のレビュー（`cr-…`）を使い、戻り値の `review_id` と `review_id_source: "latest"` で示す
-    （そのレビューに拒まれたエラー——対象外のスポットなど——にも同じ 2 つが付く）。
-    候補付け（`cs-…`）への送信は `review_id` を省けない。
-    不正な要素が 1 つでもあれば何も書かずにエラーを返す（同じ spot_id を 1 回の送信で
-    2 回以上名指しした場合も含む——どちらを採るか決められないため）。
-    レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセット（`dataset_handle`、
-    省けば直近）の `.arf2` のフォルダの順に探す（`data/` は探さない）ので、サーバ再起動の後でも、
-    貼った文なら送れる。データセットも貼った文の `arf2_path` も無ければ `missing_state`。
-    書いた後、同じ `.arf2`（sha256 で照合）を開いているハンドルすべての `curation_flags` を読み直す
-    （結果の `open_handles`: `refreshed` と、別の呼び出しがロックを持っていて読み直せなかった
-    `not_refreshed`）。書き出しの `apply_curation` は新しい判断をすぐ使う。
-    記録の後、アラインメントの `_tags.xml` に反映する（wrong → Misannotation を付け Confirmed を外す、
-    confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、clear → 両方外す。
-    控えは `curation/tags-backup/`）。結果は `tags_xml`（`added` / `removed` は Misannotation、
-    `confirmed` は Confirmed の変化）。
-    反映に失敗しても記録は残る。MS-DIAL でプロジェクトを開いたままだと GUI の保存で
-    上書きされるので、`tags_xml.note` をユーザーに伝える。
+    ビューアの「送信用テキストをコピー」の文はそのまま `submission_text` に渡す（`CURATION_SUBMIT ` で始まる
+    行だけを読む）。直接渡すなら `review_id` と `flags=[{"spot_id": 12, "flag": "wrong" | "suspect" |
+    "confirmed" | "clear", "note": "..."}]`（confirmed = 注釈が正しいと確かめた。wrong / suspect と排他）。
+    候補付け（`cs-…`）は `flags=[{spot_id, flag: assign|redundant|clear, candidate: "L1"|"R1",
+    level: sum|species, note}]`（名前・InChIKey は保存済みの候補付けから展開するので書かない。assign /
+    redundant は `_tags.xml` を変えない）。
+    `source` は判断の出どころ: 人の判断は "user"（既定。ビューアの送信はいつも "user"）、LLM が出した判断は
+    "llm"。記録の各行に残り、`curation_flags` の source 列に出る。
+    `review_id` を省くと（送信用テキストも無いとき）、データセット（`dataset_handle`、省けば直近）の `.arf2` の
+    最新のレビュー（`cr-…`）を使い、戻り値（とそのレビューに拒まれた誤り）に `review_id` と
+    `review_id_source: "latest"` を付ける。候補付け（`cs-…`）への送信は `review_id` を省けない。
+    不正な要素が 1 つでもあれば何も書かずに誤り（1 回の送信で同じ spot_id を 2 回以上名指しした場合も）。
+    レビューはセッションの記録 → 送信用テキストの `arf2_path` → データセットの `.arf2` のフォルダの順に探す
+    （`data/` は探さない。サーバの再起動の後も貼った文なら送れる）。データセットも貼った文の `arf2_path` も
+    無ければ `missing_state`。
+    記録の後、同じ `.arf2`（sha256 で照合）を開いているハンドルの `curation_flags` を読み直し（`open_handles`:
+    `refreshed` / ロック中で読み直せなかった `not_refreshed`）、`_tags.xml` に反映する（wrong → Misannotation を
+    付け Confirmed を外す、confirmed → Confirmed を付け Misannotation を外す、suspect → Confirmed を外す、
+    clear → 両方外す。控えは `curation/tags-backup/`。結果は `tags_xml`）。反映に失敗しても記録は残る。
+    MS-DIAL でプロジェクトを開いたままだと GUI の保存で上書きされる（`tags_xml.note`）。欄の意味は
+    `docs_read(topic="curation")`。
     """
     if source not in ("user", "llm"):
         return _error("source は 'user' か 'llm' にしてください。")

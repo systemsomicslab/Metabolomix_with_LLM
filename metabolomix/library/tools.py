@@ -76,7 +76,7 @@ def _not_remembered(record: dict | None) -> dict:
     """`LIBRARY_NOT_REMEMBERED`: データセットが同定に使ったライブラリを覚えていない。
 
     候補は**ファイル名だけ**（研究室ライブラリの置き場所は戻り値に出さない）: 記憶が絞り切れなかった
-    候補と、設定の極性ごとの MSP の名前。どれも自動では開かない——選ぶのは利用者で、`file_path` で渡す。
+    候補と、設定の極性ごとの MSP の名前。どれも自動では開かない（`file_path` で渡す）。
     """
     names = list((record or {}).get("candidates") or [])
     for key in user_config.MSP_SETTING_KEYS.values():
@@ -101,42 +101,26 @@ def _not_remembered(record: dict | None) -> dict:
           structured_output=False)
 def library_load(file_path: str | None = None, rebuild: bool = False,
                  dataset_handle: str | None = None) -> str:
-    """参照ライブラリを読み込み、照合用の SQLite store を構築（または既存キャッシュを
-    再利用）する。
+    """参照ライブラリを読み込み、照合用の SQLite store を作る（キャッシュがあれば使い回す）。一度に持つのは 1 つ。
 
-    `file_path` を渡せばそのファイル（`.msp` / `.dbs`）。**省けば、直近のデータセット（または
-    `dataset_handle`）が覚えた、同定に使ったライブラリ**（`library_record`。実体の sha256 を
-    測り直して通れば開く）。データフォルダも、設定の極性の MSP（`[library] msp_positive` /
-    `msp_negative`。Console にどれを使わせるかだけに使う）も探さない。覚えていない
-    （同定に使ったライブラリが決まらない）なら `LIBRARY_NOT_REMEMBERED`（候補のファイル名と
-    「`file_path` を渡す」案内）、データセットが無ければ `missing_state`（`load_dataset`）。
-    一度に保持するライブラリは 1 つだけ。
+    file_path: 開くファイル（`.msp` / `.dbs`）。省けば直近のデータセット（か `dataset_handle`）が同定に使った
+        ライブラリの記憶（`library_record`）を、実体の sha256 を測り直して通れば開く（`library_source:
+        "dataset_record"`）。データフォルダも、設定の極性の MSP（`[library] msp_positive` / `msp_negative`。
+        Console にどれを使わせるかだけに使う）も探さない。記憶が無い・決まらなければ `LIBRARY_NOT_REMEMBERED`
+        （候補のファイル名と「`file_path` を渡す」案内）、`mismatch`（内容が変わった・ファイルが無い）や
+        `lbm_only`（LBM だけで MSP を使っていない）なら理由を返す（`file_path` で明示すれば開ける）。データセットが
+        無ければ `missing_state`（`load_dataset`）。`file_path` で開いたものが記憶と違う（中身の sha256 で比べる）
+        ならそのまま開き、`differs_from_record` に記憶したファイル名と開いたファイル名を書く。記憶が `lbm_only` なら、
+        開いたライブラリで同定したものではない旨を `note` に書く。
+    rebuild: True はキャッシュを無視して作り直す（元ファイルが壊れている疑いのときなど）。store は元ファイルの
+        sha256 をキーにキャッシュするので、内容が変わらない限り普段は要らない。
+    dataset_handle: 省けば直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きし、ハンドルへは
+        読み取り専用で開く。
 
-    記憶が `mismatch`（内容が変わった・ファイルが無い）や `lbm_only`（LBM だけで MSP を使って
-    いない）のときは理由を返す（`file_path` で明示すれば開ける）。
-    `file_path` で開いたものが記憶と違うライブラリ（中身の sha256 で比べる）なら、そのまま開き、
-    戻り値の `differs_from_record` に記憶したファイル名と開いたファイル名を書く。
-    記憶が `lbm_only` なら、開いたライブラリで同定したものではない旨を `note` に書く。記憶から開いたときは `library_source` が
-    `"dataset_record"`。
-
-    初回の構築は大きな `.msp`（1 GB 級）で数分かかる。MCP のタイムアウトに当たる
-    なら、手元で `python -m metabolomix.library.store --file <path>` を 1 度
-    走らせておけば、以後はキャッシュを開くだけで済む。
-
-    `library_match_feature` の前提。別ライブラリへ切り替えると直近の照合結果
-    （`library_plot_mirror` が読む座標）は破棄する——古い照合を新ライブラリの
-    結果と取り違えないため。
-
-    `rebuild=True` はキャッシュを無視して構築し直す（元ファイルが壊れている
-    疑いがあるときなど）。通常は不要——store は元ファイルの sha256 をキーに
-    キャッシュされるため、内容が変わらない限り再構築しない。
-
-    戻り値のライブラリはいつもファイル名（`file`）と中身の sha256（`source_sha256`）で示し、
-    置き場所（パス）は出さない。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
-        ハンドルへは読み取り専用で開く。
+    `library_match_feature` の前提。別のライブラリへ切り替えると直近の照合結果（`library_plot_mirror` が読む座標）を
+    捨てる。初回の構築は大きな `.msp`（1 GB 級）で数分かかる。MCP の時間切れに当たるなら、手元で
+    `python -m metabolomix.library.store --file <path>` を 1 度走らせておけば以後はキャッシュを開くだけ。
+    戻り値のライブラリはファイル名（`file`）と中身の sha256（`source_sha256`）で示し、置き場所は出さない。
     """
     return _library_load(file_path, rebuild, dataset_handle)
 
@@ -562,97 +546,43 @@ def library_match_feature(
     mz_tol_ppm: float | None = None,
     min_fragment_relative_intensity: float | None = None,
 ) -> str:
-    """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、
-    上位候補を返す。
+    """測定 MS/MS（`.dcl`）を参照ライブラリ（`library_load` 済みの store）と照合し、上位候補を TSV で返す。
 
-    照合の対象は `precursor_mz` か `spot_id` の**どちらか一方**で指定する。
-    `spot_id`（MasterAlignmentID。`dataset_feature_search` 等で引ける）を渡すと、precursor m/z・
-    RT・極性を `.arf2`（`arf2_path`、省略時は直近のデータセットの `.arf2`）から取り、
-    測定スペクトルはアラインメント `.dcl`（`dcl_file`、省略時はデータセットの `.dcl`）の
-    そのスポットの代表 MS/MS を使う。`.dcl` の precursor・RT が ARF2 の `MassCenter`・`RT` と
-    ±0.05 Da・±0.2 分（`alignment_spot.PRECURSOR_TOLERANCE` / `RT_TOLERANCE`。RT だけのずれでも）で
-    合わなければ照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。
-    `rt` / `ion_mode` を明示すれば ARF2 の値より優先する。
+    照合の対象は `precursor_mz` か `spot_id` のどちらか一方（両方・どちらも無しは `invalid_arguments`）。
+    spot_id: MasterAlignmentID（`dataset_feature_search` などで引ける）。precursor m/z・RT・極性を `.arf2`
+        （`arf2_path`、省けばデータセットの `.arf2`）から取り、測定スペクトルはアラインメント `.dcl`（`dcl_file`、
+        省けばデータセットの `.dcl`）のそのスポットの代表 MS/MS。`.dcl` の precursor・RT が ARF2 の `MassCenter`・
+        `RT` と ±0.05 Da・±0.2 分（`alignment_spot.PRECURSOR_TOLERANCE` / `RT_TOLERANCE`。RT だけのずれでも）で
+        合わなければ照合せず `status="dcl_precursor_mismatch"`、ID が無ければ `spot_not_found`。`rt` / `ion_mode` を
+        渡せば ARF2 の値より優先する。スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・
+        `top_differs_from_msdial` を足す。
+    ion_mode: `"positive"` / `"negative"`（`"pos"` / `"neg"` / `"+"` / `"-"`、大小を問わない）。読めない値は
+        `invalid_arguments`。ARF2 の極性が `Both` / `Unknown` なら絞らない。
+    mz_tol / ms2_tol / rt_tol: 省けば store の `search_params`（`.dbs` 由来なら実値）、それも無ければ
+        0.01 / 0.025 / 0.2。参照の候補検索（precursor m/z 窓・RT 窓）にだけ効く（前駆体の窓は m/z 500 を超えたら
+        同じ ppm に広げる。実際の幅は `query.mz_window`）。`.dcl` から測定 MS/MS を引く窓は固定（0.01 Da・0.2 分）で、
+        引数にも `search_params` にも左右されない。足切り（`relative_amp_cutoff` / `absolute_amp_cutoff`）と質量範囲
+        （`mass_range_begin` / `mass_range_end`）も `search_params` から採点に渡す。
+    mz_tol_ppm: 窓に重ねる追加の絞り込み（窓は広げない）。参照との差が ±`mz_tol_ppm` ppm を超える候補を落とす
+        （省けば絞らない。0 より大きい有限の数でなければ `invalid_arguments`）。既定の窓 0.01 Da は低い m/z では
+        数十 ppm に当たるので、候補の `delta_ppm` を見る。
+    top_n: 返す上位の件数（既定 5。負値は全件）。
+    detail: True のときだけ TSV に `fragment_matches_excl_precursor` 列を、payload に `precursor_exclusion_tol`・
+        `min_fragment_relative_intensity`・`measured_peaks`・`alignments` を足す。
+    precursor_exclusion_tol: 省けば採点に使った `ms2_tol`。
+    min_fragment_relative_intensity: 0 以上 1 以下（`0` で下限なし。既定は MS/MS の合否の規則と同じ 0.01）。
+        `detail=False` では使わない。
+    dataset_handle: 省けば直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きし、`arf2_path` /
+        `dcl_file` を省けばそのデータセットの `.arf2` / `.dcl` を使う（データフォルダは探さない。データセットが
+        無ければ missing_state）。
 
-    `ion_mode` は `"positive"` / `"negative"`（`"pos"` / `"neg"` / `"+"` / `"-"`、大小を問わない。
-    `core.polarity_names.normalize_polarity` で正規化する）。読めない値は `invalid_arguments`
-    （黙って極性不明のレコードだけに絞らない）。ARF2 の極性が `Both` / `Unknown` なら絞らない。
-
-    `mz_tol` / `ms2_tol` / `rt_tol` は明示指定が無ければ store の `search_params`
-    （`.dbs` 由来なら実値）を使い、それも無ければ既定値
-    （`_DEFAULT_MZ_TOL` / `_DEFAULT_MS2_TOL` / `_DEFAULT_RT_TOL`、現在の値は
-    0.01 / 0.025 / 0.2）を使う。**これらは参照ライブラリの候補検索（`store.candidates()`
-    の precursor m/z 窓・RT 窓）にだけ効く。** 前駆体の窓は MS-DIAL と同じく、`mz_tol` を
-    m/z 500 を超えたら同じ ppm に広げる（上流 `FixMassTolerance`。既定なら
-    `max(0.01 Da, m/z × 20 ppm)`。実際の幅は `query.mz_window`）。
-    `.dcl` から測定 MS/MS を引く窓は
-    `_measured_spectrum` 内部の固定既定（`dcl/reader.py` と同じ `mz_tol=0.01`/
-    `rt_tol=0.2`）を常に使い、ここの引数や store の `search_params` の影響を受けない
-    （最終レビュー Important 7: `.dbs` の `RtTolerance` 既定 100.0 のような
-    ライブラリ用の値を `.dcl` 側の RT 窓に流用すると、同じ precursor m/z の
-    別ピークの測定スペクトルを黙って拾ってしまうため、2 つの窓を分離した）。
-    `mz_tol_ppm`（任意）は上の窓に**重ねる追加の絞り込み**で、窓を広げない:
-    参照との差が ±`mz_tol_ppm` ppm を超える候補を落とす（`mz_tol_ppm=10` なら +44 ppm の候補は
-    落ちる）。省略時は絞らない。既定の窓 0.01 Da は低い m/z では数十 ppm に当たる——候補の行の
-    `delta_ppm` を見て受け入れること。候補の行には
-    `delta_mz = 測定 - 参照`（Da）と `delta_ppm = (測定 - 参照) / 参照 * 1e6` が付く
-    （測定が参照より高いと正）。`precursor_mz` 列（参照の前駆体）は 6 桁で出す。
-    足切り（`relative_amp_cutoff` / `absolute_amp_cutoff`）と質量範囲
-    （`mass_range_begin` / `mass_range_end`）も同じ `search_params` から採って
-    採点（`match_spectrum`）に渡す——検証 CLI（`scripts/verify_spectral_match.py`）
-    と同じ集合（最終レビュー Important 2）。
-
-    `.dcl` に MS/MS が無い（未取得）場合は `status="not_found"` を返す——
-    「候補と合わなかった」のではなく「照合する測定スペクトルがそもそも無い」ことを
-    区別するため、`dcl_find_msms` と同じ文言の方針に揃える。照合を試みて失敗したら
-    （`not_found` / `no_candidates` / `spot_not_found` / `dcl_precursor_mismatch` / ファイルが無い）
-    直前の照合（`last_match`）を捨てる——`library_plot_mirror` が古い照合を黙って描かないため。
-
-    候補は **`total_score` の降順**で返す（`rank` 列・`ranked_by` フィールドが
-    同じ基準を指す）。MS-DIAL の総合スコア（上流 `GetTotalScore`）で、
-    `rt + precursor_mz + (weighted+simple+reverse)/3 + matched_peaks_percentage`
-    の**正規化しない和**——1 を超える。組み立て方は戻り値の `scoring` が明示する
-    （RT 項が入ったかは `.dbs` の `IsUseTimeForAnnotationScoring` 次第で、
-    数値だけを見ても分からないため）。同点は候補順を温存する（安定ソート）。
-
-    **上流の順位付けと完全に同じではない。** `MsScanMatchResultContainer.ResultOrder`
-    は `(IsManuallyModified, IsReferenceMatched, IsAnnotationSuggested, Priority,
-    TotalScore)` の辞書順で、`TotalScore` は最後のタイブレークにすぎない。
-    支配項の `IsReferenceMatched` は脂質クラス固有の判定
-    （`Lipidomics/`、上流 66,932 行）に依存するため移植していない。実データでは
-    この判定が無いと全候補が `True` になってゲートとして働かないので、
-    **`total_score` 単独比較が現実的な最良の近似**という位置づけ。
-    帰結として、上位に化学的にありえない候補が残ることがある
-    （`docs/output_format/library.md` §14.9）。`spot_id` で照合したとき、スポットに MS-DIAL の
-    注釈（`.arf2` の代表の名前）があれば、`msdial_name`・`msdial_rank`（注釈と同じ物質の候補の
-    順位。全候補の中で、無ければ null）・`top_differs_from_msdial`（1 位が注釈と別の物質か）を足す
-    （同じ物質かは InChIKey の先頭ブロック → 脂質の種 → 名前の順に比べる）。
-
-    `top_n` は上位何件を返すかの上限（既定 5）。負値を渡すと全件を返す
-    （明示的な仕様ではなく Python のスライス挙動に由来する副作用的な動作
-    ——件数を絞りたくないだけなら大きな正の値を渡すこと）。
-
-    候補一覧は TSV（列名 1 回）で返す。`inchikey` はライブラリの値のまま、`inchikey_standard` は
-    標準の InChIKey か（第 2 ブロックの 9 文字目が `S`。非標準 `N` は false、形でなければ空）。
-    **スペクトル座標と alignment は戻り値に含めない**（LLM の文脈を食うため）。座標は
-    `session.library.last_match` に持ち、`library_plot_mirror` がそこから読む。
-
-    `detail=True`（opt-in。再解析で使う）のときだけ、TSV の末尾に
-    `fragment_matches_excl_precursor`（前駆体 ± `precursor_exclusion_tol` を除き、測定強度が基準
-    ピークの `min_fragment_relative_intensity` 以上の一致の本数。省略時の幅は採点に使った
-    `ms2_tol`、下限は MS/MS の合否の規則と同じ既定 0.01）の列を足し、payload に
-    `precursor_exclusion_tol`・`min_fragment_relative_intensity`（使った下限）・
-    `measured_peaks`（測定スペクトル）・`alignments`（候補ごとの一致したピーク
-    `[m/z, 測定, 参照]`）を足す——直前の照合の状態（`last_match`）を読まずに、戻り値だけで
-    照合の中身を確かめられる。下限の既定が合否の規則と同じなので、既定のままなら
-    `library_msms_qualify` / `dataset_claim_evidence` の同じ名前の列と同じ本数になる
-    （`0` で下限なし。0 以上 1 以下の数。`detail=False` では使わない）。
-    **`matched_peaks_count` は前駆体の一致も 1 本に数える**（意味は変えていない）。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は直近のデータセット。ハンドルのライブラリ・照合結果だけを読み書きする。
-        `arf2_path` / `dcl_file` を省けばそのデータセットの `.arf2` / `.dcl` を使う
-        （データフォルダは探さない。データセットが無ければ missing_state）。
+    候補は `total_score`（MS-DIAL の総合スコアの正規化しない和。1 を超える。組み立て方は `scoring`）の降順で、同点は
+    候補順のまま。上流の順位付けとは同じでなく、化学的にありえない候補が上位に残ることがある。スペクトル座標と
+    alignment は返さず `session.library.last_match` に持つ（`library_plot_mirror` が読む）。`.dcl` に MS/MS が
+    無ければ `status="not_found"`（照合する測定スペクトルが無い。合わなかったのではない）。照合を試みて失敗したら
+    （`not_found` / `no_candidates` / `spot_not_found` / `dcl_precursor_mismatch` / ファイルが無い）直前の照合
+    （`last_match`）を捨てる。列と欄の意味（`delta_mz`・`delta_ppm`・`inchikey_standard`・`msdial_rank`・
+    `detail` の欄など）は `docs_read(topic="library")` の §14.6・§14.9・「照合の詳細（`detail=true`）」。
     """
     from metabolomix.tools._holder import resolve_holder
 
@@ -808,64 +738,32 @@ def library_plot_mirror(rank: int = 1, output: str | None = None,
                         dataset_handle: str | None = None,
                         spot_id: int | None = None,
                         candidate: str | None = None) -> list | str:
-    """対向プロット（mirror plot）を描く。既定は直近の `library_match_feature` の結果から。
+    """対向プロット（mirror plot）を描く。上段が測定、下段が参照（選んだ候補）。既定は直近の
+    `library_match_feature` の結果から。
 
-    `spot_id` を渡すと、そのスポットを `library_match_feature(spot_id=…)` と同じ規則（許容幅は
-    store の `search_params` か既定値）で照合し直してから描く（全候補を `last_match` に持つ）。
-    照合に失敗したら直前の照合を捨て、その封筒（`spot_not_found` / `not_found` /
-    `no_candidates` など）を返す——古い照合を黙って描かない。
-    `candidate`（任意）は描く候補を InChIKey（全体か先頭 14 文字）か名前（大小を問わない完全一致）で
-    選ぶ（`rank` より優先）。全体の InChIKey は全体で一致する候補を選ぶ（同じ先頭ブロックの別の
-    立体異性体を選ばない）。全体で合う候補が無いときだけ先頭ブロックの最上位を選び、それを
-    `match.picked_by: "inchikey_block"`（画像は caption の 1 文）で示す。照合の候補に無ければ誤り。
+    spot_id: そのスポットを `library_match_feature(spot_id=…)` と同じ規則（許容幅は store の `search_params` か
+        既定値）で照合し直してから描く（全候補を `last_match` に持つ）。照合に失敗したら直前の照合を捨て、その封筒
+        （`spot_not_found` / `not_found` / `no_candidates` など）を返す。
+    rank: 描く候補の順位（既定 1）。
+    candidate: 描く候補を InChIKey（全体か先頭 14 文字）か名前（大小を問わない完全一致）で選ぶ（`rank` より優先）。
+        全体の InChIKey は全体で一致する候補を選び（同じ先頭ブロックの別の立体異性体を選ばない）、無いときだけ先頭
+        ブロックの最上位を選ぶ（`match.picked_by: "inchikey_block"`、画像は caption の 1 文）。照合の候補に無ければ
+        誤り。
+    output: `"image"`（既定。サーバで描いた PNG）か `"payload"`（座標を丸めた `lipidmix.mirror.v2` の JSON。自前で
+        描くクライアント向け）。どちらもどのスポット（`spot_id`。precursor m/z で照合したときは null）・測定の
+        precursor m/z・どの候補（順位・名前・InChIKey）の図かを示す（画像は caption、payload は `match`。
+        `match.picked_by` は `rank` / `inchikey` / `inchikey_block` / `name`）。
+    scale: 縦軸の写し方。`"relative"`（既定）/ `"sqrt"` / `"log10"`。precursor がベースピークのスペクトル（脂質の
+        [M-H]- など）は `relative` だと診断イオンが相対数 % に潰れるので `"sqrt"` を使う。`Absolute` は無い。
+    label_policy: m/z ラベルの衝突回避。どちらも強度の降順に走査し、置いたラベルと重なるものを飛ばす（上下は別枠）。
+        `"auto"`（既定）は水平と垂直の両方が近いときだけ飛ばし、箱はラベル自身の文字列を測る。`"msdial"` は上流に
+        忠実で、水平距離だけを見て、箱は代表文字列 `"1000.00000"` 1 つで共通（ラベルは `"auto"` より少ない）。
+    dataset_handle: 省けば対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きし、`spot_id` で照合し直す
+        ときはそのデータセットの `.arf2` / `.dcl` を使う。
 
-    上段が測定、下段が参照（選んだ候補）。`output="image"`（既定）は
-    サーバ側で描画した PNG を返し、`output="payload"` は座標を丸めた
-    `lipidmix.mirror.v2` JSON を返す（Use-LLLM 等、自前で描くクライアント向け。
-    v2 で採点外ピーク `unscored_mz` の層を追加）。どちらも、どのスポット（`spot_id`。
-    precursor m/z で照合したときは null）・測定の precursor m/z・どの候補（順位・名前・InChIKey）の
-    図かを示す（画像は caption、payload は `match`。`match.picked_by` は候補の選び方で
-    `rank` / `inchikey` / `inchikey_block` / `name`）。
-
-    測定側の一致色分けには許容幅（`ms2_tol`）が要る——`library_match_feature`
-    が使った値（store の `search_params` か既定値）を自動で引き継ぐ。
-
-    **`.dbs` の強度足切りで採点に入らなかった測定ピークは灰色で薄く描く**
-    （`last_match["unscored_mz"]` を引き継ぐ）。採点は `normalize_measured` が
-    足切りした後のスペクトルに対して行うのに、図は足切り前の生ピークを描くため、
-    区別が無いと「描かれているのに採点されていない」ピークが黙って混ざる。
-    消さずに描くのは、消すと「MS/MS が取れていない」と読めてしまうため。
-    この層はラベル枠を取らず、凡例と caption の件数は**該当ピークがあるときだけ**
-    出る（足切りが 0 の run では図も caption も従来と変わらない）。
-
-    `scale` は縦軸の写し方で `"relative"`（既定）/ `"sqrt"` / `"log10"`。
-    **precursor がベースピークのスペクトル**（脂質の [M-H]- など）は `relative`
-    だと診断イオンが相対数 % に潰れて読めない——そのときに `"sqrt"` を使う。
-    上流 MS-DIAL も同じ問題を軸の切り替えで解いている
-    （`ObservableMsSpectrum.CreateAxisPropertySelectors2` の Relative / Absolute /
-    Log10 / Sqrt）。`Absolute` は用意しない——対向プロットは単位の違う 2 つの
-    スペクトルを上下に並べるので、生の強度で並べても比較にならない。
-
-    `label_policy` は m/z ラベルの衝突回避の方式。どちらも**強度降順に走査して
-    既に置いたラベルと重なるものを飛ばす**（上流 `Annotator.OnRender` と同じ
-    貪欲法）が、重なりの見方が違う:
-
-    - `"auto"`（既定）— 水平と垂直の両方が近いときだけ飛ばす。箱は
-      ラベル自身の文字列を実測する。対向プロットは同じ側でもピークの高さが
-      大きく違うので、2 次元で見るほうが読めるラベルを多く残せる。
-    - `"msdial"` — 上流に忠実。**水平距離だけ**を見て、箱は代表文字列
-      `"1000.00000"` 1 つで全ラベル共通にする。上流の MS2 ビューは
-      `Overlap="Horizontal, Direct"` だが、この合成は OR で、全ラベルが同じ箱を
-      使うため `Direct` は `Horizontal` の部分集合になり実質 `Horizontal` 単独に
-      縮退している。縦にどれだけ離れていても m/z が近ければ飛ばすので、
-      `"auto"` よりラベルは少なくなる。
-
-    どちらも上下は別枠で数える（上流は上下で別々の `Annotator` を持つため、
-    側をまたぐ衝突は起きない）。
-
-    dataset_handle: `load_dataset` が返したハンドル（再解析の並行のエージェント向け）。
-        省略時は対話のセッション。ハンドルのライブラリ・照合結果だけを読み書きする。
-        `spot_id` で照合し直すときは、そのデータセットの `.arf2` / `.dcl` を使う。
+    測定側の一致の色分けは `library_match_feature` が使った `ms2_tol` を引き継ぐ。`.dbs` の強度足切りで採点に
+    入らなかった測定ピーク（`last_match["unscored_mz"]`）は灰色で薄く描き、ラベル枠を取らない（凡例と caption の
+    件数は該当ピークがあるときだけ）。描き方の詳細は `docs_read(topic="library")` の §14.7。
     """
     from metabolomix.tools._holder import resolve_holder
 
@@ -967,17 +865,15 @@ _SEARCH_COLUMNS = ["name", "precursor_mz", "ion_mode", "adduct", "rt", "formula"
 def library_search(name: str | None = None, formula: str | None = None,
                    inchikey: str | None = None, ion_mode: str | None = None,
                    limit: int = 50, dataset_handle: str | None = None) -> str:
-    """読み込んだ参照ライブラリを名前・分子式・InChIKey で引く（読み取りだけ。再解析で使う）。
+    """読み込んだ参照ライブラリを名前・分子式・InChIKey で引く（読み取りだけ）。
 
     name: 大小を問わない部分一致。formula: 完全一致（例 `C42H82NO8P`）。
     inchikey: 先頭 14 文字（構造の骨格のブロック）で照合する（全体を渡してよい）。
-    ion_mode: `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は `invalid_arguments`。
-        極性不明のレコードは残す。`library_match_feature` と同じ）。
-    条件は与えたものの AND で、1 つも無ければ `invalid_arguments`。`limit`（既定 50）件まで
-    TSV（列名 1 回）で返し、打ち切った件数を `truncated` に書く。スペクトルは返さない
-    （ピーク数 `n_peaks` だけ）。
-    dataset_handle: `load_dataset` が返したハンドル（そのハンドルのライブラリを引く）。
-        省略時は対話のセッションの `library_load` のライブラリ。
+    ion_mode: `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は `invalid_arguments`。極性不明の
+        レコードは残す。`library_match_feature` と同じ）。
+    条件は渡したものの AND（1 つも無ければ `invalid_arguments`）。`limit`（既定 50）件まで TSV（列名 1 回）で返し、
+    打ち切った件数を `truncated` に書く。スペクトルは返さない（ピーク数 `n_peaks` だけ）。
+    dataset_handle: そのハンドルのライブラリを引く（省けば対話のセッションの `library_load` のライブラリ）。
     """
     from metabolomix.tools._holder import resolve_holder
 

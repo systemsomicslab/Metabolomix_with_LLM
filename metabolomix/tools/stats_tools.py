@@ -123,46 +123,36 @@ def dataset_preprocess(
 ) -> str:
     """統計エンジンの前処理を回して、前処理済みの行列を作る（行列 ID を返す）。
 
-    工程は 選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ（個体ごとの行列）。
-    同じデータ・除外・群・設定は同じ `matrix_id`。比較（dataset_compare）・PCA（dataset_pca）・パスウェイ
-    （pathway_project）はこの ID を受ける（省略時は、このハンドルで最後に作ったこの行列。無ければ既定の設定）。
-    `dataset_exclude` の除外は自動で反映される。
-    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。前処理は成功）。
-    陽陰を統合したデータセット（dataset_merge_polarities）は、ドリフト補正をその極性の注入順・バッチで、
-    正規化の係数をその極性の特徴だけから、極性ごとに当てる（各極性の値は、その極性だけを前処理して並べたものと
-    同じ）。段の `by_polarity` に極性ごとの記録（ドリフトの段は一部の極性だけ補正すれば status=partial）、
-    陽陰で注入順・バッチが違えば warnings の `polarity_runs_differ`（注意の文面に、その極性の注入順・バッチを入れ直す
-    手順: 陽イオンは統合したハンドルへのシート、陰イオンは陰イオンのハンドルへのシートと統合のし直し）。
-    ある極性だけ normalization_features / normalization_exclude_features で係数の特徴が残らなければ断らず、
-    その極性は残った特徴すべてから求めて注意（`normalization_features_not_in_polarity` /
-    `normalization_exclude_features_cover_polarity`）を返す。
+    工程は 選択 → ドリフト補正 → 品質の足切り → 正規化 → log2 → 反復のまとめ（個体ごとの行列）。同じデータ・除外・群・設定は
+    同じ `matrix_id`。比較（dataset_compare）・PCA（dataset_pca）・パスウェイ（pathway_project）はこの ID を受ける（省略時は、
+    このハンドルで最後に作ったこの行列。無ければ既定の設定）。`dataset_exclude` の除外は自動で反映される。`reports/stats/` に記録を
+    1 件追記する（書けないときは record.written=false。前処理は成功）。陽陰を統合したデータセット（dataset_merge_polarities）は、
+    ドリフト補正をその極性の注入順・バッチで、正規化の係数をその極性の特徴だけから、極性ごとに当てる。段の `by_polarity` に極性
+    ごとの記録（ドリフトの段は一部の極性だけ補正すれば status=partial）、陽陰で注入順・バッチが違えば warnings の
+    `polarity_runs_differ`。戻り値・段・注意の意味は `docs_read(topic="dataset")` の 10.2。
 
-    drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。
-        auto は条件が揃っても、内部標準などで換算済みのとき・注入順が MS-DIAL の既定（ファイルの順）
-        かもしれないときは補正せずに計算し、warnings の `drift_not_applied_by_default` に理由と
-        `drift_mode="on"` での呼び直しを返す（尋ねない。補正できない理由があればそれだけを返す）。
-        "on" は条件が揃えば必ず補正し、揃わなければ PREPROCESS_PRECONDITION。
-        drift_span: LOESS の窓（0〜1、既定 0.75）。loess_degree: LOESS の局所多項式の次数 1（既定。
-        局所線形）/ 2（局所 2 次。要る QC が 1 つ多い）。drift_mode="off" では効かないので使わず、
+    drift_mode: QC の LOESS ドリフト補正。"auto"（既定。条件が揃えば行う）/ "on" / "off"。auto は条件が揃っても、換算済みのとき・
+        注入順が MS-DIAL の既定（ファイルの順）かもしれないときは補正せずに計算し、warnings の `drift_not_applied_by_default` に理由と
+        `drift_mode="on"` での呼び直しを返す（尋ねない）。"on" は条件が揃えば必ず補正し、揃わなければ PREPROCESS_PRECONDITION。
+    drift_span: LOESS の窓（0〜1、既定 0.75）。
+    loess_degree: LOESS の局所多項式の次数 1（既定。局所線形）/ 2（局所 2 次。要る QC が 1 つ多い）。drift_mode="off" では使わず、
         warnings の `loess_degree_ignored` に書く（matrix_id は渡さないときと同じ）。
     blank_min_ratio: 生体試料の平均がブランク平均のこの倍数未満の特徴を除く（既定 3.0）。
-    detection_min_rate: 検出率（gap-fill を除く）の下限（既定 0.5）。detection_by: "group"（群ごと）/
-        "all"（全体）。検出の別が無いデータでは評価できない旨を steps に出す。
+    detection_min_rate: 検出率（gap-fill を除く）の下限（既定 0.5）。detection_by: "group"（群ごと）/ "all"（全体）。
     max_qc_rsd: QC の RSD がこれを超える特徴を除く（既定 0.30）。max_d_ratio: D-ratio の上限（既定 0.5）。
-    上の 4 つの足切りは None でその足切りを行わない。
-    normalize: "auto"（既定。換算済みなら何もしない）/ "none" / "tic" / "median" / "pqn"。
-        PQN の参照は QC があれば QC の、無ければ生体試料（全群）の特徴ごとの中央値（QC が無いときは
-        steps の `reference_definition` と warnings の `pqn_reference_is_samples` で明示する）。
-    normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。
-        内部標準など）。normalization_exclude_features: 係数の計算から外す特徴 ID。どちらも係数の計算だけで、
-        外した特徴も行列には残り、係数で割られる。normalize="none"（と、換算済みのデータで "none" に決まった
-        "auto"）では効かないので使わず、warnings の `normalization_features_ignored`（reason が method_none /
-        quant_normalized）に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
-        （`normalization_features_empty`）。
+        上の 4 つの足切りは None でその足切りを行わない。
+    normalize: "auto"（既定。換算済みか QC が無ければ何もしない。それ以外は PQN）/ "none" / "tic" / "median" / "pqn"。QC が無い
+        データで "pqn" を明示すると、参照は生体試料（全群）の特徴ごとの中央値（warnings の `pqn_reference_is_samples`）。
+    normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。内部標準など）。
+    normalization_exclude_features: 係数の計算から外す特徴 ID。
+        どちらも係数の計算だけで、外した特徴も行列には残り、係数で割られる。正規化しないとき（"none" と、"none" に決まった "auto"）は
+        使わず、warnings の `normalization_features_ignored` に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
+        （`normalization_features_empty`）。統合したデータセットのある極性だけ係数の特徴が残らなければ断らず、その極性は残った特徴
+        すべてから求めて注意（`normalization_features_not_in_polarity` / `normalization_exclude_features_cover_polarity`）を返す。
     collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
-    group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸の
-        リストで優先）。解いた群は行列の設定に記録される。無ければ試料の表の群。
+    group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸のリストで優先）。解いた群は
+        行列の設定に記録される。無ければ試料の表の群。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
     holder = resolve_holder(dataset_handle)
@@ -680,57 +670,40 @@ def dataset_compare(
 ) -> str:
     """2 群・多群・2 因子の比較を統計エンジン（analysis-spec v2）で行い、要約を返す。
 
-    群の指定はちょうど 1 つ: reference_group+test_group（2 群）/ groups（3 群以上。先頭が基準で
-    各群 − 基準の対比と omnibus F）/ comparisons（spec v2 の comparisons の形。2 因子・`at`・
-    交互作用。factors が要る。因子が 2 つ以上で cell がそろえば主効果・交互作用の F も `factorial` に返す）。
-    comparisons の無い factors は、空（[]）か ["group"] なら群の指定の設計と同じなので notes に書いてそのまま比べる。
-    ほかの因子で、群の名前がその因子の水準でそのモデルが組める（比較に入る試料に因子の値が欠けず、2 因子以上なら
-    空の cell が無い）なら「その因子のモデルで比べる」読みが立ち、数字が変わるので needs_input（patch の封筒。
-    選択肢の value は替える引数の dict で、その引数を置き換え・null の引数を外して呼び直す: 因子のモデルは
-    comparisons を足して群の指定を外し、群の名前が group 列の水準なら factors を外す選択肢も並ぶ）。どの因子の
-    水準でもないかモデルが組めなければ group 列で比べて notes に書く。
-    判定（changed / unchanged / inconclusive）は q と CI で決まり、
-    log2fc_threshold は判定に使わない（large_changes の数え方・図の色分け・書き出しの significant 列だけ）。
-    全行は result_id でセッションに保持し、直近の結果（図・書き出しの既定）にもなる。
-    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。比較は成功）。
-    戻り値の先頭は `confounding`（群とバッチの交絡。対比ごとの `by_contrast`）。
+    群の指定はちょうど 1 つ: reference_group+test_group（2 群）/ groups（3 群以上。先頭が基準で各群 − 基準の対比と omnibus F）/
+    comparisons（spec v2 の comparisons の形。2 因子・`at`・交互作用。factors が要る。因子が 2 つ以上で cell がそろえば主効果・
+    交互作用の F も `factorial` に返す）。comparisons の無い factors は、空（[]）か ["group"] なら notes に書いてそのまま比べる。
+    ほかの因子で、群の名前がその因子の水準でそのモデルが組めるなら数字が変わるので needs_input（patch の封筒。選択肢の value は
+    置き換える引数の dict）、組めなければ group 列で比べて notes に書く。
+    判定（changed / unchanged / inconclusive）は q と CI で決まり、log2fc_threshold は判定に使わない（large_changes の数え方・図の
+    色分け・書き出しの significant 列だけ）。全行は result_id でセッションに保持し、直近の結果（図・書き出しの既定）にもなる。
+    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。比較は成功）。戻り値の先頭は `confounding`（群と
+    バッチの交絡。対比ごとの `by_contrast`）。戻り値と needs_input の選択肢は `docs_read(topic="dataset")` の 11.2。
 
     covariates: 試料の表の列名。値がすべて数値なら numeric、さもなくば categorical。
-    block: "subject_id" だけ（個体の固定効果。同じ個体が複数の群・cell に出る対応のある計画——前後比較など——で
-        個体差を除く）。既定のまとめた行列（dataset_preprocess の collapse_replicates=True）でもそのまま効く:
-        まとめは個体 × 群 × 属性ごとなので、群をまたぐ同じ個体は別の単位のまま対応づけられる。個体が群に
-        入れ子（どの個体も 1 つの群にしか出ない）なら、まとめた行列でも collapse_replicates=False の行列でも
-        計画行列が階数不足になり DESIGN_RANK_DEFICIENT で止まる（入れ子の技術反復は block ではなく既定の
-        まとめで扱う）。
-    matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は、この
-        ハンドルで dataset_preprocess が最後に作った行列（group_levels / group_factors を渡したときは群が
-        同じものだけ）、無ければ既定の前処理で行列を作って登録する（drift=auto は換算済み・注入順がファイルの
-        順かもしれないときドリフト補正を当てず、警告 drift_not_applied_by_default を返す。補正するなら
-        dataset_preprocess(drift_mode="on") の ID を渡す）。使った行列は戻り値の matrix_id と matrix_source
-        （"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id /
-        matrix_source）。古い・無い ID は missing_state。ID と一緒に渡した group_levels / group_factors は、
-        試料を行列と同じ群に分けるなら（試料の表の群と同じ分け方も。試料ごとの群で比べる）notes に書いてそのまま
-        比べ、違えば needs_input（patch の封筒。行列の群で比べる＝群の引数を外すか、渡した群で比べる＝matrix_id を
-        外すか。群は行列が決めている。選択肢は対比の群の名前がその群にある読みだけで、行列の群でしか比べられなければ
-        群の引数を使わず notes に書いて比べる）。
-    method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/
-        "arithmetic_mean_ratio"。bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"
-        （reported_feature_ids の特徴だけ。reported なのに ID が無ければ DATASET_BAD_REQUEST。reported 以外で
-        渡した ID は使わず、その旨を notes に書く）。
-    p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"（補正なし）。
-        q 列はこの方法の値で、戻り値と記録に p_adjust_method として残る。別リポジトリとの契約の書き出し
-        （dataset_export_differential・dataset_export_evidence_bundle）の q_value は方法によらず BH の q
-        （BH でなければ同じ母集団で p から計算し直し、significant もその q で読む）。
+    block: "subject_id" だけ（個体の固定効果。同じ個体が複数の群・cell に出る対応のある計画で個体差を除く）。既定のまとめた行列
+        （dataset_preprocess の collapse_replicates=True）でも効く。個体が群に入れ子（どの個体も 1 つの群にしか出ない）なら計画行列が
+        階数不足になり DESIGN_RANK_DEFICIENT（入れ子の技術反復は block ではなく既定のまとめで扱う）。
+    matrix_id: dataset_preprocess が返した行列 ID（その前処理・群・除外のまま比較する）。省略時は、このハンドルで dataset_preprocess が
+        最後に作った行列（group_levels / group_factors を渡したときは群が同じものだけ）、無ければ既定の前処理で行列を作って登録する
+        （drift=auto が補正を当てなければ警告 drift_not_applied_by_default。補正するなら dataset_preprocess(drift_mode="on") の ID を
+        渡す）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" / "latest_preprocess" / "default"。省いた呼び出しの
+        エラーにも details.matrix_id / matrix_source）。古い・無い ID は missing_state。ID と一緒に渡した group_levels /
+        group_factors は、試料を行列と同じ群に分けるなら notes に書いてそのまま比べ、違えば needs_input（patch の封筒。群の引数を
+        外すか matrix_id を外すか）。
+    method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/ "arithmetic_mean_ratio"。
+    bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"（reported_feature_ids の特徴だけ。ID が無ければ
+        DATASET_BAD_REQUEST。reported 以外で渡した ID は使わず notes に書く）。
+    p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"。q 列はこの方法の値で、戻り値と記録に
+        p_adjust_method として残る。dataset_export_differential・dataset_export_evidence_bundle の q_value は方法によらず BH の q。
     q_threshold / equivalence_fc: 判定の q の閾値（既定 0.05）と同等とみなす倍率（既定 1.2）。
-    allow_confounded: 既定 true（群とバッチが完全交絡でも比較し、confounding と対比の confounded に印を
-        付ける）。false を渡すと完全交絡（全体か、どれかの対比）で STATISTIC_CONFOUNDED にして止める。
-    top_n: 対比ごとに changed の上位（q の小さい順）を top に何件載せるか（既定 10。F 検定があれば効果ごとの
-        上位を f_top に。全行は result_id・output_path で取り出す）。50 を超える値は断らず 50 に下げて比べ、
-        notes に書く。そのとき 50 行で切った対比・効果があれば top_truncated: true と top_n_more /
-        f_top_n_more（対比・効果 → 載せなかった行数）。整数でない・負の値は DATASET_BAD_REQUEST。
-    output_path: 全特徴 × 全対比の全列（統計量・df・CI・SE・群ごとの n と検出数・同定の列）を TSV で書く
-        先。F 検定（omnibus・要因）があれば `<stem>.ftests<拡張子>` にも書く。差次的エクスポート
-        （dataset_export_differential）の 15 列とは別物。書けなくても比較は成功し、output.written=false。
+    allow_confounded: 既定 true（群とバッチが完全交絡でも比較し、confounding と対比の confounded に印を付ける）。false なら完全交絡
+        （全体か、どれかの対比）で STATISTIC_CONFOUNDED にして止める。
+    top_n: 対比ごとに changed の上位（q の小さい順）を top に載せる件数（既定 10。F 検定があれば効果ごとの上位を f_top に）。50 を
+        超える値は断らず 50 に下げて notes に書き、50 行で切った対比・効果があれば top_truncated: true と top_n_more / f_top_n_more。
+        整数でない・負の値は DATASET_BAD_REQUEST。
+    output_path: 全特徴 × 全対比の全列（統計量・df・CI・SE・群ごとの n と検出数・同定の列）を TSV で書く先。F 検定があれば
+        `<stem>.ftests<拡張子>` にも書く。dataset_export_differential の 15 列とは別物。書けなくても比較は成功し output.written=false。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
     holder = resolve_holder(dataset_handle)
@@ -905,22 +878,19 @@ def dataset_pca(
 ) -> str:
     """前処理済みの行列で PCA を行う（統計エンジンの PCA。stats-pca.v1）。
 
-    軸は生体の個体だけで決め、QC は同じ軸へ投影する（軸の計算には使わない）。欠測は PCA のためだけに
-    補う（行列そのものは変えない）。値は log2 のまま（log_transform 引数は無い）。全量（スコア・
-    ローディング）は戻り値に載せず result_id でセッションに保持し、直近の PCA（図の既定）にもなる。
-    `reports/stats/` に記録を 1 件追記する（書けないときは record.written=false。PCA は成功）。
+    軸は生体の個体だけで決め、QC は同じ軸へ投影する。欠測は PCA のためだけに補う（行列は変えない）。値は log2 のまま。スコア・
+    ローディングの全量は戻り値に載せず result_id でセッションに保持し、直近の PCA（図の既定）にもなる。`reports/stats/` に記録を
+    1 件追記する（書けないときは record.written=false。PCA は成功）。
 
-    matrix_id: dataset_preprocess が返した行列 ID。省略時は、このハンドルで dataset_preprocess が最後に
-        作った行列、無ければ既定の前処理で行列を作って登録する（使った行列で drift=auto が補正を当てなかった
-        ときは警告 drift_not_applied_by_default。補正するなら dataset_preprocess(drift_mode="on") の ID を
-        渡す）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" / "latest_preprocess" /
-        "default"。省いた呼び出しのエラーにも details.matrix_id / matrix_source）。古い・無い ID は
-        missing_state。
+    matrix_id: dataset_preprocess が返した行列 ID。省略時は、このハンドルで dataset_preprocess が最後に作った行列、無ければ既定の
+        前処理で行列を作って登録する（drift=auto が補正を当てなかったら警告 drift_not_applied_by_default。補正するなら
+        dataset_preprocess(drift_mode="on") の ID を渡す）。使った行列は戻り値の matrix_id と matrix_source（"matrix_id" /
+        "latest_preprocess" / "default"。省いた呼び出しのエラーにも details.matrix_id / matrix_source）。古い・無い ID は missing_state。
     scaling: "autoscale"（既定。平均 0・SD 1）/ "pareto"（SD の平方根で割る）。
     n_components: 主成分数（既定 5。個体数・特徴数の小さい方が上限）。
     impute: 欠測の補い方 "half_min"（既定）/ "knn" / "none"（欠測があれば PCA_MISSING_VALUES）。
-    group_levels / group_factors: **色分けの表示と結果の記録にだけ**使う群（試料名の因子トークン）。
-        PCA の数字・行列の選択には効かない（matrix_id と併用できる）。無ければ行列の個体の群。
+    group_levels / group_factors: 色分けの表示と結果の記録にだけ使う群（試料名の因子トークン）。PCA の数字・行列の選択には効かない
+        （matrix_id と併用できる）。無ければ行列の個体の群。
     dataset_handle: `load_dataset` が返したハンドル。省略時は対話のセッションのデータセット。
     """
     holder = resolve_holder(dataset_handle)

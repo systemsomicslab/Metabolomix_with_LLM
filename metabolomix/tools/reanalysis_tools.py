@@ -157,64 +157,37 @@ def _dataset_or_error(holder, needed: bool):
           structured_output=False)
 def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
-    """論文の方法を写した spec で、行列を作って検定する（再解析で使う）。
+    """論文の方法を写した spec で行列を作って検定する。状態も記録も書かない（ハンドルは読むだけ）。
 
-    `spec["schema"] == "analysis-spec.v2"` なら統計エンジンへ回す（v2 は下の「v2」）。それ以外は v1。
+    `spec["schema"] == "analysis-spec.v2"` なら統計エンジン、それ以外は v1（analysis-spec.v1）。spec の形・既定・戻り値の欄は
+    `docs_read(topic="reanalysis", section="統計の spec")`（v2 は 2.1）、v1 の `matrix` は `section="行列の recipe"`。
+    v1 の欄: `input`（データセットか外部の行列: TSV・MetaboLights の MAF・mwTab・xlsx）・`groups`・`comparison`
+    （比較名は `<test>_vs_<ref>`）・`analyses`（名前つきの解析。感度解析は 1 つの spec に並べる）・`covariates`・
+    `aggregate`・`features`・`correlate`。
 
-    v2: `lipidmix://docs/output-format/reanalysis` と statistics-engine の spec。spec だけで同じ数字を
-    出し直せる自己完結の実行で、除外は `input.exclude_samples` / `exclude_features` と
-    `group_overrides` に書いたものだけを使う（`dataset_exclude` の除外は読まない。spec に無い除外が
-    あれば注意 `dataset_exclusions_not_in_spec` を返す）。前処理は確認を求めない（`drift.mode="auto"` が
-    補正を当てなかったときは前処理の段と warnings の `drift_not_applied_by_default` に理由と呼び直し方）。陽陰を
-    統合したデータセットはドリフト補正と正規化を極性ごとに当てる（dataset_preprocess と同じ）。状態も記録も書かない。
-    書いても効かない設定（`bh_population` が reported でない解析の `reported_feature_ids`・
-    `normalize.method="none"` の `features` / `exclude_features`・`drift.mode="off"` の `loess_degree`）は
-    誤りにせず捨てて `notes` に書き、上限（10000）を超える plsda の `n_permutations` は上限に下げて `notes` に書く
-    （捨てた設定は正規化した spec と rule_hash に入らない）。
-    plsda の交差検証と並べ替え検定は、同じ個体の単位（`design.block`、無ければ `subject_id`）をまとめて
-    分割・入れ替える（`cv.group_by`・`permutation.scheme`）。
-    戻り値は解析ごとの要約（行は v1 と同じ規則: `output_path` に全量の JSON、無ければ TSV）。compare と
-    composition の要約は交絡 `confounding`（`batch_status`・`by_contrast`）を持ち、composition の `warnings` には
-    内側の比較（絶対量・CLR）の注意（完全交絡など）もコードで重ねずに載る。
+    - 返すのは数字・向き（`direction`）・閾値を機械的に当てた `meets_thresholds` で、再現したかの判定は返さない。
+      正規化した spec・`rule_hash`・`input_fingerprint` が入り、同じ spec・同じ入力なら同じ JSON。
+    - spec だけで再現する: v2 の除外は `input.exclude_samples` / `exclude_features` と `group_overrides` だけで、
+      `dataset_exclude` の除外は読まない（spec に無い除外があれば注意 `dataset_exclusions_not_in_spec`）。割れたスポットの
+      まとめ（`features.merge_split`、既定 true。外部の行列では何もしない）は `dataset_alignment_qc` がハンドルに持つ結果を使わない。
+    - `aggregate` と `features.feature_ids` は併用できない（`ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。
+    - 効かない設定は誤りにせず `notes` に書く。v2 の `bh_population` が reported でない解析の `reported_feature_ids`・
+      `normalize.method="none"` の `features` / `exclude_features`・`drift.mode="off"` の `loess_degree`、v1 の `steps` に無い段の
+      設定・`merge_split=false` や外部の行列での `features.alignment_qc`・ols でない検定の共変量は捨てる（v2 は正規化した spec と
+      `rule_hash` に入れない）。v1 の `correction=none` の `bh_population` と `thresholds.q`（`meets_thresholds` は false）・
+      drift_correct の解析が無い spec の `injection_order`・ols の無い spec の `covariates`（この 2 つの TSV は読まない）は spec と
+      `rule_hash` に残す。plsda の `n_permutations` は上限 10000 に下げる。
+    - v2 の前処理は確認を求めない（`drift.mode="auto"` が補正を当てなかったら、前処理の段と warnings の
+      `drift_not_applied_by_default` に理由と呼び直し方）。陽陰を統合したデータセットはドリフト補正と正規化を極性ごとに当てる
+      （`dataset_preprocess` と同じ）。plsda の交差検証と並べ替え検定は同じ個体の単位（`design.block`、無ければ `subject_id`）を
+      まとめて分割・入れ替える。
+    - compare と composition の要約は交絡 `confounding`（`batch_status`・`by_contrast`）を持つ。
 
-    v1（analysis-spec.v1）:
-
-    spec の形と欄の意味は `lipidmix://docs/output-format/reanalysis` §2。要点:
-    `comparison`（`reference` / `test` の群の名前。比較名は `<test>_vs_<ref>`）、
-    `analyses`（名前つきの解析を並べる——感度解析は 1 つの spec に並べる。各解析は
-    `matrix`（matrix-recipe.v2: 段の順序・検出率・KNN・PQN・LOESS・RSD。統合したデータセットの正規化の
-    係数は極性ごと、drift_correct は極性ごとの注入順: injection_order.source=metadata は陽イオンが試料の表、
-    陰イオンが統合の残した陰イオンの測定。TSV の 1 つの注入順は全極性に当て、陰イオンの測定と違えば notes）と
-    `test`（`student` / `welch` / `mannwhitney` / `ols`）・`fold_change`・`correction`・
-    `bh_population`・`thresholds`）、入力は `input`（データセットか外部の行列: TSV・MetaboLights の
-    MAF・mwTab・xlsx）、群は `groups`（実験情報シートか TSV）、`covariates`（OLS の共変量の TSV）、
-    `aggregate`（クラスの和・2 特徴の比を 1 本の特徴として検定。和はメンバーごとの寄与
-    `contributions` も返す）、`features`（報告する特徴と、`merge_split`——割れたスポットを試料ごとに
-    大きい方の値の 1 列にまとめてから検定する。既定 true、行の `merged_from`、外部の行列では何もしない。
-    `dataset_alignment_qc` がハンドルに持つ最後の結果は使わない——spec だけで再現する）。
-    **`aggregate` と `features.feature_ids` は併用できない**（報告するのは集約した 1 本。
-    `ANALYSIS_SPEC_INVALID`。種ごとの行は aggregate の無い別の spec で回す）。`bh_population` は
-    `matrix` / `reported` / `annotated`（SME のある特徴だけ）。`correlate`（任意）は外部の表の値との
-    Spearman の ρ を、spec に書いた特徴の対応（`pairs`）ごとに返す（試料の対応 `sample_map` は 1 対 1。
-    p は小さい n・同順位・近似の裾〔1e-3 未満〕では並べ替えの p で、出し方は行の `p_method`）。
-    書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の行列での
-    `features.alignment_qc`・ols でない検定の共変量）は誤りにせず、使わずに `notes` に書く。
-    `correction=none` の `bh_population` と `thresholds.q`（q が null なので満たせず meets_thresholds は false）・
-    drift_correct の解析が無い spec の `injection_order`・共変量で調整する ols の無い spec の `covariates`
-    （この 2 つの TSV は読まない）も `notes` に書くが、spec と rule_hash には残す（hash は前と同じ）。
-
-    返すのは数字と向き（`direction`）と閾値を機械的に当てた `meets_thresholds` だけで、
-    再現したかの判定は返さない。結果には正規化した spec・`rule_hash`・`input_fingerprint`
-    が入り、同じ spec・同じ入力なら同じ JSON になる。
-
-    output_path: 結果の JSON をここへ書き、要約だけを返す。省略時は解析ごとに行を TSV で返し、
-        50 行を超える解析は p の小さい順の先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件・
-        `rows_order`。断らない）。集約の要約（`aggregate`）は output_path の有無によらず、和に入った
-        メンバー（`n_contributions`）が 50 を超えれば寄与 `contributions` を `share_median` の大きい順の
-        先頭 50 行（`contributions_order`）、`members`・`summed`・`dropped`・`merged_from` はそれぞれ 50 件を
-        超えたものだけ先頭 50 件を載せる（件数は `n_<名前>`、切ったかは `<名前>_truncated`。`notes` は切った
-        ものだけを名指す。全量は output_path の JSON）。
-    対話のセッション・ハンドルの状態は変えない（読むだけ）。
+    output_path: 結果の全量の JSON をここへ書き、要約だけを返す。省略時は解析ごとに行を TSV で返し、50 行を超える解析は
+        p の小さい順の先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件・`rows_order`。断らない）。集約の要約
+        （`aggregate`）は output_path の有無によらず、`contributions`（`share_median` の大きい順）・`members`・`summed`・
+        `dropped`・`merged_from` を 50 件までにする（件数は `n_<名前>`、切ったかは `<名前>_truncated`）。
+    dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import analysis_spec
 
@@ -501,25 +474,20 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
                          dcl_file: str | None = None, top_n: int = 10,
                          dataset_handle: str | None = None,
                          mz_tol_ppm: float | None = None) -> str:
-    """MS/MS の照合に、spec で書いた合否の規則（msms-rules.v1）を当てる（再解析で使う）。
+    """MS/MS の照合に、spec で書いた合否の規則（msms-rules.v1）を当てる。
 
-    照合は `library_match_feature` と同じ（`spot_id` か `precursor_mz` のどちらか一方。前駆体の
-    窓は MS-DIAL と同じく m/z 500 を超えたら ppm で広がる。`mz_tol_ppm`（任意、0 より大きい数）は
-    その窓に重ねる ppm の絞り込み）。使った窓は `query`（`mz_tol`・`mz_window`・`mz_tol_ppm`）に出る。
-    `ion_mode` は `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は
-    `DATASET_BAD_REQUEST`）。
-    規則の形と検査の意味は `lipidmix://docs/output-format/reanalysis` §4（`target` は
-    `inchikey` か、InChIKey が一意に決まらない脂質の種の `lipid_species`。同位体の標識のある内部標準の名前は
-    種として合否を出せないので `MSMS_RULES_INVALID`）。設定した検査だけを
-    `checks` に並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`。既定の規則でも
-    断片の一致を 1 本求め（`min_fragments_excl_precursor` 既定 1）、断片は測定の基準ピークに対して
-    `min_fragment_relative_intensity`（既定 0.01）以上の窓だけを数える。
-    `rule_hash` は正規化した規則から作る。MS/MS が無ければ `not_evaluable`（「断片が
-    合わなかった」ではない）。「明らかに別物か」は判断しない（再解析の規則で決める）。
-    `target_rank` と `top1_is_target`（1 位が目標か）を返し、`spot_id` のスポットに MS-DIAL の注釈が
-    あれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` も返す（`library_match_feature` と同じ）。
-    候補の表は `delta_ppm`、`.dbs` の注釈の足切りがあれば `passes_dbs_cutoffs`（足切りの値は
-    `dbs_cutoffs`。合否には当てない）、種の目標なら `lipid_species`・`species_route` の列を持つ。
+    照合は `library_match_feature` と同じ（`spot_id` か `precursor_mz` のどちらか一方）。規則の形・既定・検査・候補の表の列は
+    `docs_read(topic="reanalysis", section="MS/MS の合否")`。`target` は `inchikey` か、InChIKey が一意に決まらない脂質の種の
+    `lipid_species`（同位体の標識のある内部標準の名前は `MSMS_RULES_INVALID`）。既定の規則でも断片の一致を 1 本求め
+    （`min_fragments_excl_precursor` 既定 1）、測定の基準ピークに対して `min_fragment_relative_intensity`（既定 0.01）以上の窓だけを
+    数える。`checks` に設定した検査を並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`（MS/MS が無ければ
+    `not_evaluable`。「断片が合わなかった」ではない）。「明らかに別物か」は判断しない。`rule_hash` は正規化した規則から作る。
+    `target_rank` と `top1_is_target`（1 位が目標か）を返し、`spot_id` のスポットに MS-DIAL の注釈があれば `msdial_name`・
+    `msdial_rank`・`top_differs_from_msdial` も返す。
+
+    mz_tol_ppm: 前駆体の窓（MS-DIAL と同じく m/z 500 を超えたら ppm で広がる）に重ねる ppm の絞り込み（任意、0 より大きい数）。
+        使った窓は `query`（`mz_tol`・`mz_window`・`mz_tol_ppm`）に出る。
+    ion_mode: `positive` / `negative`（`pos` / `neg` / `+` / `-` も可。読めない値は `DATASET_BAD_REQUEST`）。
     dataset_handle: ハンドルのライブラリ・`.arf2` / `.dcl` を使う。省略時は対話のセッション。
     """
     from metabolomix.analysis import msms_rules
@@ -610,25 +578,20 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
                           wait_seconds: float = 20.0) -> str:
-    """同族列の RT の単調性を検査する（homolog-check.v1。再解析で使う）。
+    """同族列の RT の単調性を検査する（homolog-check.v1）。
 
-    `members`（`feature_id`・`carbons`・`double_bonds` を手で並べる）か `auto`
-    （`lipid_class` の SME rank 1 の名前を GOSLIN で種のレベルに読んで集める。読み方は目標照合・MS/MS の合否と
-    同じで、読めなければ注記を外して読み（`PC 34:1; ExampleDB ID-0001` は PC 34:1）、同位体の標識のある内部標準の
-    名前は集めない。`P-` は種のレベルで `O-` に直る（`PE P-18:0_20:4` は `PE O-38:5`。プラスマローゲンの列は
-    `lipid_class="PE O-"`）。種のレベルの修飾（`PE 36:2;O (oxPE)` の `;O`、`Cer 34:0;O3` の `;O3`）は列を分け、修飾の
-    違う種どうしは重複にも隣どうしにもしない（`lipid_class="PE"` は無修飾の PE と酸化 PE をそれぞれの列で比べ、
-    `"PE;O"` のように修飾を書けばその修飾の種だけを集める。2 つ以上の修飾を集めたら `notes` に内訳）。
-    `evidence` に `sml` を足すと SML の名前も見る。`adduct` で SME の付加体を絞る）のどちらか一方と、
-    `rule`（`carbon_direction` 既定 increasing・`double_bond_direction` 既定 decreasing・
-    `max_violations` 既定 0）。`adduct` は綴りでなく組成で比べる（mzTab-M の `[M+H]1+` と `[M+H]+` は同じ）。
-    同じ（修飾, 炭素数, 二重結合数）が複数あれば RT の中央値で並べ `duplicates` に挙げる（修飾があれば `36:2;O` の
-    ように書き、`members` に `modification` の列が付く）。戻り値は `verdict`
-    （pass / fail / not_evaluable）・比べた隣どうしの対の数 `n_pairs`・違反の TSV・`rule_hash`。比べた対が 0
-    （`auto` が集めた種が 2 つ未満など）なら検査していないので `not_evaluable` で、理由を `notes` に書く。
+    spec は `members`（`feature_id`・`carbons`・`double_bonds` を手で並べる）か `auto`（`lipid_class` の SME rank 1 の名前を
+    GOSLIN で種のレベルに読んで集める。`evidence` に `sml` を足すと SML の名前も見る。`adduct` で付加体を絞る）のどちらか一方と、
+    `rule`（`carbon_direction` 既定 increasing・`double_bond_direction` 既定 decreasing・`max_violations` 既定 0）。
+    `P-` は種のレベルで `O-` に直る（プラスマローゲンの列は `lipid_class="PE O-"`）。種のレベルの修飾（`;O` など）は列を分け、
+    `"PE;O"` のように修飾を書けばその修飾の種だけを集める。同位体の標識のある内部標準の名前は集めない。
+    戻り値は `verdict`（pass / fail / not_evaluable）・比べた隣どうしの対の数 `n_pairs`・違反の TSV・`duplicates`・`rule_hash`。
+    比べた対が 0 なら検査していないので `not_evaluable`（理由は `notes`）。名前の読み方・修飾・重複・付加体の比べ方は
+    `docs_read(topic="reanalysis", section="同族列")`。
+
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
-    wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を
-        返す（結果は `job_status(job_id=...)`。`handle_dispatch.LONG_RUNNING`）。
+    wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を返す
+        （結果は `job_status(job_id=...)`）。
     """
     from metabolomix.analysis import homolog
 
@@ -721,27 +684,17 @@ def dataset_homolog_check(spec: dict, dataset_handle: str | None = None,
 def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz_tol: float = 0.01,
                               min_r: float = 0.7, adducts: list[str] | None = None,
                               dataset_handle: str | None = None) -> str:
-    """特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す
-    （再解析で使う。関係の規則はアラインメントのキュレーションの関係と同じ）。
+    """特徴 1 つについて、同時溶出の特徴と付加体・同位体・源内断片の関係を返す（規則はアラインメントのキュレーションの関係と同じ。
+    MS-DIAL のリンクは使わない）。
 
-    rt_window: 同時溶出とみなす RT の差（分、既定 0.05）。mz_tol: 関係の m/z の許容（Da）。
-    min_r: 試料間の強度の相関（log1p の Pearson）がこれ以上なら裏付けあり。
+    rt_window: 同時溶出とみなす RT の差（分、既定 0.05）。
+    mz_tol: 関係の m/z の許容（Da、既定 0.01）。
+    min_r: 試料間の強度の相関（log1p の Pearson）がこれ以上なら裏付けあり（既定 0.7）。
     adducts: 付加体の候補（省略時はデータセットの極性の既定の層を平らにしたもの）。
-    `as_ion_of`（この特徴が相手のイオン）と `ions_of_this`（相手がこの特徴のイオン）を TSV で
-    返す。付加体の関係は説明される側（Y）の付加体から計算する: Y の付加体は SME rank 1、無ければ
-    SML 注釈（MS1 だけの同定）の付加体で、どちらも無い Y の `as_ion_of` には付加体の関係は出ない
-    （`ions_of_this` はこの特徴の付加体から見るので、未注釈の相手も付加体として出る）。Y 自身の付加体は
-    綴りでなく組成で見分けて除く（mzTab-M の `[M+H]1+` と `[M+H]+`、`[M+HCOO]-` と `[M+FA-H]-` は同じ）。
-    `strong`: 付加体・源内断片は Δm/z と同時溶出に加えて r ≥ min_r、同位体は加えて強度比が期待比の
-    1.5 倍以下。期待比は Y の**イオン**の組成（中性の組成式の n_mol 倍に付加体の原子を足す。`[2M+H]+` は
-    炭素も 2 倍、`[M+Cl]-` は Cl を持つ）の M+k の同位体（M+2 は 13C2・18O・34S・37Cl・81Br・41K と交差項）のうち、
-    m/z がこの特徴から mz_tol 以内に来るものの和（分離された 13C2 だけ・34S だけの位置は、窓の外の 37Cl・13C2 を足さない。
-    分離できない M+2 の束が束全体と比べられるのは、束のどの同位体までの差も mz_tol 以内のときだけ——重心が 13C2 と 34S の
-    真ん中なら約 5.5 mDa / 電荷以上。狭い窓では束が `informational` になりうる）。
-    M+2 は 13C2・34S・37Cl・81Br（mz_tol が 13C2 との差 2.46 mDa より狭いときは 18O、8.59 mDa より狭いときは 41K も。
-    広い窓では、この特徴が 13C2 の窓に入れば 13C2 の行が含み、窓の外なら当たった位置のうちいちばん近いときだけ出す）を見て、窓が重なれば `ambiguous`（一方に決めず、strong にしない）。`informational` は強度比が期待比を超えた同位体
-    （別物質）。MS-DIAL のリンクは使わない。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+
+    `as_ion_of`（この特徴が相手のイオン）と `ions_of_this`（相手がこの特徴のイオン）を TSV で返す。付加体の決め方・同位体の
+    期待比・`strong` / `ambiguous` / `informational` の条件は `docs_read(topic="reanalysis", section="特徴どうしの関係")`。
     """
     from metabolomix.analysis import claim_evidence, feature_search
 
@@ -798,27 +751,20 @@ def _peak_cell(value) -> str | None:
           structured_output=False)
 def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
-    """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す（再解析で使う）。
+    """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す。割れた 2 スポットが 1 つの物質か、RT のドリフトを
+    試料ごとに見るための読み取り。
 
-    割れた 2 スポットが 1 つの物質か、RT がずれていくか（ドリフト）を試料ごとに見るための読み取り。
-    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す。重複は 1 つ）。知らない ID は
-    `DATASET_BAD_REQUEST`（details の `unknown`）。
-    行（列 `feature_id, sample, rt, mz, height, detected`）を、依頼の特徴の順 × データセットの試料の順に、
-    TSV（列名 1 回。`rows` の文字列）で返す。空欄は null（gap-fill の `mz`）、`detected` は true / false。
-    戻り値に載せる行（特徴 × 試料）は 1,000 行まで。超えるときは断らず、依頼の順の先頭の特徴の行を
-    特徴ごとにそろえて 1,000 行以内だけ載せ（試料が 1,000 を超えれば最初の特徴の先頭 1,000 行）、
-    `truncated: true`・`n_rows`（全件）・`n_rows_shown`・`n_features_shown` を返す。
-    `rt` は分（gap-fill のセルも `.arf` の値）、`mz` は検出されたセルの実測 m/z（gap-fill は null）、
-    `height` はデータセットの強度の行列の値（`measure` で選んだ `.arf` の欄。定量で変えたデータセットは
-    その値）、`detected` は `detected_mask`（gap-fill なら false）。
-    `per_sample_rt` のあるデータセットだけ: 解析フォルダ（`.arf`）から読んだもの、または mzTab-M で読み
-    隣の `.arf` と照合できたもの（`summary` の検出状態の行）。照合できなかった mzTab-M・統合などで
-    作り直したデータセットは `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で解析
-    フォルダを読む）。
+    feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す。重複は 1 つ）。知らない ID は `DATASET_BAD_REQUEST`
+        （details の `unknown`）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
-    output_path: 全量の TSV をここへ書き、要約（`n_rows`・`n_features`・`n_samples`・`output_path`・
-        `sha256`）だけを返す（ほかの再解析のツールと同じ規則）。そのパスに既にあるファイルは置き換える
-        （このためツールの注釈は読み取り専用ではない）。省けばファイルを書かない。
+    output_path: 全量の TSV をここへ書き（既存のファイルは置き換える）、要約（`n_rows`・`n_features`・`n_samples`・
+        `output_path`・`sha256`）だけを返す。省けばファイルを書かない。
+
+    行（列 `feature_id, sample, rt, mz, height, detected`）は依頼の特徴の順 × データセットの試料の順の TSV（`rows` の文字列）。
+    戻り値に載せるのは 1,000 行まで。超えれば断らず、先頭の特徴から特徴ごとにそろえて載せ、`truncated: true`・`n_rows`（全件）・
+    `n_rows_shown`・`n_features_shown` を返す。試料ごとの RT の無いデータセット（隣の `.arf` と照合できなかった mzTab-M〔照合は
+    `summary` の検出状態の行〕・統合などで作り直したもの）は `DATASET_BAD_REQUEST`（`directory` / `job_path` / `pipeline_path` で解析フォルダを読む）。
+    列の意味は `docs_read(topic="reanalysis", section="特徴どうしの関係")` の 6.1。
     """
     holder = resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -921,36 +867,26 @@ def _inline_candidates(bundle: dict, limit: int) -> list[dict]:
           structured_output=False)
 def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
                            output_path: str | None = None) -> str:
-    """1 主張（目標の物質）の証拠の束（claim-evidence.v1）を作る（再解析で使う）。
+    """1 主張（目標の物質）の証拠の束（claim-evidence.v1）を作る。特徴は決めない（統計は `dataset_analysis_run` を別に呼ぶ）。
 
-    spec: `claim_id`・`target`（`dataset_feature_search` の目標と同じ形。`target_id` は
-    `claim_id`。脂質の種の主張は `inchikey` の代わりに `lipid_species`。同位体の標識のある内部標準の名前は
-    `FEATURE_TARGET_INVALID`）・`scan`（`ppm` と `rt_tol_min` の水準のリスト、任意で `adduct_tiers`——
-    全組で走査する）・`msms`（`{top_n, rules, mz_tol_ppm}`。`rules` は msms-rules.v1 で target は
-    書かない。`mz_tol_ppm` は任意（0 より大きい有限の数）で、前駆体の窓に重ねる ppm の絞り込み。
-    渡したときだけ規則と `rule_hash` に入る）・
-    `relations`（`rt_window` / `mz_tol` / `min_r`）・`max_candidates`（既定 50）・`merge_split`
-    （既定 true。割れたスポットの組を判定で 1 つの候補（残す ID）と数え、窓の外の相手も候補に
-    `merge_partner` で足す。false は v7 と同じ規則・同じ `rule_hash`）・`ppm_offset`（任意。
-    質量の窓の中心を帯ごとにずらす。`dataset_feature_search` と同じ形で、既定の特徴と走査の全変種に
-    効く。幅は変えず、渡したときだけ `rule_hash` に入る）・`rt_offset_min`（任意。分。RT の窓の中心を
-    `rt_min + rt_offset_min` にずらす。`dataset_feature_search` の `rt_offset_min` と同じ意味で、既定の特徴と
-    走査の全変種に効く。幅 `rt_tol_min` は変えず、渡したときだけ `rule.rt_offset_min`・`rule.target` と
-    `rule_hash` に入る。目標に `rt_min` が無ければ効かないので、誤りにせず捨てて `notes` に書く）。
-    束に入るのは、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search`
-    の目標照合と同じ規則で、決まらなければ `needs_input`。割れの組はいつも `find_split_pairs` を既定の閾値で
-    回したもので、`dataset_alignment_qc` がハンドルに持つ最後の結果は使わない）、走査ごとの判定、候補ごとの
-    照合（spot_id = SMF_ID）・合否・関係。候補ごとの `msms` は使った前駆体の窓 `window`（`mz_tol`・
-    `mz_window`・`mz_tol_ppm`）と、`qualify` の `target_rank`・`top1_is_target`（1 位が目標か）を持ち、
-    スポットに MS-DIAL の注釈があれば `msdial_name`・`msdial_rank`・`top_differs_from_msdial` も持つ
-    （`library_msms_qualify` と同じ）。**特徴は決めない**（実行役が決め、統計は
-    `dataset_analysis_run` を別に呼ぶ）。`rule_hash`・`input_fingerprint`（データの指紋・
-    ライブラリの sha256）を含み、同じ spec・同じ入力なら同じ JSON になる。
-    output_path: JSON をここへ書き、要約だけを返す。省略時は束を返し、候補が 10 を超えれば断らず
-        先頭の 10 件だけを載せる（並びは既定の特徴 → 既定の照合で見えた候補 → ほか。`truncated: true`・
-        `n_candidates` が全件・`n_candidates_shown`・`candidates_order`・`notes`。束の `max_candidates` で
-        打ち切った数はこのとき `max_candidates_truncated`）。
+    spec: `claim_id`・`target`（`dataset_feature_search` の目標と同じ形。`target_id` は `claim_id`。脂質の種の主張は `inchikey` の
+        代わりに `lipid_species`。同位体の標識のある内部標準の名前は `FEATURE_TARGET_INVALID`）・`scan`（`ppm` と `rt_tol_min` の
+        水準のリスト、任意で `adduct_tiers`。全組で走査する）・`msms`（`{top_n, rules, mz_tol_ppm}`。`rules` は msms-rules.v1 で
+        target は書かない。`mz_tol_ppm` は任意で、前駆体の窓に重ねる ppm の絞り込み）・`relations`（`rt_window` / `mz_tol` /
+        `min_r`）・`max_candidates`（既定 50）・`merge_split`（既定 true。割れたスポットの組を 1 つの候補と数える）・`ppm_offset` /
+        `rt_offset_min`（任意。質量・RT の窓の中心のずれ。`dataset_feature_search` と同じ意味で、既定の特徴と走査の全変種に効き、
+        幅は変えない）。各欄の規則と `rule_hash` への入り方は `docs_read(topic="reanalysis", section="証拠の束")`。
+    output_path: JSON をここへ書き、要約だけを返す。省略時は束を返し、候補が 10 を超えれば断らず先頭の 10 件だけを載せる
+        （並びは既定の特徴 → 既定の照合で見えた候補 → ほか。`truncated: true`・`n_candidates` が全件・`n_candidates_shown`・
+        `candidates_order`。`max_candidates` で打ち切った数は `max_candidates_truncated`）。
     dataset_handle: ハンドルのデータセット・ライブラリ・`.arf2` / `.dcl`。省略時は対話のセッション。
+
+    束は、規則で選んだ既定の特徴（`default_selection`。`dataset_feature_search` の目標照合と同じ規則で、決まらなければ
+    `needs_input`）、走査ごとの判定、候補ごとの照合（spot_id = SMF_ID）・合否・関係を持つ。割れの組はいつも既定の閾値で探し、
+    `dataset_alignment_qc` がハンドルに持つ結果は使わない。候補ごとの `msms` は使った前駆体の窓 `window`（`mz_tol`・
+    `mz_window`・`mz_tol_ppm`）と、`qualify` の `target_rank`・`top1_is_target` を持ち、スポットに MS-DIAL の注釈があれば
+    `msdial_name`・`msdial_rank`・`top_differs_from_msdial` も持つ（`library_msms_qualify` と同じ）。`rule_hash`・
+    `input_fingerprint`（データの指紋・ライブラリの sha256）を含み、同じ spec・同じ入力なら同じ JSON になる。
     """
     from metabolomix.analysis import claim_evidence
     from metabolomix.library import tools as library_tools
@@ -1019,35 +955,23 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
 def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
                           subset: Literal["rank1", "msms_matched"] = "rank1",
                           dataset_handle: str | None = None) -> str:
-    """SME（MS/MS の照合で付いた同定）の質量誤差（ppm）の分布を m/z 帯ごとに返す（再解析で使う）。
+    """SME（MS/MS の照合で付いた同定）の質量誤差（ppm）の分布を m/z 帯ごとに返す。勧める許容幅を添えるが、当てはしない。
 
-    band_edges: 帯の境界（理論 m/z。既定 [200] → `<200` と `≥200`）。rank: 見る SME 候補の順位
-    （既定 1）。帯ごとに `n median q1 q3 within_5ppm within_10ppm`（四分位は
-    `statistics.quantiles(n=4)`）と、勧める許容幅 `recommended_mz_tol_ppm`。全体の勧めは
-    `recommended_tolerance`（`n` `mz_tol_ppm` `median_ppm` `mad_ppm` `basis`）。勧める幅は
-    `ceil(|中央値| + 3 × MAD)`（MAD は尺度の補正なし。1 ppm 未満にしない）で、同定が 10 件未満なら
-    null（`reason: too_few`）。材料であって当てはしない——目標照合（`dataset_feature_search` /
-    `dataset_claim_evidence`）の目標の `ppm` や `library_match_feature` の `mz_tol_ppm` にそのまま
-    渡すか、中央値を `ppm_offset` に・`3 × MAD` を幅に分けて渡すかは再解析の規則で決める。
-    subset: `rank1`（既定。rank の SME すべて）か `msms_matched`（そのうち、特徴の MS/MS が参照
-    スペクトルに照合されたもの。SML の `opt_global_spectrum_matched` が真。LBM 由来も研究室 MSP
-    由来も数える。この旗は rank 1 の同定を表すので `rank=1` のときだけ。列の無い mzTab では
-    `subset_available: false` と `note` を付けて n=0 を返す——手順の後退（帯の n 不足 → 極性全体 →
-    rank1）を止めない）。
-    `theoretical_mz_source`: 理論 m/z の出所。`mztab`（mzTab-M の SME の値＝ライブラリの記録の
-    プリカーサー m/z。job / pipeline を解析フォルダで読んだときも照合した mzTab-M から写す）/
-    `formula_adduct`（mzTab-M と照合しない解析フォルダ〔`load_dataset(directory=...)`〕。注釈の組成式と
-    付加体から計算した値で、注釈を表す。組成式か付加体が読めない同定は数えない）/ `mixed`（出所の違う
-    2 極性の統合）。
-    `injection_trend`: 試料ごとの実測 m/z（隣接 `.arf` の検出されたセル）があれば、試料ごとの
-    誤差の中央値 `per_injection`（`sample` `injection_order` `median_ppm` `n`）と注入順との
-    `spearman_rho`（5 試料未満、または注入順の出所が `filename` のときは null。`filename` は、試料の表の注入順が
-    1 試料でも欠けてファイル名の順に落ちたときと、試料の表が宣言 `# injection_order_source = filename` でファイル名の
-    順と書いたとき〔シートは当たっていて、値はシートのまま〕。どちらも実際の注入順とは限らない。
-    理由は `rho_unavailable_reason`）・`n_samples`・`injection_order_source`・`warnings`（注入順が
-    MS-DIAL の振った値でファイル名の順と一致するときだけ `injection_order_may_be_file_order`。ρ は出すが、
-    MS-DIAL の既定＝ファイルの順かもしれない）。無ければ `{"status": "unavailable"}`。
+    band_edges: 帯の境界（理論 m/z。既定 [200] → `<200` と `≥200`）。
+    rank: 見る SME 候補の順位（既定 1）。
+    subset: `rank1`（既定。rank の SME すべて）か `msms_matched`（そのうち、特徴の MS/MS が参照スペクトルに照合されたもの。
+        `rank=1` のときだけで、ほかは `DATASET_BAD_REQUEST`。列の無い mzTab では `subset_available: false` と `note` を付けて
+        n=0 を返す）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
+
+    帯ごとに `n median q1 q3 within_5ppm within_10ppm` と勧める許容幅 `recommended_mz_tol_ppm`、全体の勧めは
+    `recommended_tolerance`（`n` `mz_tol_ppm` `median_ppm` `mad_ppm` `basis`）。勧める幅は `ceil(|中央値| + 3 × MAD)` で、
+    同定が 10 件未満なら null（`reason: too_few`）。目標照合（`dataset_feature_search` / `dataset_claim_evidence`）の `ppm` や
+    `library_match_feature` の `mz_tol_ppm` にそのまま渡すか、中央値を `ppm_offset` に・`3 × MAD` を幅に分けて渡すかは
+    再解析の規則で決める。理論 m/z の出所 `theoretical_mz_source`（`mztab` / `formula_adduct` / `mixed`）と、試料ごとの誤差と
+    注入順の関係 `injection_trend`（`per_injection`・`spearman_rho`・`rho_unavailable_reason`・`n_samples`・
+    `injection_order_source`・`warnings`。試料ごとの実測 m/z が無ければ `{"status": "unavailable"}`）の意味は
+    `docs_read(topic="reanalysis", section="質量精度")`。
     """
     from metabolomix.analysis import mass_accuracy
 
@@ -1128,42 +1052,25 @@ def _novel_result_stats(ds, result: dict, source: dict, *,
           structured_output=False)
 def dataset_novel_candidates(spec: dict, dataset_handle: str | None = None,
                              output_path: str | None = None) -> str:
-    """新しい知見の候補の一覧（novel-candidates.v1。再解析で使う）。
+    """新しい知見の候補の一覧（novel-candidates.v1）。論文の同定リストとの突き合わせはしない。
 
-    SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（`ppm.default` と
-    `ppm.bands: [{max_mz, ppm}]`）に入り、q が `q_max` 未満の特徴から、`exclude`
-    （`feature_ids`・`inchikey_blocks`）を除いた一覧。統計は `statistics` が
-    `{"result_id"}`（`dataset_compare` の 2 群比較。対比が複数の結果は `"result_id#contrast_id"` か
-    `{"result_id", "contrast_id"}` で 1 つ選ぶ——2 つは同じ規則・同じ `rule_hash`。`#` の後ろと `contrast_id` が
-    食い違えば `DATASET_BAD_REQUEST`。ID だけなら誤りでなく `needs_input`〔`field="statistics.result_id"`、
-    選択肢は `result_id#contrast_id` の一覧〕。
-    `dataset_compare` の結果は q に加えて判定が `changed` の行だけ）か `{"analysis_spec", "analysis_id"}`
-    （**analysis-spec.v1 だけ**: `dataset_analysis_run` の v1 の spec のその解析。analysis-spec.v2 はここでは
-    通らない——統計エンジンの結果は `dataset_compare` を回してその `result_id` を渡す）。q の昇順。`rule_hash` を返す。
-    論文の同定リストとの突き合わせはしない（再解析の側）。
-    割れたアライメントスポットの組（`dataset_alignment_qc` の `merge_groups`）は 1 候補に数え
-    （`feature_id` は残す ID＝受け持ちの多い側、同数なら小さい ID。`merged_from` に 2 つの ID、同定と質量誤差は SME を持つ方の
-    スポット＝`sme_feature_id`。両方にあれば残す ID）、統計はまとめた行列で検定し直した値。
-    `{"result_id"}` では `statistics.merge_split`（既定 true）・`statistics.alignment_qc`
-    （`dataset_alignment_qc` の JSON。省略時はこのハンドルで `dataset_alignment_qc` が最後に出した結果——
-    データ・試料の表・除外が変わっていなければ——を使い、無ければその場で探す。使った方は
-    `merge_split.source` の `alignment_qc` / `last_alignment_qc` / `find_split_pairs`）、analysis_spec では
-    spec の `features.merge_split` で決まる（spec だけで再現するので最後の結果は使わない）。
-    `merge_split=false` の `statistics.alignment_qc`・`analysis_spec` の隣の `statistics.contrast_id` /
-    `statistics.merge_split` / `statistics.alignment_qc`（`result_id` の経路の設定）など、
-    効かない設定は誤りにせず `notes` に書く（analysis_spec で選んだ解析が `correction=none` なら、q が無いので
-    候補が出ないことも）。
-    spec の `labels`（`{path, name, feature_column="feature_id", label_column="level",
-    order=["A","B","C","D"]}`）は外部の印の TSV。行に `labels.<name>` の列（特徴ごとの最も強い
-    水準、割れの組はどちらかの最も強い水準）と水準ごとの件数 `labels.counts`（全体と上位 20）を
-    足すだけで、並び・件数・除外・`rule_hash` は変えない。
-    spec の `ppm_offset`（任意。`{default, bands: [{max_mz, offset}]}`）は質量の窓の中心のずれ
-    （判定が `|ppm − 中心| ≤ 許容幅`。幅と行の `ppm` 列は変えず、渡したときだけ `rule_hash` に入る。
-    帯は理論 m/z が `max_mz` 未満の最初のもの。形の誤りは `NOVEL_SPEC_INVALID`）。
-    `theoretical_mz_source`（戻り値と JSON）は行の `ppm` の理論 m/z の出所（`dataset_mass_accuracy` と同じ。
-    `formula_adduct` は注釈の組成式と付加体から計算した値）。
-    output_path: JSON をここへ書き、要約だけを返す。省略時は行を TSV で返し、50 を超えれば q の昇順の
-        先頭 50 行だけを載せる（`truncated: true`・`n_rows` が全件。断らない）。
+    SME（rank 1）の同定があり、質量誤差が m/z 帯ごとの許容幅（spec の `ppm.default` と `ppm.bands: [{max_mz, ppm}]`）に入り、
+    q が `q_max` 未満の特徴から、`exclude`（`feature_ids`・`inchikey_blocks`）を除いた一覧を q の昇順で返す（`rule_hash` つき）。
+    spec の `statistics` は次のどちらか:
+    - `{"result_id"}`（`dataset_compare` の 2 群比較。q に加えて判定が `changed` の行だけ）。対比が複数の結果は
+      `"result_id#contrast_id"` か `{"result_id", "contrast_id"}` で 1 つ選ぶ（同じ規則・同じ `rule_hash`。`#` の後ろと `contrast_id`
+      が食い違えば `DATASET_BAD_REQUEST`、ID だけなら `needs_input`〔`field="statistics.result_id"`〕）。任意で `merge_split`
+      （既定 true）と `alignment_qc`（`dataset_alignment_qc` の JSON。省けばこのハンドルの最後の結果〔データ・試料の表・除外が
+      変わっていなければ〕、無ければその場で探す）。
+    - `{"analysis_spec", "analysis_id"}`（analysis-spec.v1 だけ。v2 の結果は `dataset_compare` の `result_id` で渡す）。割れの
+      まとめは spec の `features.merge_split` が決め、ハンドルの最後の結果は使わない。
+    割れたアライメントスポットの組は 1 候補に数え、統計はまとめた行列で検定し直した値。効かない設定は誤りにせず `notes` に書く
+    （analysis_spec で選んだ解析が `correction=none` なら、q が無いので候補が出ないことも）。任意の `labels`（外部の印の TSV。
+    列と件数を足すだけで、並び・件数・除外・`rule_hash` は変えない）と `ppm_offset`（質量の窓の中心のずれ。形の誤りは
+    `NOVEL_SPEC_INVALID`）の形、行の欄、`theoretical_mz_source` の意味は `docs_read(topic="reanalysis", section="質量精度")`。
+
+    output_path: JSON をここへ書き、要約だけを返す。省略時は行を TSV で返し、50 を超えれば q の昇順の先頭 50 行だけを載せる
+        （`truncated: true`・`n_rows` が全件。断らない）。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
     """
     from metabolomix.analysis import analysis_spec, mass_accuracy
@@ -1336,31 +1243,22 @@ _GROUP_ALIGNED_COLUMNS = ("pair_id", "feature_a", "feature_b", "mz", "rt_a", "rt
 def dataset_alignment_qc(output_path: str | None = None, ppm: float = 15.0,
                          max_rt_gap: float = 1.0, max_interleaved_rt_gap: float = 0.15,
                          min_block_size: int = 2, dataset_handle: str | None = None) -> str:
-    """1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す（alignment-qc.v1。再解析で使う）。
+    """1 つの物質が 2 つ以上のアライメントスポットに割れた組を探す（alignment-qc.v1）。
 
-    候補は同じ付加体・|Δm/z| ≤ ppm・0.05 < ΔRT ≤ max_rt_gap 分の 2 スポットで、試料ごとの
-    受け持ち（検出状態があれば検出、無ければ値の大きい方）が補い合う組を割れとする。型は
-    `injection_block`（片方が注入順で連続した塊だけを持つ。両方が min_block_size（既定 2）
-    試料以上を受け持つときだけ。群と重なっても優先）・
-    `group_aligned`（受け持ちが群と一致。まとめない）・`interleaved`。`mergeable` は注釈が
-    両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の `interleaved`。
-    そのうち互いに |ΔRT| が最も近い相手どうしの 2 スポット（`merge_groups`）だけを、統計の側が
-    試料ごとに大きい方の値で 1 つにまとめる（ほかは `merge_reason: not_mutual_nearest` で印だけ）。注入順はハンドルの実験情報シート、
-    1 試料でも欠ければファイル名の順（出所は `injection_order_source`。シートが宣言 `# injection_order_source = filename`
-    でファイル名の順と書いた値も `filename` で、値はシートのまま）。欄の意味は `lipidmix://docs/output-format/reanalysis`。
+    候補は同じ付加体・|Δm/z| ≤ ppm・0.05 < ΔRT ≤ max_rt_gap 分の 2 スポットで、試料ごとの受け持ちが補い合う組を割れとする。
+    型は `injection_block`（両方が min_block_size（既定 2）試料以上を受け持つときだけ）・`group_aligned`（まとめない）・
+    `interleaved`。`mergeable` は注釈が両立する `injection_block` と、ΔRT ≤ max_interleaved_rt_gap（既定 0.15 分）の
+    `interleaved`。そのうち互いに |ΔRT| が最も近い 2 スポット（`merge_groups`）だけを、統計の側が試料ごとに大きい方の値で
+    1 つにまとめる。受け持ち・型・注入順の出所・欄の意味は `docs_read(topic="reanalysis", section="割れたアライメントスポット")`。
 
-    output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く
-        （例 `results/alignment_qc_pos.json`。長いリストは要素ごとに改行するので、行の範囲で読める）。
-        戻り値は要約と `group_aligned` の組（先頭 50 組。`n_group_aligned` が全件、超えれば
-        `group_aligned_truncated: true`）だけ。
+    output_path: 全体（組・連結成分・試料ごとの受け持ち）を JSON でここへ書く（長いリストは要素ごとに改行する）。戻り値は要約と
+        `group_aligned` の組（先頭 50 組。`n_group_aligned` が全件、超えれば `group_aligned_truncated: true`）だけ。
     dataset_handle: ハンドルのデータセット。省略時は対話のセッション。
-    結果（output_path と同じ中身）はこのハンドル（データセット）に最後の 1 つとして持ち
-    （`kept_on_handle`）、`dataset_feature_search` の `alignment_qc_path`・`dataset_novel_candidates` の
-    `statistics.alignment_qc` を省いたときに使われる（データ・試料の表・除外が変われば使われない）。
-    `dataset_analysis_run` と `dataset_claim_evidence` は spec だけで再現する決まりなので使わない
-    （`dataset_analysis_run` は spec の `features.alignment_qc` に JSON のパスを書く。証拠の束の割れの組は
-    いつも既定の閾値で探すので、既定でない閾値で回した後は同じ目標でも `dataset_feature_search` と
-    組・判定・`rule_hash` が違いうる）。
+
+    結果はこのハンドルに最後の 1 つとして持ち（`kept_on_handle`）、`dataset_feature_search` の `alignment_qc_path`・
+    `dataset_novel_candidates` の `statistics.alignment_qc` を省いたときに使われる（データ・試料の表・除外が変われば使われない）。
+    `dataset_analysis_run`（spec の `features.alignment_qc` に JSON のパスを書く）と `dataset_claim_evidence`（いつも既定の閾値で
+    探す）は使わない。
     """
     from metabolomix.analysis import alignment_qc
 

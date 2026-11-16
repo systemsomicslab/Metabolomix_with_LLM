@@ -32,6 +32,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from metabolomix.core.polarity_names import canonical_polarity
 from metabolomix.core import handles
 from metabolomix.core.atomic_io import DomainError
 from metabolomix.dataset.alignment_files import (
@@ -103,6 +104,7 @@ def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_pat
     `INCOMPLETE_ANALYSIS_JOB` / `MZTAB_NOT_FOUND` / `PIPELINE_POLARITY_REQUIRED` /
     `PIPELINE_POLARITY_NOT_FOUND` / `PIPELINE_UNIT_NOT_VALIDATED` など）。
     """
+    polarity = canonical_polarity(polarity)   # pos / neg / + / - も同じ極性に読む
     from metabolomix.dataset.msdial_adapter import MEASURES
 
     if type(allow_incomplete) is not bool:

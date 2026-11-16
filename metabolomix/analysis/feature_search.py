@@ -32,6 +32,7 @@ from metabolomix.analysis.result_state import is_current
 from metabolomix.analysis.stats_results import as_two_group, contrast_ids, split_result_ref
 from metabolomix.analysis.mass_accuracy import offset_for
 from metabolomix.core.atomic_io import DomainError, canonical_hash
+from metabolomix.core.polarity_names import canonical_polarity
 from metabolomix.msdial.adducts import mz_from_neutral, parse_adduct, same_adduct
 from metabolomix.msdial.peak_verification import monoisotopic_mass, parse_formula
 
@@ -223,9 +224,10 @@ def _normalize_one(raw, dataset_polarity: str | None):
             raise _invalid(target_id, "rt_min", f"rt_min は 0 以上の数（分）で指定する: {rt_min!r}")
         rt_min = float(rt_min)
 
-    polarity = raw.get("polarity")
+    polarity = canonical_polarity(raw.get("polarity"))
     if polarity is not None and polarity not in _POLARITIES:
-        raise _invalid(target_id, "polarity", f"polarity は positive / negative: {polarity!r}")
+        raise _invalid(target_id, "polarity",
+                       f"polarity は positive / negative（pos / neg / + / - も可）: {polarity!r}")
 
     formula = raw.get("formula")
     expected_mz = raw.get("expected_mz")
@@ -341,6 +343,7 @@ def normalize_targets(targets: list[dict], *, dataset_polarity: str | None,
     （RT の窓の中心を ``rt_min + rt_offset_min`` にずらす。幅と ``delta_rt`` 列は変えない。rule_hash に入る）。
     渡さなければ目標の辞書は今と同じ。
     """
+    dataset_polarity = canonical_polarity(dataset_polarity)
     if dataset_polarity not in (None, *_POLARITIES):
         raise ValueError(f"dataset_polarity は positive / negative / None: {dataset_polarity!r}")
     if not isinstance(targets, list):

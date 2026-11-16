@@ -807,12 +807,27 @@ def _factor_columns(cfg, kept_ids: list[str], all_ids: list[str],
     return all_values[:, [position[f] for f in use]], record
 
 
-def _resolved_method(cfg: dict, quant) -> str:
-    """正規化の方法（auto は換算済みなら none、それ以外は pqn）。"""
+def _has_qc(samples) -> bool:
+    return any(s.role == "qc" for s in samples)
+
+
+def _resolved_method(cfg: dict, quant, samples) -> str:
+    """正規化の方法（auto は換算済みか QC が無ければ none、それ以外は pqn）。
+
+    QC が無いと PQN の参照は生体試料（全群）の中央値になり、群の組成差を係数が吸収しうるので、
+    auto では当てない（明示の `pqn` は当てる）。"""
     requested = cfg["method"]
     if requested == "auto":
-        return "none" if (quant is not None and quant.normalized) else "pqn"
+        if quant is not None and quant.normalized:
+            return "none"
+        return "pqn" if _has_qc(samples) else "none"
     return requested
+
+
+def _skip_reason(requested: str, quant) -> str:
+    if requested != "auto":
+        return "method_none"
+    return "quant_normalized" if (quant is not None and quant.normalized) else "no_qc"
 
 
 #: 極性の塊で係数の特徴の指定が効かず、その極性の残った特徴すべてから係数を求めた理由。
@@ -859,7 +874,7 @@ def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, 
     `unscaled_samples`・係数の特徴の記録）。正規化しない（none）ときは従来の段と同じ。
     """
     factor_values, factor_record = _factor_columns(cfg, kept_ids, all_ids, drifted)  # 無い ID・空の指定を先に
-    if _resolved_method(cfg, quant) == "none":
+    if _resolved_method(cfg, quant, samples) == "none":
         out, step = _normalize_step(values, samples, cfg, quant, factor_values=factor_values,
                                     factor_record=factor_record)
         return out, step, []
@@ -894,7 +909,7 @@ def _normalize_blocks(values, samples, cfg, quant, blocks, kept_ids, kept_cols, 
                                   "reference_definition")}
     applied = [st for st in by.values() if st.get("status") == "applied"]
     step = {"step": "normalize", "status": "applied" if applied else "skipped",
-            "requested": cfg["method"], "method": _resolved_method(cfg, quant),
+            "requested": cfg["method"], "method": _resolved_method(cfg, quant, samples),
             "factor_samples": [s.sample_id for s in samples],
             "factors_set_to_one": sum(st.get("factors_set_to_one", 0) for st in applied)}
     if not applied:
@@ -929,12 +944,12 @@ def _normalize_step(values, samples, cfg, quant, factor_values=None,
     from metabolomix.analysis.recipe_matrix import _normalize
 
     requested = cfg["method"]
-    method = _resolved_method(cfg, quant)
+    method = _resolved_method(cfg, quant, samples)
     if method == "none":
         step = {"step": "normalize", "status": "skipped", "requested": requested, "method": "none",
-                "reason": "quant_normalized" if requested == "auto" else "method_none"}
+                "reason": _skip_reason(requested, quant)}
         if factor_record:
-            # auto が換算済みのデータで none に決まった（明示の none は normalize_preprocess_config がキーごと
+            # auto が none に決まった（換算済み・QC 無し。明示の none は normalize_preprocess_config がキーごと
             # 捨てている）: 係数の特徴の指定は効かない（行列も ID も指定なしと同じ）
             step["factor_features_ignored"] = True
         return values, step
@@ -959,7 +974,11 @@ def _normalize_step(values, samples, cfg, quant, factor_values=None,
 
 
 def _pqn_reference_warning(step: dict) -> dict | None:
-    """QC が無い PQN の参照（生体試料の特徴ごとの中央値）を明示する注意。"""
+    """QC が無いときの正規化の注意: auto は当てなかった／明示の PQN の参照は生体試料の中央値。"""
+    if step.get("reason") == "no_qc":
+        return {"code": "normalize_auto_no_qc",
+                "message": "QC が無いので、normalize=auto は正規化しなかった。正規化するなら "
+                           "normalize に pqn / tic / median を明示する。"}
     if step.get("method") != "pqn" or step.get("reference") != "sample":
         return None
     return {"code": "pqn_reference_is_samples",
@@ -1196,8 +1215,10 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
         notes.append(pqn_note)
     id_cfg = cfg
     if step.get("factor_features_ignored"):
-        notes.append({"code": "normalization_features_ignored", "reason": "quant_normalized",
-                      "message": "normalize=auto は換算済みのデータ（quant_normalized）で正規化しないので、"
+        why = step.get("reason") or "quant_normalized"
+        what = "換算済みのデータ（quant_normalized）" if why == "quant_normalized" else "QC の無いデータ（no_qc）"
+        notes.append({"code": "normalization_features_ignored", "reason": why,
+                      "message": f"normalize=auto は{what}で正規化しないので、"
                                  "normalization_features / normalization_exclude_features は効いていない"
                                  "（行列は指定なしと同じ）。"})
         # 効かなかった指定で matrix_id を変えない（同じ行列は同じ ID）

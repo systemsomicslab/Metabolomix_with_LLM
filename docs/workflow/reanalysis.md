@@ -1,45 +1,33 @@
 # ワークフロー: 再解析のデータセットのハンドルと spec のツール
 
-**再解析で使う**経路（spec 2026-10-22）。並行の再解析のエージェントが、対話と同じ MCP の
-ツールを**データセットのハンドル**と宣言的な spec で呼ぶ。対話の使い方
-（`load_dataset` → `dataset_*`）は変わらない。値の**意味**は
-[reanalysis.md（output_format）](../output_format/reanalysis.md) を見ること。
+対話と同じツールを、データセットのハンドルと宣言的な spec で呼ぶ経路。値の意味は
+[reanalysis.md（output_format）](../output_format/reanalysis.md)（以下の §N はその節。ハンドルの振る舞いは §1）。
 
-ハンドルの状態は `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住む。
-`load_dataset` が開いたデータセットは登録簿のハンドルで、いつも直近になり、`session_state.session` は
-その直近のハンドル（`current_handle_id`）を指すだけ（`session.dataset` / `session.library` は
-property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` と同じ名前で持つので、
-既存のツールは `holder_for(dataset_handle)` が返したものを読むだけでハンドルにも対話の
-セッションにも効く。
+ハンドルは `metabolomix/core/handles.py` の登録簿（`handles.registry`）に住み、`load_dataset` が開いたハンドルはいつも直近になる。
+`session_state.session` は直近のハンドル（`current_handle_id`）を指すだけ（`session.dataset` / `session.library` は property）。
+`DatasetHandle` は `dataset` / `library` を `AnalysisSession` と同じ名前で持ち、ツールは `holder_for(dataset_handle)` が返したものを読む。
 
-`dataset_handle` を渡した呼び出しは `metabolomix/core/handle_dispatch.py` の
-`install()` が包んだ関数がワーカースレッドで回し、そのハンドルの `lock` で直列化する。
-渡さない呼び出しも、直近のハンドルがあればそのハンドルの `lock` の下でワーカースレッドで回し、
-`session_state.pinned_handle()` でそのハンドルに固定する。ロックは最長 `HANDLE_LOCK_WAIT`（25 秒）だけ待ち
-（`_acquire()`）、空かなければツールを呼ばずに `HANDLE_BUSY`（`mcp_errors.handle_busy()`。ロックを持つ長い道具の
-仕事があれば、その受付番号と道具。`DatasetHandle.running_job`）を返す。ロックを取った時点でそのハンドルが
-閉じられていれば、ツールを呼ばずに `missing_state` を返す。直近のハンドルが無ければ
-イベントループのスレッドで同期に呼ぶ。`dataset_handle` を持たないのに `session.dataset` /
-`.library` を読むツール（`handle_dispatch.SESSION_READERS`）も同じ経路で包む。
+`metabolomix/core/handle_dispatch.py` の `install()` が包んだツールは、ワーカースレッドで、`dataset_handle` を渡せば
+そのハンドルの、省けば直近のハンドルの `lock` の下で回る（省いたときは `session_state.pinned_handle()` で固定）。
+`dataset_handle` を持たずに `session.dataset` / `.library` を読むツール（`handle_dispatch.SESSION_READERS`）も同じ。
+直近のハンドルが無ければイベントループのスレッドで同期に呼ぶ。ロックは最長 `HANDLE_LOCK_WAIT`（25 秒）待ち
+（`_acquire()`）、空かなければツールを呼ばずに `HANDLE_BUSY`（`mcp_errors.handle_busy()`。ロックを持つ長い道具の仕事が
+あればその受付番号と道具。`DatasetHandle.running_job`）、取った時点でハンドルが閉じていればツールを呼ばずに `missing_state`。
 
 ## ハンドルを開く（load_dataset）
 
-`load_dataset` は [dataset.md](dataset.md) の節が連鎖を持つ（`dataset_list` / `dataset_close` も同じ文書）。再解析のエージェントは、返った
-`dataset_handle` を各ツールに渡して使い、直近（`current_handle_id`）を当てにしない。
-開いたハンドルはいつも直近になるが、`dataset_handle` を渡した呼び出しは直近を読み書きしない（例外は定量の派生で、
-`metabolomix/quant/derive.py` の `register()` が `adopt_handle()` で派生のハンドルを直近にする——`dataset_handle` を渡しても。
-[quant.md](quant.md)）。
-ライブラリはデータセットが覚えた同定のライブラリ（`library_record`）を、sha256 を測り直して
-読み取り専用で開く（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、
-解析フォルダで読んだならその選択（`AlignmentSelection`）のもの、mzTab-M で読んだなら
-`_alignment_files()` が探す。
+`load_dataset` / `dataset_list` / `dataset_close` の連鎖は [dataset.md](dataset.md)。返った `dataset_handle` を各ツールに渡し、
+直近（`current_handle_id`）を当てにしない。`dataset_handle` を渡した呼び出しは直近を読み書きしない（例外: 定量の派生は
+`metabolomix/quant/derive.py` の `register()` が `adopt_handle()` で直近にする。[quant.md](quant.md)）。
+ライブラリは、データセットが覚えた同定のライブラリ（`library_record`）を sha256 を測り直して読み取り専用で開く
+（極性の設定には落ちない）。スポットの照合に使う `.arf2` / `.dcl` は、解析フォルダで読んだならその選択
+（`AlignmentSelection`）のもの、mzTab-M で読んだなら `_alignment_files()` が探したもの。
 
 ## dataset_analysis_run
 
-前提: `input.source=dataset` ならデータセット（ハンドルか対話のセッション。無ければ
-`missing_state`）。外部の表（`input.source` が `tsv` / `maf` / `mwtab` / `xlsx`）ならデータセットは要らない。
-状態変更: なし（読むだけ。`dataset_alignment_qc` がハンドルに持つ最後の結果も読まない——spec だけで再現する）。
-`output_path` を渡すと結果の JSON を書く。
+前提: `input.source=dataset` ならデータセット（ハンドルか対話のセッション。無ければ `missing_state`）。外部の表
+（`tsv` / `maf` / `mwtab` / `xlsx`）なら要らない。状態変更: なし（`dataset_alignment_qc` がハンドルに持つ最後の結果も
+読まない）。`output_path` を渡すと結果の JSON を書く。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_analysis_run()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
@@ -87,23 +75,19 @@ property）。`DatasetHandle` は `dataset` と `library` を `AnalysisSession` 
 44. ├─ [集約の要約を切った] metabolomix/tools/reanalysis_tools.py  _aggregate_cut_notes()
 45. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
 
-書いても効かない設定（`steps` に無い段の設定・`merge_split=false` や外部の表での `features.alignment_qc`・
-ols でない検定の共変量）は `normalize_spec(spec, notes=...)` が捨てて理由を `notes` に足し、戻り値と JSON の
-`notes` に出す（捨てた設定は `rule_hash` に入らない）。`correction=none` の `bh_population`・`thresholds.q` と、
-`_uses_injection_order()` が偽（`drift_correct` の解析が無い）の `injection_order`・`_uses_covariates()` が偽（共変量で調整する
-ols が無い）の `covariates` も `notes` に書くが、spec には残す（`rule_hash` は前と同じ）。`_load()` はこの 2 つの表を読まない。
-入力が陽陰を統合したデータセットなら、`drift_correct` は
-`_polarity_orders()` が決めた極性ごとの注入順で当てはめる（`metadata` は陽イオンが試料の表、陰イオンが
-`quant_state.polarity_runs.negative`。TSV は 1 つの注入順を全極性に当て、陰イオンの測定と違えば
-`run_spec(..., notes=...)` が `notes` に足す）。`output_path` が無く 50 行を超える解析は
-`first_by_p()` の先頭 50 行だけを TSV にし、`truncated`・`rows_order` を立てる（断らない）。
-集約の要約は `_aggregate_summary()` がリストごとに自分の長さで切り（寄与は和に入ったメンバーが 50 を超えた
-ときだけ `share_median` の大きい順に並べ替えて切る）、`_aggregate_cut_notes()` が切ったものだけを `notes` に
-名指す。
+- 効かない設定は `normalize_spec(spec, notes=...)` が捨てて `notes` に書く（`rule_hash` に入らない）。`correction=none` の
+  `bh_population`・`thresholds.q`、`_uses_injection_order()` が偽の `injection_order`、`_uses_covariates()` が偽の
+  `covariates` は `notes` に書いて spec に残し、`_load()` はこの 2 つの表を読まない（output_format の冒頭）。
+- 割れたスポットのまとめ（`features.merge_split`）は `_merge_plan()` が recipe の前に `merge_groups` だけに行う
+  （`features.alignment_qc` の JSON か、その場の `find_split_pairs`。外部の表では何もしない。§2）。
+- 陽陰を統合したデータセットの `drift_correct` は `_polarity_orders()` が決めた極性ごとの注入順で当てる（`metadata` は
+  陽イオンが試料の表、陰イオンが `quant_state.polarity_runs.negative`。TSV は 1 つの注入順を全極性に当て、陰イオンの
+  測定と違えば `run_spec(..., notes=...)` が `notes` に足す。§3）。
+- `output_path` が無く 50 行を超える解析は `first_by_p()` の先頭 50 行（`truncated`・`rows_order`。断らない）。集約の要約は
+  `_aggregate_summary()` がリストごとに切り、`_aggregate_cut_notes()` が切ったものだけを `notes` に名指す（§2 の戻り値（v1））。
 
-`spec["schema"] == "analysis-spec.v2"` のときは、`resolve_holder()` のあと v1 の鎖でなく次へ振り分ける
-（データセットは常に要る。除外は spec の `input` だけを使い、`dataset_exclude` の除外は読まない。
-状態変更・記録は無し）。
+`spec["schema"] == "analysis-spec.v2"` は `resolve_holder()` のあと v1 の鎖でなく次へ振り分ける（データセットは常に要る。
+除外は spec の `input` だけで、`dataset_exclude` の除外は読まない。状態変更・記録なし。§2.1）。
 
 1. metabolomix/tools/reanalysis_tools.py  _analysis_run_v2()
 2. ├─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
@@ -115,22 +99,17 @@ ols が無い）の `covariates` も `notes` に書くが、spec には残す（
 8. ├─ metabolomix/analysis/stats_run_summary.py  inline_rows()
 9. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
-compare / composition の要約は交絡 `confounding`（`batch_status`・`by_contrast`。composition は内側の比較のもの）を持ち、
-composition の `warnings` は `composition_warnings()` が内側の比較（絶対量・CLR）の注意をコードで重ねずに足す。
-
-割れたスポットのまとめ（`features.merge_split`、既定 true）は recipe の前（行列を読んだ直後。recipe・集約・検定はまとめた行列に当たる）に、
-`alignment_qc` の `merge_groups` だけに行う（`features.alignment_qc` に JSON を渡せばその群、
-無ければその場の `find_split_pairs`。JSON は `dataset_fingerprint` が今のデータセットと合うものだけ。
-`dataset_alignment_qc` がハンドルに持つ最後の結果は使わない）。外部の表（`input.source` が `dataset` 以外）では何もしない。
+`confounding_summary()` が compare / composition の要約の `confounding`（composition は内側の比較のもの）を、
+`composition_warnings()` が composition の `warnings` に内側の比較の注意を重ねずに足す（§2.1）。
 
 ## library_msms_qualify
 
-前提: ライブラリ（`library_load` か、ライブラリつきの `load_dataset`）。無ければ
-`missing_state`。状態変更: なし（直近の照合 `last_match` も書かない）。
+前提: ライブラリ（`library_load` か、ライブラリつきの `load_dataset`。無ければ `missing_state`）。
+状態変更: なし（`last_match` も書かない）。
 
-`ion_mode` は手順 4 で正規化し（読めない値は `DATASET_BAD_REQUEST`）、`mz_tol_ppm` は 0 より大きい有限の数だけを
-受ける。前駆体の窓は `library_match_feature` と同じ（m/z 500 を超えたら同じ ppm。手順 9 の中）。候補の表の行は
-`msms_rules.candidate_rows()`（`dataset_claim_evidence` の `msms.top` と共有）。
+`ion_mode` は手順 4 で正規化し（読めない値は `DATASET_BAD_REQUEST`）、`mz_tol_ppm` は 0 より大きい有限の数だけ。
+前駆体の窓は `library_match_feature` と同じ（手順 9）。候補の表の行は `msms_rules.candidate_rows()`
+（`dataset_claim_evidence` の `msms.top` と共有）。
 
 1. metabolomix/tools/reanalysis_tools.py  library_msms_qualify()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
@@ -166,7 +145,7 @@ composition の `warnings` は `composition_warnings()` が内側の比較（絶
 3. ├─ metabolomix/analysis/homolog.py  members_from_names()（`auto.adduct` は `msdial/adducts.py` `same_adduct()` で組成で比べる）
 4. │  └─ metabolomix/analysis/homolog.py  species_of()
 5. │     └─ metabolomix/analysis/msms_rules.py  name_lipid_species()（目標照合・MS/MS の合否と同じ読み手。標識付きは読まない）
-6. ├─ metabolomix/analysis/homolog.py  check()（種の鍵は（修飾, 炭素数, 二重結合数）で、修飾の違う種は別の列。比べた隣どうしの対が 0 なら `not_evaluable`。ツールが `notes` に理由と、2 つ以上の修飾を集めたときの内訳を書く）
+6. ├─ metabolomix/analysis/homolog.py  check()（種の鍵は（修飾, 炭素数, 二重結合数）。比べた対が 0 なら `not_evaluable`。理由と修飾の内訳はツールが `notes` に。§5）
 7. └─ metabolomix/analysis/homolog.py  rule_hash()
 
 ## dataset_feature_relations
@@ -182,10 +161,9 @@ composition の `warnings` は `composition_warnings()` が内側の比較（絶
 
 ## dataset_claim_evidence
 
-前提: データセット（無ければ `missing_state`）。`msms` を頼むときはライブラリ（無ければ候補ごとに
-`no_library`。同定が LBM だけのデータセット＝記憶が `lbm_only` なら候補ごとに `not_evaluable`
-（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。状態変更: なし。`output_path` を渡すと JSON を書く
-（省けば束を返し、候補が 10 を超えれば先頭 10 件と `truncated: true`。断らない）。
+前提: データセット（無ければ `missing_state`）。`msms` を頼むときはライブラリ（無ければ候補ごとに `no_library`。記憶が
+`lbm_only` なら候補ごとに `not_evaluable`（`reason: lbm_only`）で、理由の文は束の `msms_not_evaluable_reason` に 1 回）。
+状態変更: なし。`output_path` を渡すと JSON を書く（省けば束を返し、候補が 10 を超えれば先頭 10 件と `truncated: true`。断らない）。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_claim_evidence()
 2. ├─ metabolomix/analysis/claim_evidence.py  normalize_claim_spec()
@@ -207,20 +185,13 @@ composition の `warnings` は `composition_warnings()` が内側の比較（絶
 18. ├─ [output_path あり] metabolomix/tools/reanalysis_tools.py  write_result()
 19. └─ [output_path なし・候補 > 10] metabolomix/tools/reanalysis_tools.py  _inline_candidates()
 
-spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め（誤りは `CLAIM_SPEC_INVALID`）、目標に `rt_min` が
-あれば既定の目標と走査の全変種の `normalize_targets(rt_offset_min=...)` に渡す（`match_target` が RT の窓の中心を
-ずらす）。`rt_min` が無ければ効かないので捨てて `notes` に書く（束の `notes` と戻り値。規則にも `rule_hash` にも入らない）。
-`output_path` を省いて候補が 10 を超えるときは断らず、`_inline_candidates` が既定の特徴 → 既定の照合で見えた候補 →
-ほかの候補の順（同じ段の中は束の並び）に先頭 10 件を選び、`truncated: true` と全件の数を返す（束そのものは変えない）。
-
-候補ごとの `split` と、既定の特徴・走査の判定でまとめる割れの組は `find_split_pairs`（既定の閾値）の `split_partners` /
-`merge_groups`（`dataset_alignment_qc` がハンドルに持つ最後の結果は読まない。束は spec と入力だけで再現する）。`default_selection.counts.qualified`
-（と走査ごとの `counts.qualified`）は、規則で qualified になった特徴のうち MS/MS の合否
-（`msms.qualify.verdict`）が `qualified` の数（`_selection`。MS/MS を頼んでいない・ライブラリが無ければ null）で、
-規則で qualified の数（旧 `qualified` の意味。MS/MS の有無ではない）は `rule_qualified`（`msms_available` は同じ値の非推奨の別名）。
-代表 MS/MS の有無で数えるのは `msms_spectrum_available`（質量の窓の候補。割れの組は 1 つ、RT で絞らない）で、候補ごとの
-`msms.spectrum_available` は `_msms_for` がライブラリの有無より先に spot を照会して決める（MS/MS を頼まなければ null。`.arf2` / `.dcl` のファイルが無い `not_found`（`reason` が `no_arf2` / `no_dcl`）は False でなく null）。`msms_spectrum_available` は `_spectrum_count` が数え、0 は照会して無かった・null は頼まなかったか分からなかった（True の単位が無く null の単位がある）・数は下限。既定の特徴と走査の判定は
-`match_target(merged_from=merge_map(...))` で割れの組を 1 つの候補（残す ID）として数える。
+- `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め（誤りは `CLAIM_SPEC_INVALID`）、目標に `rt_min` があれば
+  既定の目標と走査の全変種の `normalize_targets(rt_offset_min=...)` に渡す（`match_target` が RT の窓の中心をずらす）。
+  `rt_min` が無ければ捨てて `notes` に書く。
+- 先頭 10 件の選び方（`_inline_candidates`。束そのものは変えない）、`split`・割れの組（`find_split_pairs` の既定の閾値。`dataset_alignment_qc` の
+  最後の結果は読まない）、`counts.qualified`（`_selection`）・`rule_qualified`・`msms_spectrum_available`（`_spectrum_count`）・
+  候補ごとの `msms.spectrum_available`（`_msms_for` がライブラリの有無より先に spot を照会）の意味は §7。既定の特徴と走査の
+  判定は `match_target(merged_from=merge_map(...))` で割れの組を 1 候補（残す ID）に数える。
 
 ## dataset_mass_accuracy
 
@@ -234,24 +205,23 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 6. └─ metabolomix/analysis/mass_accuracy.py  injection_trend()
 7.    └─ metabolomix/analysis/alignment_qc.py  sample_injection_order()
 
-注入順の出所が `filename`（試料の表の注入順が欠けてファイル名の順に落ちた、または試料の表が宣言
-`# injection_order_source = filename` でファイル名の順と書いた〔値はシートのまま〕）のときは、`injection_trend` の
-`spearman_rho` を出さない（`null`。理由は `rho_unavailable_reason: "filename_order"`）。`per_injection` と
-`n_samples` は残す。
+注入順の出所が `filename`（試料の表の注入順が欠けてファイル名の順に落ちた、または試料の表が
+`# injection_order_source = filename` と宣言した。値はシートのまま）なら、`injection_trend` の `spearman_rho` は `null`
+（`rho_unavailable_reason: "filename_order"`）。`per_injection` と `n_samples` は残す。
 
 ## dataset_sample_peaks
 
-前提: データセット（無ければ `missing_state`）。状態変更: なし（`output_path` を渡せばそのファイルを書き、既存は置き換える。
-注釈は読み取り専用ではない）。解析フォルダ（`.arf`）から読んだ
-データセットだけ（`per_sample_rt` が無ければ `DATASET_BAD_REQUEST`）。`output_path` が無く行（特徴 × 試料）が
-1,000 を超えれば、先頭の特徴の行を特徴ごとにそろえて載せ `truncated` を立てる（断らない）。
+前提: データセット（無ければ `missing_state`）。解析フォルダ（`.arf`）から読んだデータセットだけ（`per_sample_rt` が無ければ
+`DATASET_BAD_REQUEST`）。状態変更: なし（`output_path` を渡せばそのファイルを書き、既存は置き換える。ツールの注釈は読み取り
+専用ではない）。`output_path` が無く行（特徴 × 試料）が 1,000 を超えれば、先頭の特徴の行を特徴ごとにそろえて載せ `truncated` を
+立てる（断らない）。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_sample_peaks()
 
 ## dataset_novel_candidates
 
-前提: データセット（無ければ `missing_state`）。`statistics.result_id` なら今も有効な 2 群比較
-（無ければ `missing_state` が `dataset_compare` を指す）。状態変更: なし。
+前提: データセット（無ければ `missing_state`）。`statistics.result_id` なら今も有効な 2 群比較（無ければ `missing_state` が
+`dataset_compare` を指す）。状態変更: なし。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_novel_candidates()
 2. ├─ metabolomix/tools/reanalysis_tools.py  _drop_ineffective_novel_settings()
@@ -273,40 +243,24 @@ spec の `rt_offset_min`（任意）は `normalize_claim_spec` が形を検め�
 18. ├─ metabolomix/analysis/mass_accuracy.py  rule_hash()
 19. └─ metabolomix/tools/reanalysis_tools.py  write_result()
 
-`statistics.contrast_id`（任意）は `normalize_novel_spec()` が `split_result_ref()` で `result_id` の `#` の後ろと突き合わせ
-（食い違えば `DATASET_BAD_REQUEST`）、`result_id#contrast_id` の 1 つの形にしてから規則に載せる（書かない spec の正規化と
-`rule_hash` は前と同じ）。対比が複数の結果を ID だけで渡せば `select_results()` の `CONTRAST_REQUIRED` を
-`_contrast_choice.contrast_envelope(spec_field="statistics.result_id")` が `needs_input` にする。
-
-`statistics.alignment_qc` を省いた `result_id` の経路は、`dataset_alignment_qc` がこのハンドルに持つ最後の結果
-（`alignment_qc.remembered()`。データの指紋と `metadata_revision` が作ったときと同じものだけ）を使い、無ければ
-その場で探す（`merge_split.source`）。効かない設定（`merge_split=false` の `statistics.alignment_qc`、`analysis_spec` の隣の `statistics.contrast_id` / `statistics.merge_split` / `statistics.alignment_qc`、
-埋め込んだ analysis_spec の効かない設定）は `_drop_ineffective_novel_settings()` が外して `notes` に書く。
-analysis_spec で選んだ解析が `correction=none` なら、q が無いので候補が出ないことも `notes` に書く。
-`output_path` が無く 50 行を超えれば q の昇順の先頭 50 行だけを TSV にし、`truncated` を立てる（断らない）。
-
-割れたスポットの組は 1 候補（残す ID＝受け持ちの多い側（同数なら小さい ID））に数える。`statistics.result_id` では `statistics.merge_split`
-（既定 true）で、組が 1 つでもあればすべての特徴の統計をまとめた行列で検定し直した値にする（`dataset_feature_search` の
-`merge_split` と同じ実装）。analysis_spec では spec の `features.merge_split` が決め、`run_spec` の
-`merge_split.groups` を使う。まとめた組の hash は `rule_hash` に入る（`merge_split` が `groups_hash` に
-出す。`merge_split=false` は v7 と同じ hash）。
-
-`msp_then_lbm` の run をパスウェイ（`pathway_project`）へ渡すと、受け渡しが MSP の行も LBM の行と同じ規則で入れる
-（Ontology が MS-DIAL の脂質クラスならそのまま、そうでなければ名前から、名前で読めなければ ClassyFire のクラスと組成式から
-MS-DIAL の名前とクラスに直す）。直せない行（クラスが 1 つに決まらない・対応表に無い・名前の頭部の語がクラスと食い違う・
-組成式が合わない）と、名前に同位体の標識がある MSP の行（内部標準）は推測せず、
-理由ごとの件数（`handoff` の `kept_by_route` と `dropped_*`）つきで落とす。使った行と落とした行の数を `handoff` で確かめる
-（試しでの件数は [pathway.md（output_format）](../output_format/pathway.md) の規則と
-`docs/superpowers/specs/2026-10-28-reanalysis-v8-trial.md`）。
+- `statistics.contrast_id`（任意）は `normalize_novel_spec()` が `split_result_ref()` で `result_id` の `#` の後ろと突き合わせ
+  （食い違えば `DATASET_BAD_REQUEST`）、`result_id#contrast_id` の形にして規則に載せる。対比が複数の結果を ID だけで
+  渡せば、`select_results()` の `CONTRAST_REQUIRED` を `_contrast_choice.contrast_envelope(spec_field="statistics.result_id")` が
+  `needs_input` にする。
+- `statistics.alignment_qc` を省いた `result_id` の経路は `alignment_qc.remembered()`（データの指紋と `metadata_revision` が
+  同じものだけ）、無ければその場で探す。効かない設定は `_drop_ineffective_novel_settings()` が外して `notes` に書く。
+  analysis_spec では spec の `features.merge_split` が決め、`run_spec` の `merge_split.groups` を使う。まとめた組の hash
+  （`merge_split.groups_hash`）は `rule_hash` に入る（`merge_split=false` は v7 と同じ hash）。割れの組の数え方・
+  50 行の上限は §8。
+- `msp_then_lbm` の run を `pathway_project` へ渡したときの MSP の行の扱いと `handoff` の件数は
+  [pathway.md（output_format）](../output_format/pathway.md) の「何の値か」。
 
 ## dataset_alignment_qc
 
-前提: データセット（無ければ `missing_state`）。状態変更: 結果をハンドル（データセット）の
-`last_alignment_qc` に最後の 1 つとして持つ（`alignment_qc.remember()`。前の結果は置き換える。解析の結果・行列・
-記録は書かない）。`output_path` を渡すと同じ中身（同じバイト列）の JSON を書く。
-注入順は `ds.sample_metadata_rows`（pipeline の run では実験情報シート）の `injection_order`、
-1 試料でも欠ければファイル名の順。受け持ちは `ds.detected_mask`（`.arf` の検出状態）があれば検出、
-無ければ値の大きい方。
+前提: データセット（無ければ `missing_state`）。状態変更: 結果をハンドル（データセット）の `last_alignment_qc` に最後の 1 つ
+として持つ（`alignment_qc.remember()`。前の結果は置き換える。解析の結果・行列・記録は書かない）。`output_path` を渡すと同じ
+バイト列の JSON を書く。注入順は `ds.sample_metadata_rows`（pipeline の run では実験情報シート）の `injection_order`、1 試料でも
+欠ければファイル名の順。受け持ちは `ds.detected_mask`（`.arf` の検出状態）があれば検出、無ければ値の大きい方。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_alignment_qc()
 2. ├─ metabolomix/analysis/alignment_qc.py  find_split_pairs()
@@ -326,10 +280,8 @@ MS-DIAL の名前とクラスに直す）。直せない行（クラスが 1 つ
 16. └─ metabolomix/tools/reanalysis_tools.py  rows_table()
 
 ハンドルに持った結果は、`dataset_feature_search` の `alignment_qc_path`・`dataset_novel_candidates` の
-`statistics.alignment_qc` を省いたときに `feature_search.merge_plan()` → `alignment_qc.remembered()` が読む
-（`merge_split.source: last_alignment_qc`）。データの指紋か `metadata_revision`（`dataset_exclude`・
-`dataset_set_sample_metadata` が進める）が変わっていれば、`remembered()` が捨てて None を返し、その場で探す。
-`dataset_analysis_run` と `dataset_claim_evidence`（`claim_evidence.build()` はいつも既定の閾値の `find_split_pairs()`）は読まない。
-
-まとめは別のツールの側で行う: `alignment_qc.merge_matrix_columns()`（試料ごとに大きい方の値）と
-`alignment_qc.split_partners()`（特徴 → 割れの相手）が唯一の実装。
+`statistics.alignment_qc` を省いたときに `feature_search.merge_plan()` → `alignment_qc.remembered()` が読む。データの指紋か
+`metadata_revision`（`dataset_exclude`・`dataset_set_sample_metadata` が進める）が変われば `remembered()` が捨てて None を返し、
+その場で探す。
+`dataset_analysis_run` と `dataset_claim_evidence`（`claim_evidence.build()` はいつも既定の閾値の `find_split_pairs()`）は読まない（§9）。
+まとめの実装は `alignment_qc.merge_matrix_columns()`（試料ごとに大きい方の値）と `alignment_qc.split_partners()`（特徴 → 割れの相手）だけ。

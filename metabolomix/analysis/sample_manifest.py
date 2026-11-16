@@ -939,7 +939,13 @@ def apply_sample_manifest(ds, manifest_path: str) -> dict:
     rows = parse_manifest(Path(manifest_path), source_root=source_root,
                           expected_sources=expected_sources)
     resolved = resolve_metadata(ds, rows)
-    return apply_metadata(ds, resolved)
+    summary = apply_metadata(ds, resolved)
+    # 前処理の行列（`dataset_analysis` が試料の表の行から役割を組み直す）と、`ds.roles` を読む道具
+    # （pathway_project の受け渡し・根拠バンドルなど）が同じ役割を見るよう、ここでも組み直す。
+    # 組み直さないと、名前から qc と推した試料をシートで sample に直しても、行列には入るのに
+    # pathway では黙って落ちる。
+    ds.roles, ds.sample_meta = pp_inputs_from_rows(list(ds.sample_names), resolved)
+    return summary
 
 
 def _raw_manifest_layout(ds) -> tuple[Path, list[str]]:

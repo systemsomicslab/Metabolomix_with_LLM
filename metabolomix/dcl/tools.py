@@ -27,12 +27,10 @@ def dcl_find_msms(precursor_mz: float, file_path: str | None = None,
                   rt: float | None = None, mz_tol: float = 0.01,
                   rt_tol: float = 0.2, top_n_peaks: int | None = None,
                   dataset_handle: str | None = None) -> str:
-    """precursor m/z（任意で RT）に一致する MS/MS を `.dcl` から引く。
-
-    アノテーションの裏取り（期待フラグメントが実際に出ているか）に使う。RT を渡すと
-    同一 m/z の別溶出ピークを分離できる。該当なしは `status="not_found"`。
-    file_path: 読む `.dcl`。省けば直近のデータセット（または dataset_handle）の `.dcl`
-        （データフォルダは探さない。データセットが無ければ missing_state）。
+    """precursor m/z（任意で RT）に一致する MS/MS を `.dcl` から引く（注釈の裏取り: 期待フラグメントが出ているか）。
+    RT を渡すと同じ m/z の別溶出ピークを分けられる。該当なしは `status="not_found"`。
+    file_path: 読む `.dcl`。省けば直近のデータセット（か dataset_handle）の `.dcl`（データフォルダは探さない。
+        データセットが無ければ missing_state）。
     """
     from metabolomix.tools._holder import alignment_paths, resolve_holder
 
@@ -86,16 +84,14 @@ def dcl_find_msms(precursor_mz: float, file_path: str | None = None,
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dcl_spot_spectrum(spot_id: int, arf2_path: str | None = None, dcl_file: str | None = None,
                       dataset_handle: str | None = None) -> str:
-    """アラインメントのスポット ID で代表 MS/MS（全ピーク）を引く（再解析で使う）。
-
-    `dcl_find_msms` は precursor m/z で引くので、同じ m/z の別スポットを拾いうる。ここは
-    `library_match_feature(spot_id=...)` と同じ規則で、`.arf2` の precursor・RT と照らした
-    アラインメント `.dcl` の `dcl[spot_id]` を返す（索引の崩れは `dcl_precursor_mismatch`、
-    ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`）。mzTab-M の SMF_ID は
-    スポット ID と同じ。`ion_mode` は `.arf2` の極性をそのまま小文字で返す（`positive` / `negative` /
-    `both` / `unknown`。照合の絞り込みのように Both / Unknown を null にしない）。
-    dataset_handle: `load_dataset` が返したハンドル（省略時は直近）。`arf2_path` / `dcl_file` を省けば
-        そのデータセットの `.arf2` / `.dcl` を使う（データフォルダは探さない）。
+    """アラインメントのスポット ID で代表 MS/MS（全ピーク）を引く。
+    `library_match_feature(spot_id=...)` と同じ規則で、`.arf2` の precursor・RT と照らしたアラインメント `.dcl` の
+    `dcl[spot_id]` を返す（precursor m/z で引く `dcl_find_msms` と違い、同じ m/z の別スポットを拾わない）。索引の
+    崩れは `dcl_precursor_mismatch`、ID が無ければ `spot_not_found`、MS/MS が無ければ `not_found`。mzTab-M の
+    SMF_ID はスポット ID と同じ。`ion_mode` は `.arf2` の極性を小文字で返す（`positive` / `negative` / `both` /
+    `unknown`。照合の絞り込みのように Both / Unknown を null にしない）。
+    dataset_handle: 省けば直近。`arf2_path` / `dcl_file` を省けばそのデータセットの `.arf2` / `.dcl` を使う
+        （データフォルダは探さない）。
     """
     from metabolomix.library.tools import spot_msms_query
     from metabolomix.tools._holder import alignment_paths, resolve_holder
@@ -130,17 +126,14 @@ _DIAGNOSTIC_COLUMNS = ["spot_id", "label", "kind", "target_mz", "found", "observ
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True), structured_output=False)
 def dcl_diagnostic_ions(spot_ids: list[int], ions: list[dict], arf2_path: str | None = None,
                         dcl_file: str | None = None, dataset_handle: str | None = None) -> str:
-    """スポットの代表 MS/MS に、診断イオン・中性損失があるかを照会する（再解析で使う）。
-
+    """スポットの代表 MS/MS に、診断イオン・中性損失があるかを照会する。
     spot_ids: アラインメントのスポット ID（mzTab-M の SMF_ID）。1 回 200 件まで。
-    ions: 各要素は `{"mz": 184.0733}`（診断イオン）か `{"neutral_loss": 141.0191}`（前駆体からの
-        中性損失）に、任意で `label`・`tol`（Da、既定 0.01）・`min_relative_intensity`（最大ピークに
-        対する比、既定 0。中性損失は生成イオン＝前駆体 − neutral_loss の比）。知らないキーは
-        `MSMS_RULES_INVALID`（誤りの文がそのキーを名指す）。
-    TSV（`spot_id label kind target_mz found observed_mz relative_intensity status`）。
-    `status` が `ok` 以外の行（MS/MS が無い・索引の崩れ）は照会していない（`found` は空）——
-    「イオンが無かった」と読まない。
-    dataset_handle: そのハンドルの `.arf2` / `.dcl` を使う。省略時は直近のデータセット。
+    ions: 各要素は `{"mz": 184.0733}`（診断イオン）か `{"neutral_loss": 141.0191}`（前駆体からの中性損失）に、
+        任意で `label`・`tol`（Da、既定 0.01）・`min_relative_intensity`（最大ピークに対する比、既定 0。中性損失は
+        生成イオン＝前駆体 − neutral_loss の比）。知らないキーは `MSMS_RULES_INVALID`（誤りの文がそのキーを名指す）。
+    戻り値は TSV（`spot_id label kind target_mz found observed_mz relative_intensity status`）。`status` が `ok`
+    以外の行（MS/MS が無い・索引の崩れ）は照会していない（`found` は空。「イオンが無かった」ではない）。
+    dataset_handle: そのハンドルの `.arf2` / `.dcl` を使う（省けば直近のデータセット）。
     """
     from metabolomix.analysis import msms_rules
     from metabolomix.arf2.reader import format_spots_as_table
