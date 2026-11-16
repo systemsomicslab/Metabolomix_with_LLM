@@ -2,7 +2,7 @@
 
 `.EIC.aef` パーサ、EIC 検索・ランキング、`dataset_plot(kind="eic")` / `dataset_plot(kind="eic_compounds")` の描画契約。
 
-> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
+> 先に `lipidmix://docs/output-format`（共通核）を読む。節番号は全トピックの通し番号。
 
 ## 7. EIC/AEF (`metabolomix/eic/reader.py`)
 
@@ -17,18 +17,11 @@
 | `ri` | float | スポット代表RI。LCデータでは0のことがある |
 | `mz` | float | スポット代表 m/z。**MS-DIAL 2023-11-20 より前の版の出力では全スポット `-1`**（下記） |
 | `drift` | float | スポット代表ドリフト時間。未使用時は `-1` |
-
-**m/z を欠く古い `.EIC.aef`。** 上流 `DataObjConverter` は 2023-11-20（MsdialWorkbench
-`20dfa60b4`）まで、EIC に書くスポット m/z を LC-MS では未設定（`-1`）の値の平均で求めていた。
-そのためこの頃の出力は全スポットで `mz = -1` になる（RT は正しい）。EIC 系ツールは
-読み込み直後に、同じバッチの `<stem>.arf2` から同じ `AlignmentID` の `MassCenter` を借りて
-補う。ただし RT が ±0.02 min で一致するときだけで、補ったスポットには
-`mz_source = "arf2"` が付く。補った旨は各ツールの注記（`== 注意 ==` / `caveats`）に出る。
-ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この値は m/z 検索に掛からず、
-`summarize_eic_data()` の `mz_range` からも除かれる。
 | `main_type` | int | 横軸種別の列挙値。`0` はRT主軸を表す |
 | `num_samples` | int | このスポットに格納されたサンプル数 |
 | `samples` | list[dict] | サンプル別EIC要約。リスト長は通常 `num_samples` |
+
+**m/z を欠く古い `.EIC.aef`**: MS-DIAL 2023-11-20 より前の版の LC-MS の出力は全スポットで `mz = -1`（RT は正しい）。EIC 系の処理は読み込み直後に、同じバッチの `<stem>.arf2` の同じ `AlignmentID` の `MassCenter` で補う。RT が ±0.02 min で一致するときだけ補い、補ったスポットには `mz_source = "arf2"` が付き、補った旨が注記（`== 注意 ==` / `caveats`）に出る。ARF2 が無い・RT が合わないスポットは `-1` のままで、m/z 検索に掛からず、`summarize_eic_data()` の `mz_range` からも除かれる。
 
 ### 7.2 `samples[]` の全フィールド
 
@@ -42,7 +35,8 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 | `mean_intensity` | float | 全クロマトグラム点の強度算術平均 |
 | `max_intensity` | float | 全クロマトグラム点の最大強度 |
 | `chromatogram` | list[tuple] | `include_chromatogram=true` のときだけ追加される `(horizontal_coordinate, intensity)` 点列。長さは `num_peaks` |
-注意: バイナリにはピーク左端・右端座標もあるが、現パーサーは読み進めるだけで出力辞書には含めない。
+
+バイナリにはピーク左端・右端座標もあるが、このパーサーの出力辞書には含めない。
 
 ### 7.3 `summarize_eic_data()`
 
@@ -59,7 +53,7 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 
 ### 7.4 検索・ランキング出力
 
-`search_eic_spots()` は spot ID・m/z 範囲・RT 範囲の AND 検索で、`(一致スポット, 範囲外の spot_ids)` を返す。境界値を含む。m/z を欠く（`-1` のまま補えなかった）スポットは、m/z 条件があるときは一致しない。一致スポットは spot_id 昇順で、各要素は次の形（`top_eic_spots_by_max_intensity()` と同じ）:
+`search_eic_spots()` は spot ID・m/z 範囲・RT 範囲の AND 検索で、`(一致スポット, 範囲外の spot_ids)` を返す。境界値を含む。m/z を欠く（`-1` のまま補えなかった）スポットは、m/z 条件があるときは一致しない。一致スポットは spot_id 昇順で、各要素は次の形（強度順の `top_eic_spots_by_max_intensity()` も同じ）:
 
 | キー | 意味 |
 |---|---|
@@ -69,75 +63,26 @@ ARF2 が無い・RT が合わないスポットは `-1` のまま残る。この
 | `num_samples` | サンプル数 |
 | `max_intensity` | サンプル間で最大の「クロマトグラム最大強度」 |
 
-旧 `top_eic_spots_by_peak_top` / `eicaef_top_peak_tops` は `peak_top`（ピーク頂点の横軸=RT座標。強度ではない）で並べており、実質「遅いRTのスポット一覧」で強度上位ではなかったため置き換えた。強度で並べるには `max_intensity` を使う。
-
 ### 8.4 EIC を検索するツールは無い（特徴の検索は `dataset_feature_search`）
 
-EIC（`.EIC.aef`）を m/z・RT の窓や強度で検索するツールは無い（7.4 節の `search_eic_spots()` /
-`top_eic_spots_by_max_intensity()` は reader の関数で、MCP ツールからは呼ばれない）。データセットの特徴を
-窓で探すのは `dataset_feature_search`（`feature_ids`・`min_mz`/`max_mz`・`min_rt`/`max_rt` の AND）で、並びは
-`sort="mz"`（既定、m/z 昇順）か `sort="intensity"`（強度の降順）だけ。**この強度は特徴行列の検出セル
-（gap-fill でない実測）の最大で、EIC のクロマトグラムの最大（7.4 節の `max_intensity`）ではない。**
-戻り値の欄の意味は `lipidmix://docs/output-format/mztab`。見つけた特徴のクロマトグラムは 8.5 節の
-`dataset_plot(kind="eic")` で描く（特徴 ID は EIC のスポット番号と同じ空間）。
-
+7.4 節の関数は reader のもので、MCP ツールからは呼ばれない。データセットの特徴を窓で探すのは `dataset_feature_search`（`feature_ids`・`min_mz`/`max_mz`・`min_rt`/`max_rt` の AND）で、並びは `sort="mz"`（既定、m/z 昇順）か `sort="intensity"`（強度の降順）だけ。**この強度は特徴行列の検出セル（gap-fill でない実測）の最大で、EIC のクロマトグラムの最大（7.4 節の `max_intensity`）ではない。** 戻り値の欄の意味は `lipidmix://docs/output-format/mztab`。見つけた特徴のクロマトグラムは `dataset_plot(kind="eic")` で描く（特徴 ID は EIC のスポット番号と同じ空間）。
 
 ### 8.5 `dataset_plot(kind="eic")` の描画契約
 
-`dataset_plot(kind="eic")` は画像ではなく、クライアント中立の構造化JSON
-`plot_schema="lipidmix.eic.v1"` を返す。主要フィールドは `axes`、スポットの
-`rt`/`mz`、および各試料の `series[].x` / `series[].y` / `file_id` /
-`peak_left` / `peak_top` / `peak_right` である。Use-LLLMはこれをPlotlyへ変換し、
-Claude Desktop等は各クライアントのUI方式で描画できる。`output_path` を渡さない描画ではファイルを
-作らない。
+1 特徴（`feature_id` = `dataset_feature_search` の特徴 ID = `.arf2` の MasterAlignmentID。イオンモビリティでは連番にならない）の試料別クロマトグラム。`.EIC.aef` はデータセットが覚えているパス（`artifact_paths` の `eic`）から読む。`.EIC.aef` の無いデータセット（mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。
 
-PNG ファイルは、先に得たプロット情報を `save_figure(kind="eic", analysis_id=..., title=None)` で
-`reports/figures/`（報告書に埋め込む図）へ保存するか、`dataset_plot(..., output_path=...)` で描くときに
-任意の場所へ書く。どちらも対話描画とは別の書き込み操作である。
-
-**データセット（ハンドル）の EIC は `dataset_plot(kind="eic")` で描く**（B-2b）。`.EIC.aef` は
-データセットが覚えているパス（`artifact_paths` の `eic`）から読み、`feature_id` は
-`dataset_feature_search` の特徴 ID（= `.arf2` の MasterAlignmentID。EIC のスポット番号と同じ空間で、
-イオンモビリティでは連番にならない）。描画契約（`lipidmix.eic.v1`）は上記と同じで、図は
-`ds.figures["eic"]` に置かれ `save_figure(kind="eic")` が保存する。`.EIC.aef` の無いデータセット
-（mzTab-M だけから読んだもの）は `COMPANION_ARTIFACT_MISSING`。
+既定（`output="image"`）は PNG と 1 行の説明。`output="payload"`（または env `LIPIDMIX_PLOT_OUTPUT=payload`）はクライアント中立の構造化 JSON `plot_schema="lipidmix.eic.v1"` で、主要フィールドは `axes`、スポットの `rt`/`mz`、各試料の `series[].x` / `series[].y` / `file_id` / `peak_left` / `peak_top` / `peak_right`。`output_path` を渡さない描画はファイルを作らない。図は `ds.figures["eic"]` に置かれる。
 
 ### 8.6 `dataset_plot(kind="eic_compounds")` の描画契約
 
-`dataset_plot(kind="eic_compounds")` は**複数物質 × 1サンプル**のオーバーレイを返す。**既定
-（`output="image"`）ではサーバ側で描いた PNG と、何を描き何を落としたかを書いた1行の
-キャプション**を返し、ファイルは書かない。以下の構造化JSON
-`plot_schema="lipidmix.eic.multi.v1"` は `output="payload"`（または env
-`LIPIDMIX_PLOT_OUTPUT=payload`）でクライアントが自分で描くときの契約。
+**複数物質 × 1サンプル**のオーバーレイ。既定（`output="image"`）はサーバ側で描いた PNG と、何を描き何を落としたかを書いた1行のキャプションで、ファイルは書かない。以下は `output="payload"` の `plot_schema="lipidmix.eic.multi.v1"` の契約。
 
-- **1呼び出し1サンプル**。`file_id` は必須。複数サンプルを比べるときはサンプルごとに
-  呼び出し、図を並べる。1物質×全サンプルの比較は従来どおり `dataset_plot(kind="eic")`。
-- 物質は ARF2 の同定情報から選ぶ。`names` は `Name` への大小無視の部分一致、
-  `ontologies` は `Ontology` への大小無視の完全一致で、両者は和集合。
-- 単一の `spot` フィールドは持たない。代わりに `sample`（`file_id` / `sample_name` /
-  `class_id`）を持ち、スポット固有の情報は `series[]` の `spot_id` / `name` /
-  `ontology` / `adduct` / `mz` / `rt` に入る。`series` はRT昇順。
-- 各系列の `annotation` は `{text: "<脂質名> / <peak_top>", x, y}`。`x`/`y` はピーク頂点に
-  最も近いデータ点の座標で、`y` は正規化後の値である。
-- **`selection.dropped[]` を必ず読むこと。** `spot_id`（= ARF2 `AlignmentID`）で引いた
-  EICスポットは `rt`/`mz` の一致（±0.02 min / ±0.01 Da）を検証しており、通らなかった
-  物質は描画されない。除外理由は `rt_mismatch` / `mz_mismatch`（ID対応の崩れ）、
-  `spot_out_of_range`、`file_id_absent`（その試料にトレースが無い）、
-  `below_top_n`（`top_n` 件からあふれた。既定 8 件）の5種。**図に無い＝試料に無い、ではない。**
-  m/z を欠く古い EIC（7.1 節）では、照合の前に ARF2 の m/z で補う。このとき m/z 照合は
-  自明に通るので、取り違えの検出は RT 照合だけが担う（`caveats` にその旨が出る）。
-  `dropped[]` は毎回、除外された物質を1件残らず列挙する。
-- `caveats[]` は `dropped[]` を理由ごとに1行へ要約したもの（例:
-  `"below_top_n で 276 件を除外しました（詳細は selection.dropped）。"`）。ただし
-  `rt_mismatch` / `mz_mismatch` は個別診断に有用なため、最大10件まで物質名を列挙し
-  超過分は件数のみ添える。網羅的な一覧が要るときは常に `selection.dropped[]` を見ること。
-- `selection.candidates` はクエリに一致した物質の総数（`max_candidates` による予備選抜が
-  行われる**前**の件数）。`selection.candidates_evaluated` は実際にEICファイルから読み出し
-  rt/mz 検証まで行った件数（予備選抜後）。一致が300件を超えるとARF2 `HeightAverage`
-  上位300件に予備選抜され、`candidates > candidates_evaluated` となり `caveats` にも残る。
-  `selection.plotted` は実際に描画した数。
+- **1呼び出し1サンプル**。`file_id` は必須。複数サンプルはサンプルごとに呼ぶ。1物質×全サンプルは `dataset_plot(kind="eic")`。
+- 物質は ARF2 の同定情報（データセットの `feature_metadata` の名前・クラス）から選ぶ。`names` は `Name` への大小無視の部分一致、`ontologies` は `Ontology` への大小無視の完全一致で、両者は和集合。
+- 単一の `spot` フィールドは持たない。代わりに `sample`（`file_id` / `sample_name` / `class_id`）を持ち、スポット固有の情報は `series[]` の `spot_id` / `name` / `ontology` / `adduct` / `mz` / `rt` に入る。`series` はRT昇順。
+- 各系列の `annotation` は `{text: "<脂質名> / <peak_top>", x, y}`。`x`/`y` はピーク頂点に最も近いデータ点の座標で、`y` は正規化後の値。
+- **`selection.dropped[]` を必ず読む。** `spot_id`（= ARF2 `AlignmentID`）で引いた EIC スポットは `rt`/`mz` の一致（±0.02 min / ±0.01 Da）を検証し、通らなかった物質は描かない。除外理由は `rt_mismatch` / `mz_mismatch`（ID対応の崩れ）、`spot_out_of_range`、`file_id_absent`（その試料にトレースが無い）、`below_top_n`（`top_n` 件からあふれた。既定 8 件）の5種。**図に無い＝試料に無い、ではない。** m/z を欠く古い EIC（7.1 節）では照合の前に ARF2 の m/z で補うので m/z 照合は自明に通り、取り違えの検出は RT 照合だけが担う（`caveats` にその旨が出る）。`dropped[]` は除外された物質を毎回すべて挙げる。
+- `caveats[]` は `dropped[]` を理由ごとに1行へ要約したもの（例: `"below_top_n で 276 件を除外しました（詳細は selection.dropped）。"`）。`rt_mismatch` / `mz_mismatch` は最大10件まで物質名を挙げ、超過分は件数のみ。網羅的な一覧は `selection.dropped[]`。
+- `selection.candidates` はクエリに一致した物質の総数（`max_candidates` による予備選抜の**前**）。`selection.candidates_evaluated` は実際にEICファイルから読み rt/mz 検証まで行った件数（予備選抜後）。一致が300件を超えるとARF2 `HeightAverage` 上位300件に予備選抜され、`candidates > candidates_evaluated` となり `caveats` にも残る。`selection.plotted` は実際に描いた数。
 
-PNG ファイルは `save_figure(kind="eic", analysis_id=..., title=None)`（報告書の `reports/figures/`）か
-`dataset_plot(..., output_path=...)`（任意の場所）で書く。この保存ツールは `lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。
-データセットの上では `dataset_plot(kind="eic_compounds", file_id=..., names=[...] / ontologies=[...])` が
-同じ契約（物質は `feature_metadata` の名前・クラスから選ぶ）で描き、保存は `save_figure(kind="eic_compounds")`。
+**PNG の保存**（`eic` / `eic_compounds` とも）: `save_figure(kind="eic" | "eic_compounds", analysis_id=..., title=None)` で報告書の `reports/figures/` へ、または `dataset_plot(..., output_path=...)` で任意の場所へ書く。どちらも対話描画とは別の書き込み操作で、`lipidmix.eic.v1` と `lipidmix.eic.multi.v1` の両方に対応する。

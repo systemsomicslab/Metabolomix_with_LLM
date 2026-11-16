@@ -1,50 +1,31 @@
 # 定量の出力（`dataset_quant_preview` / `dataset_quant_apply` / `dataset_merge_polarities` / `dataset_select_features`）
 
-内部標準による正規化・陽陰の統合・特徴の選別。規則は外部の規則プラグイン（`[quant] rules`。
-仕様は `docs/quant-rules-plugin.md`）が持ち、未設定なら 4 ツールとも
-`{"error": {"code": "quant_rules_unavailable", ...}}`（message に設定の書き方）を返す。
-共通核（`lipidmix://docs/output-format`）の必須注意（gap-fill と検出の区別ほか）が先に効く。
+内部標準による正規化・陽陰の統合・特徴の選別。規則は外部の規則プラグイン（`[quant] rules`。仕様は `docs/quant-rules-plugin.md`）が持ち、未設定なら 4 ツールとも `{"error": {"code": "quant_rules_unavailable", ...}}`（message に設定の書き方）を返す。共通核（`lipidmix://docs/output-format`）の必須注意（gap-fill と検出の区別ほか）が先に効く。
 
-**入力は MS-DIAL の解析フォルダ（`.arf` / `.arf2`）から読んだデータセットだけ**
-（`source_format == "msdial_folder"`）。規則の入力（クラス・付加体・コメント・MS/MS の有無）を
-同じ意味で持たないほかの形式（mzTab-M など）は、空欄のまま黙って定量せず
-`QUANT_SOURCE_UNSUPPORTED` で止める。
+**入力は MS-DIAL の解析フォルダ（`.arf` / `.arf2`）から読んだデータセットだけ**（`source_format == "msdial_folder"`）。規則の入力（クラス・付加体・コメント・MS/MS の有無）を同じ意味で持たない形式（mzTab-M など）は `QUANT_SOURCE_UNSUPPORTED` で止める。
 
 ## 1. 単位と値
 
-- `unit` は規則が返す文字列（例: 細胞あたりの pmol）。**正規化していないデータセット（`skip=True` で
-  飛ばしたもの、正規化の工程を通っていないもの）は `normalized=false`・`unit=null`**で、値は MS-DIAL の
-  強度のまま。単位が違うデータセット同士・正規化済みと未正規化は統合しない（`QUANT_MERGE_STATE_MISMATCH`）。
-  未正規化どうしは、skip を挟まなくてもそのまま統合する。
-- **正規化は統合の前に、極性ごとに行う**。内部標準は極性ごとの行で、参照表はクラスで引くので、陽陰を統合した
-  データセットを割ると一方の極性の内部標準で他方の極性の同じクラスを割りうる。統合したデータセット（`quant_state.steps`
-  に `merge`、または特徴に `origin`）には preview・apply・`skip=True` のどれも掛けず `QUANT_ALREADY_MERGED`
-  （`details.parent_handles` に極性ごとの親のハンドル。そのハンドルで正規化してから統合し直す。統合し直すと統合した
-  ハンドルに当てていた除外とシートは引き継がれないので、統合し直してできたハンドルに当て直す——極性ごとのハンドルの
-  除外は統合が引き継ぐ。§5）。極性を尋ねる前に断る。
+- `unit` は規則が返す文字列（例: 細胞あたりの pmol）。**正規化していないデータセット（`skip=True` で飛ばしたもの、正規化の工程を通っていないもの）は `normalized=false`・`unit=null`**で、値は MS-DIAL の強度のまま。単位が違うデータセット同士・正規化済みと未正規化は統合しない（`QUANT_MERGE_STATE_MISMATCH`）。未正規化どうしは skip を挟まなくても統合する。
+- **正規化は統合の前に、極性ごとに行う**（内部標準は極性ごとの行で参照表はクラスで引くので、統合後に割ると一方の極性の内部標準で他方の極性の同じクラスを割りうる）。統合したデータセット（`quant_state.steps` に `merge`、または特徴に `origin`）には preview・apply・`skip=True` のどれも掛けず `QUANT_ALREADY_MERGED`（`details.parent_handles` に極性ごとの親のハンドル。そのハンドルで正規化してから統合し直す。統合し直したときの除外とシートは §5 の merge）。極性を尋ねる前に断る。
 - 正規化した行列の行は**内部標準以外の特徴**。内部標準の行は値を持たず、後段の選別で除かれる。
-- 内部標準の値が 0・負・欠測の試料は、その試料の値を**欠測（NaN）**にして理由を `status_counts`
-  に数える。中央値などで埋めない。参照表に無いクラスは `Any others` の行で計算する
-  （`classes[].via_any_others`）。
+- 内部標準の値が 0・負・欠測の試料は、その試料の値を**欠測（NaN）**にして理由を `status_counts` に数える。中央値などで埋めない。参照表に無いクラスは `Any others` の行で計算する（`classes[].via_any_others`）。
 
 ## 2. gap-fill の印（最重要）
 
-gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算する**が、`detected_mask` は
-**対象の特徴か、割った内部標準のどちらかが gap-fill なら False**。つまり
-`detected_mask=True` は「対象も内部標準も実際に検出された」セルだけ。値が入っていることを検出の
-証拠として読まない。統計側の検出率・検出例数はこの印を使う。
+gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算する**が、`detected_mask` は**対象の特徴か、割った内部標準のどちらかが gap-fill なら False**。`detected_mask=True` は対象も内部標準も実際に検出されたセルだけ。値が入っていることを検出の証拠として読まない。統計側の検出率・検出例数はこの印を使う。
 
 ## 3. `quant_state`（派生データセットが持つ状態）
 
-統計（`dataset_*` の前処理・検定）は `getattr(ds, "quant_state", None)` の `normalized` / `method` /
-`unit` と、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）・
-`source_sample_names`（raw のパスが全試料で分からないときの「注入順がファイルの順か」の鍵。
-`sample_manifest.file_order_keys` が陽イオンの元の試料名で見て、drift=auto の保留と `injection_order_may_be_file_order`
-の注意を左右する）を読む。ほかのキーにも読み手がある: `steps` / `skipped`（`dataset_overview` の工程の鎖、統合の
-`normalize`（`applied` / `skipped` / `not_run`）、統合・選別済みのデータセットを正規化が断る判定）、`record_id`（次の
-工程の記録と統計の前処理の記録の親）、`internal_standard_ids`（選別が除く内部標準。統合は極性の接頭辞を付けて引き継ぐ）・
-`record_folder` / `arf2_by_polarity`（`dataset_select_features`）。`schema` と `polarity_runs_match` は記録として持つだけ。
-選別は知らないキーもそのまま引き継ぐ。キーの改名・削除は読み手を直してから行う（黙って欠けると既定の読み方に落ちる）。
+キーの読み手:
+
+- 統計（`dataset_*` の前処理・検定）: `normalized` / `method` / `unit`、統合したデータセットの `polarity_runs`（陰イオンの測定。ドリフト補正を極性ごとに当てる）と `source_sample_names`（`sample_manifest.file_order_keys` が陽イオンの元の試料名で「注入順がファイルの順か」を見て、drift=auto の保留と `injection_order_may_be_file_order` の注意を左右する）。
+- `steps` / `skipped`: `dataset_overview` の工程の鎖、統合の `normalize`（`applied` / `skipped` / `not_run`）、統合・選別済みのデータセットを正規化が断る判定。
+- `record_id`: 次の工程の記録と統計の前処理の記録の親。
+- `internal_standard_ids`（選別が除く内部標準。統合は極性の接頭辞を付けて引き継ぐ）・`record_folder` / `arf2_by_polarity`: `dataset_select_features`。
+- `schema` と `polarity_runs_match` は記録として持つだけ。
+
+選別は知らないキーもそのまま引き継ぐ。キーを改名・削除するときは読み手を先に直す（欠けると既定の読み方に落ちる）。
 
 | キー | 意味 |
 |---|---|
@@ -58,7 +39,7 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 | `internal_standard_ids` | 内部標準の特徴 ID（選別後は残ったものだけ。統合後は `positive:<id>` / `negative:<id>`） |
 | `record_folder` | 統合後の記録の置き場（`dataset_merge_polarities` が足す） |
 | `arf2_by_polarity` | 統合後に、極性ごとのキュレーションのフラグを引く `.arf2`（`dataset_merge_polarities` が足す。フラグそのものは写さない） |
-| `polarity_runs` | 統合後の、陽イオン以外の極性の測定（`{"negative": {<統合後の試料名>: {batch, injection_order, injection_order_source, injection_order_may_be_file_order}}}`。陰イオンのデータセットの試料の表（当てたシートを含む）から統計エンジンと同じ規則で読んだ値。`dataset_merge_polarities` が足す）。統合したデータセットの試料の表は陽イオンの試料の表そのもの（陽イオンに当てたシート `sample_metadata_rows` も引き継ぐ）＝陽イオンの測定。統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので、陽イオンの測定だけを決める（陰イオンの測定は、陰イオンのハンドルにシートを当てて統合し直すと変わる。統合し直すと統合したハンドルへ当てたシートと除外〔`dataset_exclude`〕は引き継がれないので、陽イオンのシートは陽イオンのハンドルか、統合し直してできたハンドルに当て、統合したハンドルの除外は統合し直してできたハンドルに当て直す） |
+| `polarity_runs` | 統合後の、陽イオン以外の極性の測定（`{"negative": {<統合後の試料名>: {batch, injection_order, injection_order_source, injection_order_may_be_file_order}}}`。陰イオンのデータセットの試料の表（当てたシートを含む）から統計エンジンと同じ規則で読んだ値。`dataset_merge_polarities` が足す）。統合したデータセットの試料の表は陽イオンの試料の表そのもの（陽イオンに当てたシート `sample_metadata_rows` も引き継ぐ）＝陽イオンの測定。統合したハンドルへ後から当てるシートは陽イオンの raw を挙げるので陽イオンの測定だけを決める。陰イオンの測定は、陰イオンのハンドルにシートを当てて統合し直すと変わる（統合し直すときのシートと除外は §5 の merge） |
 | `polarity_runs_match` | `{"negative": <negative_runs と同じもの>}`（陰イオンの測定が、統合したデータセットが陽イオンの測定として読む値と同じか） |
 | `source_sample_names` | 統合前の試料名（`{"positive": [...], "negative": [...]}`。統合後の試料の順）。統合は試料を共通 ID へ改名するので、raw のパスが無いデータセットの「注入順がファイルの順か」は陽イオンの元の試料名で見る |
 
@@ -73,15 +54,10 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 
 `needs_input` の封筒は `how_to_answer` に次の呼び方を書く。答え方:
 
-- **内部標準の曖昧**: `unresolved[].candidates`（`feature_id`・名前・付加体・m/z・RT）から 1 つ選び、
-  `bindings={"<standard_name>": <feature_id>}` を足して同じツールを再実行。
-- **試料の食い違い**: `only_in` は片側にしか無い試料。`mapping_csv`（列: `mode`, `source_sample`,
-  `sample_id`, `group`, `sample_type`。`mode` は positive / negative、pos / neg も可）で対応づけて再実行。
-  `group` / `sample_type` 列は規則が検証するだけで適用しない（試料の実験情報は POS のもの）。
-- **記録の置き場**: 2 つの解析フォルダの共通の親が決められない（ドライブが違う・親子）とき
-  `record_folder`（既存のフォルダ）を渡す。
-- **採用表**: `lipidmix.local.toml` の `[quant] adducts` を設定するか `skip_adduct_filter=True`
-  （内部標準・名前・MS/MS の除外は行う。`quant_state.skipped` に `adduct_filter` が入る）。
+- **内部標準の曖昧**: `unresolved[].candidates`（`feature_id`・名前・付加体・m/z・RT）から 1 つ選び、`bindings={"<standard_name>": <feature_id>}` を足して同じツールを再実行。
+- **試料の食い違い**: `only_in` は片側にしか無い試料。`mapping_csv`（列: `mode`, `source_sample`, `sample_id`, `group`, `sample_type`。`mode` は positive / negative、pos / neg も可）で対応づけて再実行。`group` / `sample_type` 列は規則が検証するだけで適用しない（試料の実験情報は POS のもの）。
+- **記録の置き場**: 2 つの解析フォルダの共通の親が決められない（ドライブが違う・親子）とき `record_folder`（既存のフォルダ）を渡す。
+- **採用表**: `lipidmix.local.toml` の `[quant] adducts` を設定するか `skip_adduct_filter=True`（内部標準・名前・MS/MS の除外は行う。`quant_state.skipped` に `adduct_filter` が入る）。
 
 エラー封筒は他の `dataset_*` ツールと同じ形（`{"error": {"code", "message", "details"?}}`）。主な code:
 `quant_rules_unavailable`（規則未設定）・`QUANT_RULES_REJECTED`（規則が入力を拒否。`details.rule_code`）・
@@ -91,88 +67,40 @@ gap-fill（検出されず MS-DIAL が補った値）のセルも**値は計算�
 `QUANT_ALREADY_MERGED`（陽陰を統合したデータセットは正規化しない。§1。`details` に `record_id` と `parent_handles`）・
 `QUANT_CURATION_UNREADABLE`（キュレーションの記録が読めない。`apply_curation=False` で進められる）・
 `DATASET_HANDLE_LIMIT`（新しいハンドルを足せない。記録を書く前に止める）・
-`QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`（正規化の状態が陽陰で違う。
-`details.differs` と `details.normalize`）・
+`QUANT_NEEDS_DETECTION`（検出の印が無い入力）・`QUANT_MERGE_STATE_MISMATCH`（正規化の状態が陽陰で違う。`details.differs` と `details.normalize`）・
 `QUANT_MERGE_SAMPLE_CONFLICT`（同じ試料の群・役割が陽陰で食い違う）・
-`QUANT_REFERENCE_NOT_FOUND`。ハンドルのロックを待ちきれなければ、どのツールも（2 つのハンドルを取る `dataset_merge_polarities` も、待つのは全部で最長 25 秒）
-何もせずに `HANDLE_BUSY` を返す（`core.md` の「ハンドルが塞がっている」。長い道具の仕事がロックを持っていれば `details.job_id` と
-`required_tools: ["job_status"]`）。封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・
-単位・ファイル名の末尾だけ）。
+`QUANT_REFERENCE_NOT_FOUND`。ハンドルのロックを待ちきれなければ、どのツールも何もせずに `HANDLE_BUSY` を返す（`core.md` の「ハンドルが塞がっている」）。
+封筒・戻り値には**ローカルのパスを載せない**（参照表は sha256・単位・ファイル名の末尾だけ）。
 
 ## 5. 各ツールの戻り値の欄
 
-- **preview**: `status`・`polarity`・`unit`・`reference`（`sha256` `label` `method`）・
-  `classes`（データセットに現れたクラスだけ: `target_class` `standard_name` `feature_id` `adduct`
-  `mz` `rt` `coefficient` `via_any_others`）・`unresolved`・`missing_values`（試料の値が欠測になる理由ごとの件数）。
-- **apply**: `status`・`dataset_handle`（新しいハンドル）・`record_id`・`status_counts`（セルの状態ごと
-  の件数）・`unit`・`polarity`・`reference`・`classes`・`internal_standard_ids`。
-- **merge**: `status`・`dataset_handle`・`record_id`・`rule`（試料の照合規則）・`n_features`
-  （`positive` `negative` `merged`）・`n_samples`・`unit`・`normalized`・`normalize`（極性ごとに正規化を
-  どう通ったか: `applied`＝dataset_quant_apply / `skipped`＝`skip=True` / `not_run`＝どちらも通っていない。
-  記録の `settings.normalize` にも同じものを書く）・`negative_runs`（陰イオンの測定が、統合したデータセットが陽イオンの
-  測定として読む値（陽イオンの試料の表。当てたシートを含む）と同じか:
-  `injection_order` は両方分かる試料のどれかで違えば `different`、違わないが片方でも分からない試料があれば
-  `unknown`、それ以外は `same`。`batch` は `same` / `different`。`n_samples_differ` は注入順かバッチの違う試料の数。
-  記録の `summary.negative_runs` にも書く。陽陰は別の注入なので、統計の前処理は極性ごとの測定でドリフトを当てる）。
-  `assay_kind`（統合したハンドルのアッセイ種別。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と
-  `metabolite` で食い違えば `unknown`。陽陰で違うときだけ `notes` にどちらから決めたか・食い違いを書く。食い違いは、
-  誤っている側の極性のハンドル（注記が両方のハンドル ID を挙げる）へ
-  `record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...)` で記録し直してから統合し直す。統合したハンドルは
-  陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると陽イオンの解析フォルダに結び付いた目的に書き、
-  開き直した陽イオンのデータセットの種別まで変わる）。
-  特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID
-  （POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
-  `exclusions`（極性ごとのハンドルの除外〔`dataset_exclude`〕を引き継いだときだけ。`features` `samples` の件数）: 除外は
-  統合後の ID に写す——特徴は `positive:<id>` / `negative:<id>`（理由はそのまま）、試料は各側の試料名を共通 ID へ写した和
-  （統合したデータセットの試料は両極性の列を 1 つに持つので、片方の極性だけで外した試料も両極性の特徴から外れる。理由に
-  外した極性を付け、両方なら `; ` でつなぐ）。そのときは `notes` にも書き、記録の `summary.exclusions` に ID を残す。前の
-  統合したハンドルに当てたシートと除外は、統合し直すと引き継がれない（統合は極性ごとのハンドルから作る）。
-- **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・
-  `reasons`（理由ごとの件数）・`curation`・`curation_by_polarity`・`adducts`（`sha256` `label`）・
-  `skipped`・`examples`（除外の例 5 件）。**全判断は audit にあり、戻り値には載せない。**
-- **探索専用の印**: 派生は親の `exploratory_only` / `exploratory_reason` を引き継ぐ（未完了の実行・検証を
-  通っていない pipeline の単位から開いたデータセットの派生も、書き出しのメタ行・根拠バンドル・図に印が載る）。
-  統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い
-  印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に
-  `exploratory`（`{exploratory_only: true, reason}`）が載る（でなければ欄が無い）。
-- **除外の引き継ぎ**: 派生は親の除外（`dataset_exclude`）を新しい試料名・特徴 ID へ写す。選別が落とした特徴・選ばなかった
-  試料の除外は落とす（無い ID の除外を残すと統計が「存在しない特徴 ID」で止まる）。統合は両極性の除外を統合後の ID に写す。
-- **図は引き継がない**: 派生（apply・skip・merge・select）は親の結果・行列と同じく、親の図（`dataset_plot` が置いた図。
-  親の行列から描いたもの）も、親の除外・試料の表の更新が捨てた図の印も持たない。派生のハンドルでまだ描いていない図の
-  `save_figure` は `missing_state`（`dataset_plot` を案内）で、親の図を保存することも、親の除外を理由に
-  `STALE_FIGURE` を返すこともない。親のハンドルの図はそのまま。
-- **出所の裏取り**: 統合したデータセットの `source_verification` は、陽陰で同じならその値、違えば弱いほう
-  （`verified` > `legacy_unverified` > `direct_unverified`。知らない値はいちばん弱いもの）。書き出しのメタ行
-  `# source_verification` と `dataset_status` もこの値。陽陰で違うときだけ、merge の戻り値に
-  `source_verification`（`merged` と `positive` `negative`）が載る（同じなら欄が無い）。
+- **preview**: `status`・`polarity`・`unit`・`reference`（`sha256` `label` `method`）・`classes`（データセットに現れたクラスだけ: `target_class` `standard_name` `feature_id` `adduct` `mz` `rt` `coefficient` `via_any_others`）・`unresolved`・`missing_values`（試料の値が欠測になる理由ごとの件数）。
+- **apply**: `status`・`dataset_handle`（新しいハンドル）・`record_id`・`status_counts`（セルの状態ごとの件数）・`unit`・`polarity`・`reference`・`classes`・`internal_standard_ids`。
+- **merge**: `status`・`dataset_handle`・`record_id`・`rule`（試料の照合規則）・`n_features`（`positive` `negative` `merged`）・`n_samples`・`unit`・`normalized`・
+  - `normalize`: 極性ごとに正規化をどう通ったか（`applied`＝dataset_quant_apply / `skipped`＝`skip=True` / `not_run`＝どちらも通っていない。`not_run` の側は強度のまま）。記録の `settings.normalize` にも書く。
+  - `negative_runs`: 陰イオンの測定が、統合したデータセットが陽イオンの測定として読む値（陽イオンの試料の表。当てたシートを含む）と同じか。`injection_order` は両方分かる試料のどれかで違えば `different`、違わないが片方でも分からない試料があれば `unknown`、それ以外は `same`。`batch` は `same` / `different`。`n_samples_differ` は注入順かバッチの違う試料の数。記録の `summary.negative_runs` にも書く。統計の前処理は極性ごとの測定でドリフトを当てる。
+  - `assay_kind`: 統合したハンドルのアッセイ種別。陽陰で同じならその値、片方が `unknown` ならもう片方、`lipid` と `metabolite` で食い違えば `unknown`。陽陰で違うときだけ `notes` にどちらから決めたか・食い違いを書く。食い違いは、誤っている側の極性のハンドル（注記が両方のハンドル ID を挙げる）へ `record_objective(dataset_handle=<その極性のハンドル>, assay_kind=...)` で記録し直してから統合し直す（統合したハンドルは陽イオンの写しで解析フォルダも陽イオンのものなので、そこへ記録すると開き直した陽イオンのデータセットの種別まで変わる）。
+  - 特徴 ID は `positive:<id>` / `negative:<id>`、行は POS の特徴のあとに NEG、試料の列は共通 ID（POS の順）。各特徴の出自は `feature_metadata[<fid>]["origin"]`（極性と元の特徴 ID）。
+  - `exclusions`（極性ごとのハンドルの除外〔`dataset_exclude`〕を引き継いだときだけ。`features` `samples` の件数）: 除外は統合後の ID に写す。特徴は `positive:<id>` / `negative:<id>`（理由はそのまま）、試料は各側の試料名を共通 ID へ写した和（統合したデータセットの試料は両極性の列を 1 つに持つので、片方の極性だけで外した試料も両極性の特徴から外れる。理由に外した極性を付け、両方なら `; ` でつなぐ）。そのときは `notes` にも書き、記録の `summary.exclusions` に ID を残す。
+  - **統合し直すとき**: 統合は極性ごとのハンドルから作るので、前の統合したハンドルに当てたシートと除外は引き継がれない。統合し直してできたハンドルに当て直す（陽イオンのシートは陽イオンのハンドルに当ててもよい）。極性ごとのハンドルの除外は引き継がれる。
+- **select**: `status`・`dataset_handle`・`record_id`・`audit_file`・`n_retained`・`n_excluded`・`reasons`（理由ごとの件数）・`curation`・`curation_by_polarity`・`adducts`（`sha256` `label`）・`skipped`・`examples`（除外の例 5 件）。**全判断は audit にあり、戻り値には載せない。**
+- **探索専用の印**: 派生は親の `exploratory_only` / `exploratory_reason` を引き継ぐ（未完了の実行・検証を通っていない pipeline の単位から開いたデータセットの派生も、書き出しのメタ行・根拠バンドル・図に印が載る）。統合はどちらかの親が探索専用なら探索専用で、理由は極性付きで `; ` でつなぐ（`negative: <理由>`。理由の無い印は `incomplete analysis run (exploratory only)`）。派生が探索専用のときだけ、apply・merge・select の戻り値に `exploratory`（`{exploratory_only: true, reason}`）が載る。
+- **除外の引き継ぎ**: 派生は親の除外（`dataset_exclude`）を新しい試料名・特徴 ID へ写す。選別が落とした特徴・選ばなかった試料の除外は落とす（無い ID の除外は統計を「存在しない特徴 ID」で止める）。統合は両極性の除外を統合後の ID に写す。
+- **図は引き継がない**: 派生（apply・skip・merge・select）は親の結果・行列・図（`dataset_plot` が置いた図）も、親の除外・試料の表の更新が捨てた図の印も持たない。派生のハンドルでまだ描いていない図の `save_figure` は `missing_state`（`dataset_plot` を案内）で、親の図を保存することも、親の除外を理由に `STALE_FIGURE` を返すこともない。親のハンドルの図はそのまま。
+- **出所の裏取り**: 統合したデータセットの `source_verification` は、陽陰で同じならその値、違えば弱いほう（`verified` > `legacy_unverified` > `direct_unverified`。知らない値はいちばん弱いもの）。書き出しのメタ行 `# source_verification` と `dataset_status` もこの値。陽陰で違うときだけ、merge の戻り値に `source_verification`（`merged` と `positive` `negative`）が載る。
 
 ## 6. 記録・audit・古さ
 
-- 1 工程 1 記録: 解析フォルダ（統合後は 2 つの解析フォルダの共通の親、または `record_folder`）の
-  `reports/quant/<record_id>.json`（schema `lipidmix.quant-record.v1`）。設定の `[paths] reports_dir` は見ない
-  （再開がデータと一緒に読み直す記録なので、いつも解析フォルダ側）。入力の指紋（元ファイルの
-  sha256・参照表 `reference:<名前>`・採用表 `adducts:<名前>`）・前の工程の記録 ID（`parent_ids`）・
-  設定（`settings.rules` に規則の版と digest）・結果の要約・時刻。**上書きも削除もしない**。
-  やり直しは新しい記録。リポジトリ側には書かない。
-- 選別のキュレーションは、読み込み時の写しではなく**選別の時点の** `flags.jsonl` を読み直して当てる
-  （統合後は極性ごとの `.arf2`）。当てた判断（wrong / redundant / assign の name・ontology）の
-  digest を極性ごとに `settings.curation_digest` に残す（`apply_curation=False` なら null）。
-- 選別の判断の全件は `<record_id>.audit.json`（`lipidmix.quant-select-audit.v1`: `decisions` と
-  `curation`）。記録としては読まれない。
-- 入力が変わる（元ファイルや参照表の sha256 が違う）か前の記録が無くなる・古くなると、その記録は
-  **古い**（`input_changed:` / `parent_stale:` / `parent_missing:`）。選別の記録はキュレーションの
-  digest がいまと違っても古い（`curation_changed`）。消さずに示すだけで、規則の digest が
-  記録と違えば計算し直した派生は戻さない。途中の工程を戻せなければ、それより後ろの記録は
-  `prior_step_not_restored` として挙げる。
+- 1 工程 1 記録: 解析フォルダ（統合後は 2 つの解析フォルダの共通の親、または `record_folder`）の `reports/quant/<record_id>.json`（schema `lipidmix.quant-record.v1`）。設定の `[paths] reports_dir` は見ない（再開がデータと一緒に読み直すので、いつも解析フォルダ側）。中身は入力の指紋（元ファイルの sha256・参照表 `reference:<名前>`・採用表 `adducts:<名前>`）・前の工程の記録 ID（`parent_ids`）・設定（`settings.rules` に規則の版と digest）・結果の要約・時刻。**上書きも削除もしない**。やり直しは新しい記録。リポジトリ側には書かない。
+- 選別のキュレーションは、読み込み時の写しではなく**選別の時点の** `flags.jsonl` を読み直して当てる（統合後は極性ごとの `.arf2`）。当てた判断（wrong / redundant / assign の name・ontology）の digest を極性ごとに `settings.curation_digest` に残す（`apply_curation=False` なら null）。
+- 選別の判断の全件は `<record_id>.audit.json`（`lipidmix.quant-select-audit.v1`: `decisions` と `curation`）。記録としては読まれない。
+- 入力が変わる（元ファイルや参照表の sha256 が違う）か前の記録が無くなる・古くなると、その記録は**古い**（`input_changed:` / `parent_stale:` / `parent_missing:`）。選別の記録はキュレーションの digest がいまと違っても古い（`curation_changed`）。消さずに示すだけで、規則の digest が記録と違えば計算し直した派生は戻さない。途中の工程を戻せなければ、それより後ろの記録は `prior_step_not_restored` として挙げる。
 
 ## 必須の注意
 
-1. gap-fill のセルは値が入っていても検出ではない（§2）。`detected_mask` を見る。
-2. 単位は規則が決める。`normalized=false` の値に単位は無い。単位・normalized が違うものを混ぜない。
-   統合したデータセットの `normalize` が `not_run` の側は、正規化の工程を一度も通っていない強度のまま。
-3. 内部標準の欠測・0・負の試料の値は欠測。補完していない。
-4. 統合後の特徴 ID は `positive:` / `negative:` の接頭辞つき。統合前の ID・キュレーションの
-   フラグと同じものではない（フラグは極性ごとの `.arf2` から元の特徴 ID で引く）。
-5. 参照表・採用表・内部標準の係数の**中身はこのサーバの戻り値に載らない**。データセットに現れた
-   クラスの分だけ `classes` に出る。
+1. gap-fill のセルは値が入っていても検出ではない。`detected_mask` を見る（§2）。
+2. 単位は規則が決め、`normalized=false` の値に単位は無い。単位・normalized が違うものを混ぜない（§1）。統合したデータセットの `normalize` が `not_run` の側は強度のまま（§5）。
+3. 内部標準の欠測・0・負の試料の値は欠測で、補完していない（§1）。
+4. 統合後の特徴 ID は `positive:` / `negative:` の接頭辞つきで、統合前の ID・キュレーションのフラグとは別。フラグは極性ごとの `.arf2` から元の特徴 ID で引く。
+5. 参照表・採用表・内部標準の係数の**中身は戻り値に載らない**。データセットに現れたクラスの分だけ `classes` に出る。
 6. 選別の除外は audit を見て判断する。付加体の選別を飛ばした派生は `skipped` に `adduct_filter` が入る。

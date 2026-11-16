@@ -2,9 +2,9 @@
 
 `.dcl` パーサと `dcl_*` ツール（`dcl_spot_spectrum` / `dcl_diagnostic_ions` / `dcl_find_msms`）の出力定義。
 
-> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
+> 先に `lipidmix://docs/output-format`（共通核）を読む。節番号は全トピックの通し番号。
 
-> **MS/MS の所在（重要）**: 実スペクトルを持つのは `.dcl` であって `.pai2` ではない。PAI2 の `has_msms` は**取得参照の有無**を示すだけで、`msms_spectrum` が非空である保証はない（共通核 §9-8）。同定確度（MSI Level 2）は MS/MS を根拠にするため、フラグだけで確度を主張してはならない。`.dcl` を読むツールは `dcl_*` で、データセットのアラインメントの `.dcl`（スポットの代表スペクトル）を既定に読む。
+> **MS/MS の所在**: 実スペクトルを持つのは `.dcl` で、`.pai2` の `has_msms` は取得参照の有無だけ（共通核 §9-8）。`dcl_*` は既定でデータセットのアラインメントの `.dcl`（スポットの代表スペクトル）を読む。
 
 ## 6. DCL (`metabolomix/dcl/reader.py`)
 
@@ -59,17 +59,14 @@
 
 #### `dcl_find_msms(precursor_mz, file_path=None, rt=None, mz_tol=0.01, rt_tol=0.2, top_n_peaks=None, dataset_handle=None)`
 
-precursor m/z（任意で RT）に一致する MS/MS を引く。アノテーションの裏取り（期待されるフラグメントが実際に出ているか）に使う。RT を渡すと同一 m/z の別溶出ピークを分離できる。該当なしは `status="not_found"` を返し、「MS/MS 未取得のピークである可能性を同定確度に反映せよ」と促す——**該当ゼロを「フラグメントが無い＝別化合物」と解釈してはならない**（そもそも MS/MS が取られていない場合と区別できない）。
+precursor m/z（任意で RT）に一致する MS/MS を引く。RT を渡すと同一 m/z の別溶出ピークを分けられる。該当なしは `status="not_found"`（`message` は MS/MS 未取得の可能性を同定確度に反映するよう促す）。**該当ゼロを「フラグメントが無い＝別化合物」と読まない**（MS/MS が取られていないことと区別できない）。
 
-- `top_n_peaks` の既定は **10**（全ピークは容易に数百本になり文脈を食うため）。全件が必要なときだけ `0` を渡す。`n_msms_peaks` は**間引き前の元本数**であり、返るフラグメントの数とは異なり得る（共通核 §9-9）。
+- `top_n_peaks` の既定は **10**。全件が要るときだけ `0` を渡す。`n_msms_peaks` は**間引き前の元本数**で、返るフラグメントの数とは異なり得る（共通核 §9-9）。
 - **`dataset_handle` を渡せばそのデータセットの、省けば直近のデータセットの `.dcl`（アラインメント結果の `.dcl`＝スポットの代表スペクトル）を読む**。データフォルダは探さない。データセットが無ければ `missing_state`。
-- `.dcl` は測定ファイル 1 つにつき 1 個なので、**特定サンプルの MS/MS が欲しいときは `file_path` を明示すること**（省くとアラインメントの `.dcl` を読む）。
+- `.dcl` は測定ファイル 1 つにつき 1 個なので、**特定サンプルの MS/MS は `file_path` を明示する**（省くとアラインメントの `.dcl`）。
 
-`dcl_spot_spectrum` と `dcl_diagnostic_ions` も同じ `.dcl` を `dataset_handle` / 直近のデータセットから読む（引数は `USAGE.md`）。
-`dcl_spot_spectrum` の `ion_mode` は `.arf2` の代表の極性をそのまま小文字にした文字列（`positive` / `negative` /
-`both` / `unknown`）。上の表の `ion_mode`（パーサの生の列挙値）とは別物で、`library_match_feature` の照合の
-絞り込み（`both` / `unknown` は絞らない）とも別に、`both` と `unknown` を見分けられるように残している。
+`dcl_spot_spectrum` と `dcl_diagnostic_ions` も同じ `.dcl` を `dataset_handle` / 直近のデータセットから読む（引数は `USAGE.md`）。`dcl_spot_spectrum` の `ion_mode` は `.arf2` の代表の極性を小文字にした文字列（`positive` / `negative` / `both` / `unknown`）。上の表の `ion_mode`（パーサの生の列挙値）とは別物で、`library_match_feature` の絞り込み（`both` / `unknown` は絞らない）と違い `both` と `unknown` を区別する。
 
 ### 6.5 `.dcl` が読めないとき
 
-`.dcl` が見つからない・壊れている場合に「MS/MS 無し」と読み替えないこと（**未確認**であって**不在**ではない）。`attach_msms_to_features()`（`metabolomix/dcl/reader.py`）は同じリスト位置の PAI2 ピークと DCL を対応付ける関数として残るが、PAI2 を読むツールは無い。その安全弁——**precursor m/z がピークの `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応が崩れている疑いがあるため、誤った MS/MS を貼るより欠測にする）——は、対応づけを自前で行うときにも守る。
+`.dcl` が見つからない・壊れている場合を「MS/MS 無し」と読まない（**未確認**であって**不在**ではない）。`attach_msms_to_features()` は同じリスト位置の PAI2 ピークと DCL を対応付ける関数として残るが、PAI2 を読むツールは無い。対応づけを自前で行うときも、**precursor m/z がピークの `m/z` と 0.01 を超えて食い違う場合は付与しない**（索引対応の崩れの疑い。誤った MS/MS を貼るより欠測にする）。
