@@ -1,25 +1,16 @@
 # 参照ライブラリ照合（MS/MS スペクトル照合）の出力フィールド
 
-`library_load` / `library_match_feature` / `library_plot_mirror` が返す値の意味。
+`library_load` / `library_match_feature` / `library_plot_mirror` / `library_search` が返す値の意味。呼ぶ順は `docs/workflow/library.md`。
 
-> 先に `lipidmix://docs/output-format`（共通核）を読むこと。行・列の粒度、脂質名文法、必須注意事項はそちらで定義され、ここでは繰り返さない。節番号は分割前の通し番号。
-
-ツールが**どのファイルのどの関数をどの順に呼ぶか**は `docs/workflow/library.md`。
-ここは**値の意味**だけを定義する。設計の根拠・実測は
-[docs/superpowers/specs/2026-09-19-msms-spectral-matching-design.md](../superpowers/specs/2026-09-19-msms-spectral-matching-design.md)
-にある。
+> 先に `lipidmix://docs/output-format`（共通核）を読む。節番号は全トピックの通し番号。
 
 ## 14. 参照ライブラリ照合（`metabolomix/library/`, `metabolomix/analysis/spectral_match.py`）
 
-`.dcl` の測定 MS/MS を参照ライブラリ（`*_Loaded.msp2.dbs` 優先、無ければ `*.msp`）と
-突き合わせ、MS-DIAL の個別スコア定義をそのまま移植して数値を出す。目的は「付いている
-名前は本当か」を人が対向プロットと数値の両方で判断できるようにすること。個別スコアの
-定義一致に加え、**候補の並び順も MS-DIAL の `TotalScore` に合わせてある**（§14.9）。
-ただし上流の順位付けタプル全体を再現しているわけではない——同じ §14.9 に限界を書く。
+`.dcl` の測定 MS/MS を参照ライブラリ（`*_Loaded.msp2.dbs` 優先、無ければ `*.msp`）と突き合わせ、MS-DIAL の個別スコアの定義を移植して数値を出す。候補の並び順も MS-DIAL の `TotalScore` に合わせるが、上流の順位付けタプル全体は再現しない（§14.9）。
 
 ### 14.1 各スコアの意味
 
-`library_match_feature` の候補一覧・`library_plot_mirror` の材料はすべて同じ 5 指標を使う。
+`library_match_feature` の候補一覧・`library_plot_mirror` の材料は同じ指標を使う。
 
 | キー | MS-DIAL 対応 | 意味 |
 |---|---|---|
@@ -27,97 +18,45 @@
 | `weighted_dot_product` | `GetWeightedDotProduct` | m/z 重みとピーク数ペナルティを掛けたドット積。mzTab の `id_confidence_measure[5]`。**単独では並び順に使わない**（§14.9） |
 | `reverse_dot_product` | `GetReverseDotProduct` | 参照側のピークだけを基準に測定側で説明できているかを問う非対称スコア |
 | `matched_peaks_percentage` | `GetMatchedPeaksScores`（比） | 参照ピークのうち測定側でも観測された割合 |
-| `matched_peaks_count` | 同上（count） | 一致した参照ピークの本数。**前駆体（precursor）の一致も 1 本に数える**——前駆体しか合っていない候補でも 1 になる。断片だけの本数は `detail=true` の `fragment_matches_excl_precursor` |
-| `entropy_similarity` | `GetSpectralEntropySimilarity` | スペクトルエントロピーに基づく類似度。**mzTab には出ないため実データとの突き合わせ対象外**（設計 §2.7） |
+| `matched_peaks_count` | 同上（count） | 一致した参照ピークの本数。**前駆体（precursor）の一致も 1 本に数える**（前駆体しか合っていない候補でも 1）。断片だけの本数は `detail=true` の `fragment_matches_excl_precursor` |
+| `entropy_similarity` | `GetSpectralEntropySimilarity` | スペクトルエントロピーに基づく類似度。**mzTab には出ない** |
 | `total_score` | `GetTotalScore` | 上の指標に RT・precursor m/z の一致度を足した**候補の並び順（`ranked_by`）**。**0〜1 ではない**（§14.9） |
 
-**`simple` / `weighted` / `reverse` の 3 つの dot product は平方根側の値**である
-（`match_spectrum` が二乗値から `sqrt` を取って返す。単体関数
-`weighted_dot_product()` 等はモジュール内部の二乗値を返す——混同しないこと）。
-これは mzTab-M の `id_confidence_measure[4..6]` と同じ土俵で比較するための変換で、
-`0.0`〜`1.0` の類似度として読める。
+**`simple` / `weighted` / `reverse` の 3 つは平方根側の値**（`match_spectrum` が二乗値から `sqrt` を取る。モジュール内の単体関数 `weighted_dot_product()` 等は二乗値を返す）。mzTab-M の `id_confidence_measure[4..6]` と同じ尺度で、`0.0`〜`1.0` の類似度として読める。
 
 ### 14.2 `-1` と `0` の区別（最重要）
 
-**`-1` は「比較していない」、`0` は「合わなかった」。混同すると「照合していない」が
-「合わなかった」に化ける。**
+**`-1` は「比較していない」、`0` は「合わなかった」。**
 
-- `-1`（3 つの dot product・`matched_peaks_percentage`・`matched_peaks_count`・
-  `entropy_similarity` いずれも）: 測定・参照どちらかのスペクトルが空で、
-  そもそも比較できなかった。`entropy_similarity` も他の 5 指標と同じ
-  `_is_compared_available` ガードを使い（`spectral_match.py` の
-  `spectral_entropy_similarity`）、`match_spectrum` では `sqrt` を経ずに素通し
-  するため `candidates_table` にも `-1.0` がそのまま出る。
-- `0`: 比較はできたが、一致度がゼロだった（本当に合わなかった）。**`entropy_similarity`
-  はこれにもう1パターン足す**: 測定・参照どちらも非空だが、どちらかの総強度が 0
-  （例: `[[100.0, 0.0]]`）という縮退入力も `-1`（比較不能）ではなく `0.0` を返す
-  （最終レビュー Important 4）。空ではないので `-1` を流用すると意味が変わるため、
-  dot product 3 種が「窓合算後に信号が無かった」ときに `0.0` を返すのと同じ規約に
-  揃えた。
+- `-1`（3 つの dot product・`matched_peaks_percentage`・`matched_peaks_count`・`entropy_similarity`）: 測定か参照のスペクトルが空で比較できなかった。`entropy_similarity` の `-1` は `sqrt` を経ずに `candidates_table` に `-1.0` で出る。
+- `0`: 比較できたが一致度がゼロ。dot product 3 種は窓合算後に信号が無かったときも `0.0`。`entropy_similarity` は、両方非空でもどちらかの総強度が 0（例: `[[100.0, 0.0]]`）なら `0.0`。
 
-**mzTab の値とは番兵の扱いが違う**ので、実データ突き合わせの際に注意する:
+mzTab-M の値とは番兵が違う:
 
-- `id_confidence_measure[4..6]`（simple/weighted/reverse dot product）は
-  MS-DIAL 側で非二乗 getter が `Math.Sqrt(Math.Max(Squared*, 0f))` として `-1` を
-  `0` にクランプしてから `sqrt` を取る。**したがって mzTab 上のこの 3 列では、
-  比較不能は `-1` ではなく `0` として出ている。** この関数の `-1` と mzTab の `0` は、
-  比較不能ケースに限り同一視してよい。
-- `id_confidence_measure[7..8]`（matched peaks count / percentage）は素のフィールドで、
-  クランプを経ないため `-1` のまま出る。こちらは `-1` 同士で素直に比較できる。
+- `id_confidence_measure[4..6]`（simple/weighted/reverse）は、MS-DIAL が `-1` を `0` にクランプしてから `sqrt` を取る（`Math.Sqrt(Math.Max(Squared*, 0f))`）ので、比較不能は `0` で出る。比較不能に限り、こちらの `-1` と mzTab の `0` は同じ。
+- `id_confidence_measure[7..8]`（matched peaks count / percentage）はクランプせず `-1` のまま出る。
 
 ### 14.3 意図的に写した瑕疵（`metabolomix/analysis/spectral_match.py`）
 
-移植の目的は MS-DIAL との**数値の一致**であって、実装の改善ではない。次の 5 点は
-上流の「明らかに変な点」を**意図的にそのまま残している**。素直な実装に書き直すと
-比較の土俵が消えるため、直さないこと（docstring にも明記済み）。
+MS-DIAL との数値の一致のため、上流の次の 5 点をそのまま残している（直すと数値が変わる）。
 
-1. **`wM` / `wR` の計算が未使用のまま残っている（weighted/reverse）。** 上流にも
-   これらの値を使う後続コードが無い。移植していない。
-2. **weighted の `if (sumM <= 0 && sumR > 0) {...} else {...}` は両枝が同一処理。**
-   条件ごと落として共通処理だけ残している。
-3. **simple の `× 999` は比を取る時点で打ち消えるので数値に影響しない。** 忠実に
-   写しているが意味は無い。
-4. **窓の走査は固定幅グリッドではなく、同じピークが隣り合う 2 つの窓に二重計上され
-   得るカーソル走査。** 素直な 1 対 1 アラインメントに書き直してはいけない
-   （数値が変わる）。
-5. **entropy に Li et al. 2021 の低エントロピー重み変換は入っていない。** 上流にも
-   無いので足さない。
+1. weighted/reverse の `wM` / `wR` は上流でも使われない。移植していない。
+2. weighted の `if (sumM <= 0 && sumR > 0) {...} else {...}` は両枝が同一処理。条件ごと落として共通処理だけ残す。
+3. simple の `× 999` は比で打ち消えるので数値に影響しない。
+4. 窓の走査は固定幅グリッドではなくカーソル走査で、同じピークが隣り合う 2 つの窓に二重計上されうる。
+5. entropy に Li et al. 2021 の低エントロピー重み変換は入っていない（上流にも無い）。
 
 ### 14.4 `.msp` 由来には許容幅が同梱されない
 
-`.dbs` の `Storage` エントリには、その run が実際に使った許容幅
-（`mz_tol` / `ms2_tol` / `rt_tol` 等、`docs/schema/molecule_ms_reference.md` の
-`MsRefSearchParameterBase`）が入っている。`library_load` はこれを
-`search_params` として store のメタに保存し、`library_match_feature` が
-明示指定 > `search_params` > 既定値の順で使う。
+`.dbs` の `Storage` エントリには、その run が使った許容幅（`mz_tol` / `ms2_tol` / `rt_tol` 等。`docs/schema/molecule_ms_reference.md` の `MsRefSearchParameterBase`）が入っている。`library_load` はこれを store のメタの `search_params` に保存し、`library_match_feature` は 明示指定 > `search_params` > 既定値 の順で使う。
 
-**`.msp` にはこの情報が無い。** `.msp` 由来の store は `search_params=None` を持ち、
-`library_load` の戻り値に既定値を使う旨の `note` が付く。既定値は
-`metabolomix/library/defaults.py` の `DEFAULT_MZ_TOL` (0.01) / `DEFAULT_MS2_TOL` (0.025) /
-`DEFAULT_RT_TOL` (0.2)。
+**`.msp` にはこの情報が無い。** `.msp` 由来の store は `search_params=None` で、`library_load` の戻り値に既定値を使う旨の `note` が付く。既定値は `metabolomix/library/defaults.py` の `DEFAULT_MZ_TOL` (0.01) / `DEFAULT_MS2_TOL` (0.025) / `DEFAULT_RT_TOL` (0.2)。`DEFAULT_RT_TOL` は上流 `RtTolerance` の既定（100.0）ではなく、`.dcl` 検索（`dcl/reader.py` / `dcl/tools.py`）の RT 窓の既定と同じ値。
 
-**`DEFAULT_RT_TOL` の出所訂正（最終レビュー Important 6）**: これは
-`MsRefSearchParameterBase` の `RtTolerance` の既定値ではない
-（`docs/schema/molecule_ms_reference.md` によれば上流既定は **100.0**）。
-`DEFAULT_RT_TOL` (0.2) は `metabolomix/dcl/reader.py` / `dcl/tools.py` の `.dcl` 検索
-（precursor m/z から測定 MS/MS を引くときの RT 窓）の既定値であって、ライブラリ
-候補検索用の値ではない。値そのもの（0.2 分）は `.dcl` の窓として妥当。
-
-**ライブラリ照合用の窓と `.dcl` 検索用の窓は別物（最終レビュー Important 7）**:
-`library_match_feature` の `mz_tol` / `rt_tol` 引数と、それらが解決した
-`search_params` 由来の値は**ライブラリ候補検索（`store.candidates()`）にだけ**
-効く。`.dcl` から測定 MS/MS を引く窓（`_measured_spectrum`）は常に
-`dcl/reader.py` と同じ固定既定（`mz_tol=0.01` / `rt_tol=0.2`）を使い、
-`search_params` の影響を受けない。`.dbs` の `RtTolerance`（実質 RT フィルタを
-無効化する 100.0 が典型）をこの窓に流用すると、precursor m/z が近い別ピークの
-測定スペクトルを黙って拾ってしまうため。RT が渡されたときは、`.dcl` 側で複数
-ヒットしても **RT 距離が最も近いもの**を選ぶ（以前はファイル内の出現順の先頭を
-無条件に採っていた）。
+**ライブラリ照合の窓と `.dcl` 検索の窓は別。** `library_match_feature` の `mz_tol` / `rt_tol` と `search_params` 由来の値は、ライブラリ候補の検索（`store.candidates()`）にだけ効く。`.dcl` から測定 MS/MS を引く窓（`_measured_spectrum`）は常に `dcl/reader.py` と同じ `mz_tol=0.01` / `rt_tol=0.2` で、`search_params` を見ない（`.dbs` の `RtTolerance` は RT フィルタを実質無効にする 100.0 が典型で、流用すると別ピークのスペクトルを拾う）。RT を渡したとき `.dcl` で複数ヒットすれば、RT が最も近いものを選ぶ。
 
 ### 14.5 `library_load`
 
-`.dbs`/`.msp` を解決して SQLite store を構築（または既存キャッシュを再利用）した
-要約を返す。
+`.dbs`/`.msp` を解決して SQLite store を構築（または既存キャッシュを再利用）した要約を返す。
 
 | キー | 意味 |
 |---|---|
@@ -126,103 +65,46 @@
 | `compound_classes` | 化合物クラス別件数の上位 10（`compound_class IS NULL` は除外） |
 | `search_params` | `.dbs` 由来なら実測の許容幅と注釈スコアリングのフラグ、`.msp` 由来なら `null`（§14.4） |
 | `source_sha256` | 元ファイルの sha256（store のキャッシュキーと同じ） |
-| `skipped_no_precursor_mz` | precursor m/z が無い（または解釈できなかった）ため読み飛ばしたレコード件数（最終レビュー Important 3。`record_count` には含まれない） |
-| `records_without_ion_mode` | 極性（`IONMODE`）を持たないレコード件数（`record_count` に含まれる）。`library_match_feature` の `ion_mode` 絞り込みはこれらを**極性不明として候補に残す** |
+| `skipped_no_precursor_mz` | precursor m/z が無い（または解釈できない）ため読み飛ばしたレコード件数（`record_count` に含まれない。公開 `.msp` に普通に混ざる）。0 より多ければ `note` にも件数が出る |
+| `records_without_ion_mode` | 極性（`IONMODE`）を持たないレコード件数（`record_count` に含まれる）。`library_match_feature` の `ion_mode` 絞り込みはこれらを**極性不明として候補に残す**ので、極性違いのファイルを読んでも候補が残る。測定の極性に合ったファイルかは呼び出し側が確かめる（0 より多ければ `note` にも出る） |
 | `non_utf8_lines` | UTF-8 で読めず cp932（無理なら latin-1）で読んだ `.msp` の行数。0 より多ければ化合物名が化けている可能性がある |
 
-**記憶から開く（`file_path` を省いたとき）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が
-同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、
-その実体を開く（戻り値に `library_source: "dataset_record"`）。**記憶以外には落ちない**（データフォルダの
-探索も、設定の極性の MSP も、`ion_mode` 引数も無い。B-2b）: 記憶が `unknown` か無ければ
-`code="LIBRARY_NOT_REMEMBERED"`（候補のファイル名と「`file_path` を渡す」の案内。置き場所は出さない）、データセットが
-無ければ `missing_state`（`load_dataset`）。`mismatch` と `lbm_only` は
-`code="LIBRARY_RECORD_MISMATCH"` / `"LIBRARY_RECORD_LBM_ONLY"` と理由を返す（`file_path` で
-明示すれば開ける）。`file_path` で開いたものが記憶と違う
-ライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて
-`differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。
-`library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき
-`missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も
-`not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来
-（`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。
-`false` は書かない）。**この印を付けられるのは解析フォルダ（`.arf2`）から読んだデータセットだけ**
-——注釈器 ID（`annotator_id`）は `.arf2` が持つ値で、mzTab-M のアダプタのデータセットは持たないので、
-`lbm_also` でも印は付かない（付かないことは「LBM 由来でない」の証拠ではない）。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使った
-ものではない旨が `note` に付く。
+**`file_path` を省いたとき（記憶から開く）**: 直近のデータセット（`dataset_handle` を渡せばそのハンドル）が同定に使ったライブラリの記憶（下の「データセットが覚えているライブラリ（LibraryRecord）」）が `known` で、sha256 を測り直して通れば、その実体を開く（戻り値に `library_source: "dataset_record"`）。**記憶以外には落ちない**（データフォルダの探索・設定の極性の MSP・`ion_mode` 引数は無い）。記憶が `unknown` か無ければ `LIBRARY_NOT_REMEMBERED`、`mismatch` / `lbm_only` は `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY`（理由つき。`file_path` で明示すれば開ける）、データセットが無ければ `missing_state`（`load_dataset`）。
 
-**ライブラリの示し方**: `library_load` の戻り値はライブラリをいつもファイル名（`file`）と中身の sha256
-（`source_sha256`）で示し、置き場所（パス）は出さない。名前を伏せる切り替えの引数は無い（ファイル名と sha256 は
-いつも出る）。`load_dataset` の戻り値の `library` / `library_record` も
-いつもファイル名と sha256 だけ（[reanalysis.md](reanalysis.md) §1 の `load_dataset` の表）。
+`file_path` で開いたものが記憶と違うライブラリ（中身の sha256 で比べる。同じ内容のコピーは違わない）なら、そのまま開いて `differs_from_record: {"remembered": <記憶のファイル名>, "opened": <開いたファイル名>}` を足す。記憶が `lbm_only` のまま別のライブラリを明示して開いたときは、同定に使ったものではない旨が `note` に付く。
 
-**エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}`
-を返し、store は差し替えない。`code` は `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを
-覚えていない）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した
-`file_path` が無い）/ `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file` `line`
-`column`）。`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、
-ライブラリの置き場所は入らない。
+**照合側の LBM の扱い**: `library_match_feature` / `library_msms_qualify` は、ライブラリが開かれておらず記憶が `lbm_only` のとき、`missing_state` ではなく `{"status": "not_evaluable", "reason": ...}`（qualify は `verdict` も `not_evaluable`）を返す。記憶が `lbm_also` で、`spot_id` で照合した特徴の代表の注釈器が LBM 由来（`is_lbm_annotator` が True）なら、結果に `identified_by_lbm: true` を足す（そうでなければキーが無い。`false` は書かない）。この印は解析フォルダ（`.arf2`）から読んだデータセットにだけ付く（`annotator_id` は `.arf2` の値で、mzTab-M のデータセットは持たない）。印が無いことは LBM 由来でない証拠にならない。
 
-**`records_without_ion_mode`**: 研究室ライブラリのように極性ごとにファイルが分かれて
-いると、ファイル側に `IONMODE` 欄が無いことがある。NULL を絞り込みで弾くと候補が
-黙って 0 件になるので残す。その代わり、極性違いのファイルを読んでも候補が消えずに
-残るので、測定の極性に合ったファイルを読んでいるかは呼び出し側が確かめる
-（0 件より多いときは `note` にもそう出る）。
+**ライブラリの示し方**: 戻り値はライブラリをいつもファイル名（`file`）と中身の sha256（`source_sha256`）で示し、置き場所（パス）は出さない（伏せる切り替えの引数は無い）。`load_dataset` の戻り値の `library` / `library_record` も同じ（[reanalysis.md](reanalysis.md) §1 の `load_dataset` の表）。
 
-**`skipped_no_precursor_mz`（Important 3）**: reader（`.msp`/`.dbs`）は
-PRECURSORMZ 欠損・パース失敗を契約どおり `None` に潰すだけで例外にしないが、
-store のスキーマは `precursor_mz REAL NOT NULL`。公開 `.msp`（MassBank 由来など）
-には precursor を持たないレコードが普通に混ざるため、そうしたレコードは
-1 件ずつ読み飛ばして件数だけ残す（1 件の欠損でライブラリ全体を使用不能に
-しない）。0 件より多いときは `library_load` の `note` にも件数が出る。
+**エラー戻り値**: ライブラリを 1 つに決められないときは `{"status": "error", "code": ..., "message": ..., "details": ...}` を返し、store は差し替えない。`code`: `LIBRARY_NOT_REMEMBERED`（`file_path` を省いたが、データセットが同定に使ったライブラリを覚えていない。候補のファイル名と「`file_path` を渡す」の案内）/ `LIBRARY_RECORD_MISMATCH` / `LIBRARY_RECORD_LBM_ONLY` / `LIBRARY_NOT_FOUND`（明示した `file_path` が無い）/ `CONFIG_INVALID`（設定ファイルが読めない。`details` に `config_file` `line` `column`）。`message` と `details` にはファイル名・設定キー・設定ファイルのパスだけが入り、ライブラリの置き場所は入らない。
 
 ### 14.6 `library_match_feature`
 
-**候補ごとの質量誤差と ppm の窓（A6・A8）**: `candidates_table` の各行に
-`delta_mz`（= 測定 − 参照、Da、符号付き）と `delta_ppm`（= `(測定 − 参照) / 参照 * 1e6`、
-測定が参照より高いと正）が付く。`precursor_mz` 列は**参照**レコードの前駆体で、6 桁で出す
-（arf2 の表の既定は 4 桁だが、候補の表では使わない）。
-
-**前駆体の窓は MS-DIAL と同じ（2026-11-13 の事実確認 A3）**: `mz_tol`（明示 → `.dbs` の `Ms1Tolerance`
-→ 既定 0.01 Da）は m/z 500 以下での Da の幅で、m/z 500 を超えたら同じ ppm に広げる（上流
-`FixMassTolerance`。既定なら `max(0.01 Da, m/z × 20 ppm)`。m/z 760 なら約 0.0152 Da）。実際に使った
-Da の幅は `query.mz_window`（`query.mz_tol` は広げる前の値）。以前は m/z によらず `mz_tol` のままで、
-m/z 500 を超える候補を MS-DIAL より狭く探していた。低い m/z では 0.01 Da が数十 ppm に当たり、+44 ppm の
-候補も残るので、受け入れる前に `delta_ppm` を見ること。`mz_tol_ppm`（任意）はこの窓に**重ねる追加の
-絞り込み**で、窓を広げない: `|delta_ppm|` がこれを超える候補を落とす（`mz_tol_ppm=10` で +44 ppm の
-候補は落ちる）。`query.mz_tol_ppm` に指定値（省略時 `null`）が残る。
-
-**InChIKey の列（B6）**: 候補の表の `formula` の後に `inchikey`（ライブラリの値のまま。無ければ空）と
-`inchikey_standard`（標準の InChIKey か。第 2 ブロックの 9 文字目が `S` なら `true`、非標準の `N` なら
-`false`、InChIKey の形でなければ空）が並ぶ。同じ名前の立体異性体を見分けるのに使う。外部（PubChem など）へは
-照会しない（研究室のライブラリの名前を外へ送らない）。
-
-**`ion_mode`（A11）**: `positive` / `negative` のほか `pos` / `neg` / `+` / `-`（大小を問わない。
-`core.polarity_names.normalize_polarity`）を読む。読めない値は `invalid_arguments`——以前は読めない値を
-そのまま store の比較に渡し、極性不明の記録だけが残る照合を黙って返していた。`library_search` も同じ。
-
 照合対象は `precursor_mz` か `spot_id` のどちらか一方で指定する。
+
+**候補ごとの質量誤差**: `candidates_table` の各行に `delta_mz`（= 測定 − 参照、Da、符号付き）と `delta_ppm`（= `(測定 − 参照) / 参照 * 1e6`、測定が高いと正）が付く。`precursor_mz` 列は**参照**レコードの前駆体で、6 桁で出す。
+
+**前駆体の窓（MS-DIAL と同じ）**: `mz_tol`（明示 → `.dbs` の `Ms1Tolerance` → 既定 0.01 Da）は m/z 500 以下での Da の幅で、m/z 500 を超えたら同じ ppm に広げる（上流 `FixMassTolerance`。既定なら `max(0.01 Da, m/z × 20 ppm)`、m/z 760 で約 0.0152 Da）。実際に使った Da の幅は `query.mz_window`（`query.mz_tol` は広げる前の値）。低い m/z では 0.01 Da が数十 ppm に当たり +44 ppm の候補も残るので、受け入れる前に `delta_ppm` を見る。`mz_tol_ppm`（任意）は窓に重ねる追加の絞り込みで、`|delta_ppm|` がこれを超える候補を落とす（窓は広げない。`mz_tol_ppm=10` なら +44 ppm の候補は落ちる）。`query.mz_tol_ppm` に指定値（省略時 `null`）が残る。
+
+**InChIKey の列**: `formula` の後に `inchikey`（ライブラリの値のまま。無ければ空）と `inchikey_standard`（第 2 ブロックの 9 文字目が `S` なら `true`、`N` なら `false`、InChIKey の形でなければ空）。同じ名前の立体異性体を見分けるのに使う。外部（PubChem など）へは照会しない。
+
+**`ion_mode`**: `positive` / `negative` のほか `pos` / `neg` / `+` / `-`（大小を問わない。`core.polarity_names.normalize_polarity`）を読む。読めない値は `invalid_arguments`。`library_search` も同じ。store の比較（`store.candidates()`）も大小を問わない（`COLLATE NOCASE`。`"positive"` と `"Positive"` は一致する）。
 
 | `status` | 意味 |
 |---|---|
-| `not_found` | `.dcl` に該当 precursor（`spot_id` のときはそのスポット）の MS/MS が無い（**未取得**であって「合わなかった」ではない。`dcl_find_msms` の `not_found` と同じ文言方針） |
+| `not_found` | `.dcl` に該当 precursor（`spot_id` のときはそのスポット）の MS/MS が無い（**未取得**であって「合わなかった」ではない） |
 | `no_candidates` | 測定 MS/MS はあるが、m/z 窓・極性・RT に該当する参照レコードが無い |
 | `success` | 候補を採点して `candidates_table`（TSV、`rank`/`name`/... 列。§14.1 の指標を含む）を返した |
 | `spot_not_found` | `spot_id` が `.arf2` に無い |
-| `dcl_precursor_mismatch` | アラインメント `.dcl` の `spot_id` 番の precursor・RT が ARF2 の `MassCenter`・`RT` と ±0.05 Da・±0.2 分で合わない（索引対応の崩れ。`.dcl` の値は代表試料の実測値なので完全一致はしない。実データでの差は最大 0.027 Da・0.106 分）。誤ったスペクトルで採点しないよう照合しない |
+| `dcl_precursor_mismatch` | アラインメント `.dcl` の `spot_id` 番の precursor・RT が ARF2 の `MassCenter`・`RT` と ±0.05 Da・±0.2 分で合わない（索引対応の崩れ。`.dcl` の値は代表試料の実測値なので完全一致はしない）。照合しない |
 | `invalid_arguments` | `precursor_mz` と `spot_id` を両方渡した、またはどちらも渡さなかった。`ion_mode` が読めない・`mz_tol_ppm` が正の有限の数でない |
 
-照合を試みて `success` 以外（`not_found` / `no_candidates` / `spot_not_found` / `dcl_precursor_mismatch` /
-`.arf2`・`.dcl` が無い）に終わったら、直前の照合（`last_match`）を捨てる——`library_plot_mirror` が
-前の照合の図を黙って描かないため（C16）。引数の誤り（`invalid_arguments`）では照合を試みないので残る。
+照合を試みて `success` 以外（`not_found` / `no_candidates` / `spot_not_found` / `dcl_precursor_mismatch` / `.arf2`・`.dcl` が無い）に終わったら、直前の照合（`last_match`）を捨てる（`library_plot_mirror` が前の照合を描かない）。`invalid_arguments` では照合を試みないので残る。
 
-**`spot_id` 経由の照合**: precursor m/z・RT・極性（`IonMode` を正規化。`Both` / `Unknown` なら極性で
-絞らない）は同じバッチの `.arf2` から取る（`rt` / `ion_mode` を明示すればそちらが優先）。測定スペクトルは
-アラインメント `.dcl` の `dcl[spot_id]`＝代表試料の MS/MS（`curation` と同じ対応）で、
-precursor m/z による `.dcl` 検索は通らない——同じ m/z の別スポット（異性体・別溶出）の
-スペクトルを拾わないため。`query.spot_id` と `session.library.last_match["spot_id"]` に
-照合したスポットが残る（precursor 経由では `null`）。
+**`spot_id` 経由の照合**: precursor m/z・RT・極性（`IonMode` を正規化。`Both` / `Unknown` なら極性で絞らない）は同じバッチの `.arf2` から取る（`rt` / `ion_mode` を明示すればそちらが優先）。測定スペクトルはアラインメント `.dcl` の `dcl[spot_id]`＝代表試料の MS/MS（`curation` と同じ対応）で、precursor m/z による `.dcl` 検索は通らない（同じ m/z の別スポットを拾わない）。`query.spot_id` と `session.library.last_match["spot_id"]` に照合したスポットが残る（precursor 経由では `null`）。
 
-**MS-DIAL の注釈との食い違い（E6）**: `spot_id` で照合したスポットに MS-DIAL の注釈（`.arf2` の代表の
-`Name`。`Unknown` や空は注釈なし）があれば、戻り値に 3 つの欄を足す（注釈が無ければキーごと無い）。
+**MS-DIAL の注釈との食い違い**: `spot_id` で照合したスポットに MS-DIAL の注釈（`.arf2` の代表の `Name`。`Unknown` や空は注釈なし）があれば、戻り値に 3 つの欄を足す（注釈が無ければキーごと無い）。
 
 | 欄 | 意味 |
 |---|---|
@@ -230,73 +112,25 @@ precursor m/z による `.dcl` 検索は通らない——同じ m/z の別ス�
 | `msdial_rank` | 注釈と同じ物質の候補の最上位の順位（全候補の中。`top_n` で切る前）。候補に無ければ `null` |
 | `top_differs_from_msdial` | 1 位の候補が注釈と別の物質か（`msdial_rank` が 1 でなければ `true`） |
 
-同じ物質かは、InChIKey の先頭ブロック（両方にあれば）→ 脂質の種（両方が読めれば。`msms_rules.record_lipid_species`
-と同じ読み方）→ 名前（限定子を外し、大小を問わない）の順に比べる。`true` は「MS-DIAL が誤った」ではない——
-こちらの順位は `total_score` 単独で、上流の順位付け（§14.9）と違うので、対向プロットで両方を見る。
+同じ物質かは、InChIKey の先頭ブロック（両方にあれば）→ 脂質の種（両方が読めれば。`msms_rules.record_lipid_species` と同じ読み方）→ 名前（限定子を外し、大小を問わない）の順に比べる。`true` は「MS-DIAL が誤った」ではない（こちらの順位は `total_score` 単独で上流と違う。§14.9）。対向プロットで両方を見る。
 
-候補は `total_score` の降順（`ranked_by` フィールドが基準を明示）。詳細と限界は §14.9。
-スペクトル座標・alignment は戻り値に含めず `session.library.last_match` に持つ
-（`library_plot_mirror` がそこから読む）。
+候補は `total_score` の降順（`ranked_by` が基準を示す。限界は §14.9）。スペクトル座標・alignment は戻り値に含めず `session.library.last_match` に持つ（`library_plot_mirror` がそこから読む）。
 
-`scoring` フィールドは総合スコアの組み立て方を 1 回だけ載せる
-（`rule` / `use_rt` / `ms1_tol` / `rt_tol`）。**RT 項が入ったかどうかは候補の数値だけ
-見ても分からない**ので、呼び出し側が順位を再現できるようここに出す。
-総合スコアの内訳（`rt_similarity` / `mass_similarity` / `spectrum_score`）は
-**候補表には出さない**——候補数ぶん掛け算で効いて戻り値が膨らむため、
-`session.library.last_match` の各候補の `scores` にだけ持つ。
-
-**`ion_mode` の大小は問わない（最終レビュー Critical 1）**: `store.candidates()`
-の比較は `COLLATE NOCASE`。`"positive"`（store の正規化表記）と `"Positive"`
-（PAI2 由来の `IonMode.Positive.name`）はどちらも一致する。以前は SQLite の既定
-BINARY 照合のままで、`ion_mode.name`（大文字始まり）をそのまま渡す呼び出し
-（撤去した旧ピーク裏取りツールの統合経路）が常に 0 件になっていた
-——`no_candidates` はここでは「該当レコードが無い」という実質的な主張なので、
-この不一致は「ライブラリに無い化合物だ」という誤った結論に直結していた。
+`scoring` は総合スコアの組み立て（`rule` / `use_rt` / `ms1_tol` / `rt_tol`）を 1 回だけ載せる（RT 項が入ったかは候補の数値からは分からない）。総合スコアの内訳（`rt_similarity` / `mass_similarity` / `spectrum_score`）は候補表に出さず、`session.library.last_match` の各候補の `scores` にだけ持つ。
 
 ### 14.7 `library_plot_mirror`
 
-**何を描くか（C16）**: 既定は直近の `library_match_feature` の照合（`last_match`）。`spot_id` を渡すと、
-そのスポットを `library_match_feature(spot_id=…)` と同じ規則（許容幅は `.dbs` の `search_params` か既定）で
-照合し直し、全候補を `last_match` に持ってから描く。照合に失敗したら直前の照合を捨て、その封筒
-（`spot_not_found` / `not_found` / `no_candidates` など）を返す。`candidate`（任意）は描く候補を InChIKey
-（全体か先頭 14 文字）か名前（大小を問わない完全一致）で選び、`rank` より優先する（照合の候補に無ければ
-`status: "error"`）。**全体の InChIKey は全体で一致する候補を選ぶ**——先頭ブロック（骨格）が同じ別の立体異性体
-（D-グルコースと D-ガラクトースなど）を選ばない。全体で合う候補が無いときだけ、先頭ブロックが同じ最上位の候補を
-選び、caption に 1 文を足す。どのスポット・前駆体・候補の図かを、画像は caption（`Mirror: spot <id> (precursor m/z=…) vs
-<名前> (rank <n>, InChIKey=…, precursor m/z=<参照>)`。precursor で照合したときは `measured`）、
-`output="payload"` は `match`（`spot_id`・`precursor_mz`・`rank`・`name`・`inchikey`・`reference_precursor_mz`・
-`picked_by`）に出す。`picked_by` は候補の選び方: `rank`（`candidate` を省いた）/ `inchikey`（全体の一致）/
-`inchikey_block`（先頭ブロックの一致。全体の InChIKey を渡して全体で合わなかったときも）/ `name`。
+**何を描くか**: 既定は直近の `library_match_feature` の照合（`last_match`）。`spot_id` を渡すと、そのスポットを `library_match_feature(spot_id=…)` と同じ規則（許容幅は `.dbs` の `search_params` か既定）で照合し直し、全候補を `last_match` に持ってから描く。照合に失敗したら直前の照合を捨て、その封筒（`spot_not_found` / `not_found` / `no_candidates` など）を返す。`candidate`（任意）は描く候補を InChIKey（全体か先頭 14 文字）か名前（大小を問わない完全一致）で選び、`rank` より優先する（照合の候補に無ければ `status: "error"`）。**全体の InChIKey は全体で一致する候補を選ぶ**（先頭ブロックが同じ別の立体異性体を選ばない）。全体で合う候補が無いときだけ、先頭ブロックが同じ最上位の候補を選び、caption に 1 文を足す。
 
-`build_mirror_payload` / `render_mirror`（`metabolomix/plots/mirror.py`）の座標契約は
-`lipidmix.mirror.v2`。上段が測定（上向き）、下段が参照（下向き）、横軸 m/z 共通。
-`matched_mz` は**常に参照側の m/z**（参照グリッドの窓中心）で、測定側の一致 m/z は
-別フィールド `matched_measured_mz`（`ms2_tol` を渡したときだけ計算、渡さなければ空）。
-`ms2_tol` を渡さない呼び出しでは、無根拠な厳密一致で色を付けないという設計判断により
-測定側は一致色分けされない。
+どの図かは、画像は caption（`Mirror: spot <id> (precursor m/z=…) vs <名前> (rank <n>, InChIKey=…, precursor m/z=<参照>)`。precursor で照合したときは `measured`）、`output="payload"` は `match`（`spot_id`・`precursor_mz`・`rank`・`name`・`inchikey`・`reference_precursor_mz`・`picked_by`）に出る。`picked_by`: `rank`（`candidate` を省いた）/ `inchikey`（全体の一致）/ `inchikey_block`（先頭ブロックの一致。全体の InChIKey を渡して全体で合わなかったときも）/ `name`。
 
-**採点に入らなかった測定ピークは灰色で薄く描く（`unscored_mz`、v2 で追加）。**
-採点は `normalize_measured` が `.dbs` の `relative_amp_cutoff` / `absolute_amp_cutoff`
-で足切りした後のスペクトルに対して行うのに対し、図は**足切り前の生ピーク**を描く。
-この差は今まで図の上で見分けられず、「描かれているのに採点されていない」ピークが
-黙って混ざっていた。判定の正準は `spectral_match.cutoff_mask`（`normalize_measured`
-も同じ mask の上に載る）。落ちたピークも**消さずに描く**——消すと「MS/MS が
-取れていない」と読めてしまうため。これらはラベル枠を取らず（一致候補として見た、と
-誤読されるため）、凡例の `Below cutoff (not scored)` と画像 caption の件数は
-**該当ピークがあるときだけ**出る。`payload` の `scored_peak_count` /
-`unscored_peak_count` は常に載る（層が空でも数字で気づけるように）。
+**座標契約** `lipidmix.mirror.v2`（`build_mirror_payload` / `render_mirror`、`metabolomix/plots/mirror.py`）: 上段が測定（上向き）、下段が参照（下向き）、横軸 m/z 共通。`matched_mz` は**常に参照側の m/z**（参照グリッドの窓中心）。測定側の一致 m/z は `matched_measured_mz` で、`ms2_tol` を渡したときだけ計算する（渡さなければ空で、測定側は一致の色分けをしない）。
 
-**足切りが 0 の run では何も変わらない。** `MsRefSearchParameterBase` の Key 7/8 の
-既定は 0.0 で、実データ検証に使った `.dbs`（aging mice kidney neg）も 0.0/0.0 だった
-——この層が現れるのは足切りを非ゼロに設定したプロジェクトだけ。
+**採点に入らなかった測定ピーク（`unscored_mz`）**: 採点は `.dbs` の `relative_amp_cutoff` / `absolute_amp_cutoff` で足切りした後のスペクトル（`normalize_measured`）に対して行い、図は足切り前の生ピークを描く。足切りで落ちたピーク（判定は `spectral_match.cutoff_mask`）は消さずに灰色で薄く描き、ラベルを付けない。凡例の `Below cutoff (not scored)` と画像 caption の件数は該当ピークがあるときだけ出る。`payload` の `scored_peak_count` / `unscored_peak_count` は常に載る。足切りが 0（`MsRefSearchParameterBase` の Key 7/8 の既定 0.0）の run ではこの層は出ない。
 
-**ピークは素のステムだけで、先端にマーカーは打たない**（上流の
-`LineSpectrumControlSlim` も `DrawLine` だけで描く）。マーカーは m/z 軸上の見かけの
-太さを増やして近接ピークを潰すだけで、情報を足さないため。
+ピークは素のステムだけで、先端にマーカーは打たない（上流 `LineSpectrumControlSlim` と同じ）。
 
-`label_policy` は m/z ラベルの**衝突回避**の方式。どちらも上流 `Annotator.OnRender`
-と同じ貪欲法（強度降順に走査し、既に置いたラベルと重なるものを飛ばす）だが、
-重なりの見方が違う:
+`label_policy` は m/z ラベルの衝突回避の方式。どちらも上流 `Annotator.OnRender` と同じ貪欲法（強度降順に走査し、既に置いたラベルと重なるものを飛ばす）で、重なりの見方が違う:
 
 | | `"auto"`（既定） | `"msdial"` |
 |---|---|---|
@@ -304,46 +138,15 @@ BINARY 照合のままで、`ion_mode.name`（大文字始まり）をそのま�
 | 箱の大きさ | ラベル自身の文字列を実測 | 代表文字列 `"1000.00000"` 1 つで全ラベル共通 |
 | 結果 | ラベルが多く載る | 少なくなる |
 
-**`"msdial"` が水平のみなのは上流の縮退を写したもの。** MS2 ビューの設定は
-`Overlap="Horizontal, Direct"` だが、この合成は OR で、しかも全ラベルが同じ
-代表箱を使うため `(w1+w2)/2 = repWidth` となり `Direct`（水平 AND 垂直）は
-`Horizontal` の部分集合になる——実質 `Horizontal` 単独に縮退している。
-縦にどれだけ離れていても m/z が近ければ飛ばす。
+`"msdial"` が水平だけを見るのは上流の縮退を写したもの（`Overlap="Horizontal, Direct"` を全ラベル共通の代表箱で判定すると `Horizontal` 単独と同じになる）。縦に離れていても m/z が近ければ飛ばす。どちらも**上下は別枠**で数える。片側 25 本の上限は安全弁で、`"msdial"` では水平棄却が先に効いて届かない。
 
-どちらの方式も**上下は別枠**で数える（上流は上下で別々の `Annotator` を持つので
-側をまたぐ衝突は起きない）。片側 25 本の上限は暴走止めの安全弁で、
-`"msdial"` では水平棄却が先に効いて到達しない。
+**画像のラベルはスペクトル全点から選ぶ**（衝突判定は描画時）。`payload["labels"]` は自前で描くクライアント向けの要約で、`top_labels` は**側ごと**の上限（`labels` の長さは最大 `2 × top_labels`）。
 
-**画像のラベルは `payload["labels"]` ではなくスペクトル全点から選ぶ。**
-衝突判定はピクセル座標が要るので描画時にしかできず、`payload["labels"]` は
-自前で描くクライアント向けの要約（`top_labels` 件で切った版）という役割分担。
-その `top_labels` は**側ごと**の上限なので、`labels` の長さは最大 `2 × top_labels`。
-
-`scale`（`"relative"` 既定 / `"sqrt"` / `"log10"`）は**縦軸の写し方**で、上下それぞれ
-自分の最大値で正規化したあとに掛ける。**precursor がベースピークのスペクトル**
-（脂質の `[M-H]-` など）は `relative` だと診断イオンが相対数 % に潰れて読めないので、
-そのとき `"sqrt"` を使う。大小関係は保つので「どちらが高いか」の読みは変わらない。
-`log10` は相対 0.1%（3 桁）を下限に潰す——対数は 0 へ向けて発散するため。
-**この下限はこちら独自の値**で、上流の Log10 軸の下限（`ToReactiveLogScaleAxisManager`
-の `lowBound=1`）は**生強度 1 カウント**を指す。上流は生強度を軸に載せるのに対し
-こちらは先に相対化しているので、同じ土俵の値にはならない。
-軸ラベルに選んだスケールが出る。**`output="payload"` の座標は正規化前の生値**
-なので `scale` の影響を受けない（自前で描くクライアントが自分で決める）。
-
-上流 MS-DIAL も同じ問題を軸の切り替えで解いている
-（`ObservableMsSpectrum.CreateAxisPropertySelectors2` の Relative / Absolute /
-Log10 / Sqrt を**上下独立**に選ばせる）。**`Absolute` は用意しない**——対向プロットは
-単位の違う 2 つのスペクトルを上下に並べるので、生の強度で並べても比較にならない
-（上流は片側ずつ別の図として見られるので成立している）。
+`scale`（`"relative"` 既定 / `"sqrt"` / `"log10"`）は縦軸の写し方で、上下それぞれ自分の最大値で正規化したあとに掛ける。**precursor がベースピークのスペクトル**（脂質の `[M-H]-` など）は `relative` だと診断イオンが相対数 % に潰れるので `"sqrt"` を使う（大小関係は保つ）。`log10` は相対 0.1%（3 桁）を下限にする（こちら独自の値。上流の Log10 軸の下限 `lowBound=1` は生強度 1 カウントで、同じ値ではない）。軸ラベルに選んだスケールが出る。**`output="payload"` の座標は正規化前の生値**で `scale` の影響を受けない。`Absolute` 軸は無い（単位の違う 2 つのスペクトルを生強度で並べても比較にならない）。
 
 ### 14.8 （撤去）ピーク裏取りツールへの統合
 
-旧ピーク裏取りツールの `analytical_checks.msms.spectral_match` ブロック（`best_match` と
-`status` の 4 値 `unavailable` / `error` / `no_candidates` / `matched`）は、ツールごと撤去した
-（B-2b）。ピークごとの裏取りに MS/MS の実スペクトルとライブラリの照合を重ねたいときは、
-`dcl_spot_spectrum`（スペクトルを読む）と `library_match_feature`（候補ごとの照合）を組み合わせる。
-**「最良」の候補の選び方（`total_score` 最大）は `library_match_feature` の基準のまま**で、
-候補の比較が要るときは `library_match_feature` の候補一覧を読む。
+旧ピーク裏取りツールの `analytical_checks.msms.spectral_match` ブロックは無い。ピークごとの裏取りは `dcl_spot_spectrum`（スペクトルを読む）と `library_match_feature`（候補ごとの照合。「最良」は `total_score` 最大）を組み合わせる。
 
 ### 14.9 候補の並び順（`total_score`）と、その限界
 
@@ -354,104 +157,53 @@ RtSimilarity + AcurateMassSimilarity + (Weighted + Simple + Reverse)/3
 + MatchedPeaksPercentage
 ```
 
-**各項は `> 0` のときだけ加算する**（`-1` の番兵＝比較不能・欠測を足して総合スコアを
-下げないため。§14.2）。したがって**上限は 1 ではなく、項数ぶん（この経路では最大 4）**。
-0〜1 の類似度として読んではいけない。RT と precursor m/z の一致度は
-`exp(-0.5*((actual-reference)/tolerance)^2)`（`gaussian_similarity`）で、m/z の
-許容幅は 500 を超えると ppm 換算で伸びる（`fix_mass_tolerance`）。
+**各項は `> 0` のときだけ加算する**（`-1` の番兵を足さない。§14.2）。**上限は 1 ではなく項数（この経路では最大 4）**で、0〜1 の類似度として読まない。RT と precursor m/z の一致度は `exp(-0.5*((actual-reference)/tolerance)^2)`（`gaussian_similarity`）で、m/z の許容幅は 500 を超えると ppm 換算で伸びる（`fix_mass_tolerance`）。
 
-**RT 項が入る条件**: store の `search_params["use_time_for_annotation_scoring"]`
-（`.dbs` の `MsRefSearchParameterBase` `Key(16)` = `IsUseTimeForAnnotationScoring`）が
-真で、かつ測定側の RT と参照レコードの RT が両方ある場合だけ。**上流の既定は
-`False`** なので、`.msp` 由来のライブラリでは RT 項は入らない。判断結果は
-`library_match_feature` の `scoring.use_rt` に出る。
+**RT 項が入る条件**: store の `search_params["use_time_for_annotation_scoring"]`（`.dbs` の `MsRefSearchParameterBase` `Key(16)` = `IsUseTimeForAnnotationScoring`。上流の既定は `False`）が真で、測定と参照の RT が両方あるときだけ。`.msp` 由来のライブラリでは入らない。結果は `library_match_feature` の `scoring.use_rt`。
 
-**`total_score` の絶対値は MS-DIAL の `TotalScore` と比較できない。** 式は同じだが
-`matched_peaks_percentage` の**項の意味が違う**——上流の脂質経路
-（`GetLipidomicsMatchedPeaksScores`、`MsScanMatching.cs:1169`）は、脂質クラスの
-注釈レベルが立つと `resultArray[0] = 2.0` のように**固定のボーナス値で上書きする**
-（`:1191`）。つまり上流のこの項は割合ではなく**クラス確証のボーナス点**で 1 を超える。
-こちらは汎用の割合（≤ 1.0）を足すので、確度の高い脂質では上流より約 1.0 低く出る。
-順位付けの用途では内部で一貫しているので支障はないが、**mzTab の
-`id_confidence_measure[1]`（MS-DIAL algorithm matching score）と数値を突き合わせては
-いけない**。これが `[8]` の一致率が 68% に留まる理由でもある（仕様差であって不具合ではない）。
+**`total_score` の絶対値は MS-DIAL の `TotalScore` と比べられない。** 上流の脂質経路（`GetLipidomicsMatchedPeaksScores`）は、脂質クラスの注釈レベルが立つと matched peaks の項を固定のボーナス値（`2.0` など。1 を超える）で上書きする。こちらは汎用の割合（≤ 1.0）を足すので、確度の高い脂質では上流より約 1.0 低い。順位付けには支障ないが、mzTab の `id_confidence_measure[1]`（MS-DIAL algorithm matching score）と数値を突き合わせない。`[8]` の一致率が 68% に留まるのもこの仕様差による。
 
-**上流の順位付けと完全に同じではない。** `MsScanMatchResultContainer.ResultOrder` は
+**上流の順位付けとは同じでない。** 上流 `MsScanMatchResultContainer.ResultOrder` は `(IsManuallyModified, IsReferenceMatched, IsAnnotationSuggested, Priority, TotalScore)` の辞書順で、`TotalScore` は最後のタイブレーク。`IsReferenceMatched` は脂質クラス固有の判定（`MsReferenceScorer.ValidateOnLipidomics` → `GetRefinedLipidAnnotationLevel`）に依存するので移植していない（この判定が無いと実データで全候補が `IsReferenceMatched=True` になり、ゲートとして働かない）。
 
-```
-(IsManuallyModified, IsReferenceMatched, IsAnnotationSuggested, Priority, TotalScore)
-```
+そのため**上位に化学的にありえない候補が残ることがある**（例: PI 18:0_20:4 の照合で `SMGDG 18:0_20:4` が 2 位、PC 18:0_22:6 の照合で `SHexCer 41:1;O3` が 2 位）。1 位の妥当性は対向プロット（`library_plot_mirror`）と `matched_peaks_count` で確かめる。
 
-の**辞書順タプル**で、`TotalScore` は最後のタイブレークにすぎない。支配項の
-`IsReferenceMatched` は `MsReferenceScorer.ValidateOnLipidomics` の
-`IsSpectrumMatch &= isLipidChainsMatch | isLipidClassMatch | ...` を経由して
-**脂質クラス固有の判定**（`GetRefinedLipidAnnotationLevel` → `Lipidomics/`、
-上流 66,932 行。`MsmsCharacterization.cs` だけで 20,177 行）に依存するため
-移植していない。実データで確認したところ、この判定が無いと候補が全件
-`IsReferenceMatched=True` になりゲートとして働かない（脂質分岐は 3 つの
-dot product の **OR** 判定で、実 run の cutoff が緩いため）。
-
-**帰結**: `total_score` 単独比較は現実的な最良の近似であって、**上位に化学的に
-ありえない候補が残ることがある**（例: PI 18:0_20:4 の照合で `SMGDG 18:0_20:4` が
-2 位、PC 18:0_22:6 の照合で `SHexCer 41:1;O3` が 2 位）。1 位の妥当性は
-対向プロット（`library_plot_mirror`）と `matched_peaks_count` で人が確かめること。
-
-**実データでの効き**（aging mice kidney neg、120 feature、正解は mzTab の
-`chemical_name`）: top-1 一致は `weighted_dot_product` 単独の 106/120 (88.3%) に対し
-`total_score` は 113/120 (94.2%)。判定が変わった 7 件は全て総合スコア側が正解で、
-悪化はゼロだった（HISTRY 2026-09-22(1)）。
+実データ（aging mice kidney neg、120 特徴、正解は mzTab の `chemical_name`）の top-1 一致は `weighted_dot_product` 単独 106/120（88.3%）、`total_score` 113/120（94.2%）。変わった 7 件はすべて `total_score` 側が正解だった。
 
 ### 14.10 MS-DIAL との一致点・相違点（まとめ）
 
-**採点・順位付けは GUI 固有ではない。** 実体は共有ライブラリにある——
-`MsScanMatching`（`src/Common/CommonStandard/Algorithm/Scoring/`）、
-`MsReferenceScorer` / `MsScanMatchResultContainer` / `MztabFormatExport`
-（`src/MSDIAL5/MsdialCore/`）。`MsdialGuiApp` には無い。したがって GUI でも
-Console でも同じ判定が走る。一方**描画は GUI だけ**にある
-（`src/Common/ChartDrawing/` の `LineSpectrumControlSlim` / `Annotator` と
-`MsdialGuiApp/Model/Chart/`）——Console は図を描かない。
+MS-DIAL の採点・順位付けは GUI 固有ではなく共有ライブラリ（`MsScanMatching`・`MsReferenceScorer`・`MsScanMatchResultContainer`・`MztabFormatExport`）にあり、GUI と Console で同じ。描画は GUI だけにある（Console は図を描かない）。
 
 #### ロジック
 
+同じもの: 個別スコア 5 種（瑕疵ごと。実データで `[4][5][6][7]` が 194/194 一致。§14.3）・採点前処理（`relative_amp_cutoff` / `absolute_amp_cutoff` / 質量範囲を `.dbs` の実値から）・総合スコアの式と RT / m/z の一致度・RT 項を足す条件（§14.9）・候補検索の窓（precursor m/z ± `Ms1Tolerance`〔m/z 500 超は同じ ppm〕、RT ± `RtTolerance`）。
+
 | | こちら | MS-DIAL | 備考 |
 |---|---|---|---|
-| 個別スコア 5 種 | 同じ | 同じ | 瑕疵ごと移植。実データで `[4][5][6][7]` **194/194 一致**（§14.3） |
-| 採点前処理 | 同じ | 同じ | `relative_amp_cutoff` / `absolute_amp_cutoff` / 質量範囲を `.dbs` の実値から |
-| 総合スコアの式 | 同じ | 同じ | `GetTotalScore`。正規化しない和、各項 `> 0` のときだけ加算（§14.9） |
-| RT / m/z の一致度 | 同じ | 同じ | `gaussian_similarity`、500 超は ppm 換算（`fix_mass_tolerance`） |
-| RT 項を足す条件 | 同じ | 同じ | `.dbs` の `Key(16)` を読む。既定 `False` |
-| 候補検索の窓 | 同じ | 同じ | precursor m/z ± `Ms1Tolerance`（m/z 500 を超えたら同じ ppm に広げる `FixMassTolerance`。使った幅は `query.mz_window`）、RT ± `RtTolerance` |
-| **並び順** | `total_score` 単独 | `(IsManuallyModified, IsReferenceMatched, IsAnnotationSuggested, Priority, TotalScore)` の辞書順 | ブール項が脂質クラス判定に依存するため未移植（§14.9） |
-| **候補の足切り** | しない（採点した全件を返す。`library_msms_qualify` は `.dbs` の足切りを通るかを `passes_dbs_cutoffs` の列で示すが、候補は消さない） | `GetRefinedLipidAnnotationLevel` が空文字を返す候補は `null` で消える。各種 cutoff・`IsSpectrumMatch` でも絞る | **上位に化学的にありえない候補が残る**直接の原因 |
-| **名前** | ライブラリのレコード名をそのまま | 注釈レベルに応じて付け直す（クラス止まり / 鎖組成まで） | `GetRefinedLipidAnnotationLevel` の戻り値 |
-| **`matched_peaks` の 2 値** | 汎用 `GetMatchedPeaksScores` | 脂質は `GetLipidomicsMatchedPeaksScores`。注釈レベルが立つと `2.0` 等の**ボーナス値で上書き**する（割合ではない） | `[8]` が 68% に留まる理由。`total_score` の絶対値が比較できない理由でもある（§14.9） |
-| **足さない項** | RT・m/z・スペクトル・matched% の 4 項のみ | CCS / isotope / Andromeda も足しうる | この経路（LC-MS、MS2、脂質）には存在しない項 |
+| **並び順** | `total_score` 単独 | `(IsManuallyModified, IsReferenceMatched, IsAnnotationSuggested, Priority, TotalScore)` の辞書順 | §14.9 |
+| **候補の足切り** | しない（採点した全件を返す。`library_msms_qualify` は `.dbs` の足切りを通るかを `passes_dbs_cutoffs` の列で示すが、候補は消さない） | `GetRefinedLipidAnnotationLevel` が空文字を返す候補は消える。各種 cutoff・`IsSpectrumMatch` でも絞る | 上位に化学的にありえない候補が残る直接の原因 |
+| **名前** | ライブラリのレコード名のまま | 注釈レベルに応じて付け直す（クラス止まり / 鎖組成まで） | |
+| **`matched_peaks` の 2 値** | 汎用 `GetMatchedPeaksScores` | 脂質は `GetLipidomicsMatchedPeaksScores`（ボーナス値で上書き） | §14.9 |
+| **足さない項** | RT・m/z・スペクトル・matched% の 4 項のみ | CCS / isotope / Andromeda も足しうる | この経路（LC-MS、MS2、脂質）には無い項 |
 | **採点対象のファイル** | 呼び出し側が指定した 1 つの `.dcl` | アラインメント spot の「代表ファイル」1 つ | mzTab の値と 0.3〜2% ずれる主因 |
 
 #### 描画（対向プロット）
 
-| | こちら | MS-DIAL | 備考 |
-|---|---|---|---|
-| レイアウト | 上=測定 / 下=参照、m/z 軸共有 | 同じ | |
-| 正規化 | 上下それぞれ自分の最大値 | 同じ（上下で別の軸） | |
-| ピークの描き方 | 素のステムのみ | 同じ（`DrawLine` だけ） | 先端マーカーは両者とも描かない |
-| m/z ラベルの書式・順序 | 小数 4 桁・強度降順 | 同じ（`Format="F4"`、`OrderingPropertyName`=Intensity） | |
-| 縦軸スケール | `relative` / `sqrt` / `log10` | Relative / Absolute / Log10 / Sqrt | |
-| **`Absolute` 軸** | 無い | ある（上下独立に選べる） | 対向プロットで単位の違う 2 つを生強度で並べても比較にならないため |
-| ラベルの衝突回避 | する（`label_policy="auto"` / `"msdial"`） | する（外接矩形が重なるものを飛ばす） | 貪欲法は同じ。`"msdial"` は判定も箱の測り方も忠実 |
-| **既定の判定** | 水平＋垂直の 2 次元（`"auto"`） | 水平のみ（`Overlap="Horizontal, Direct"` の縮退） | `"auto"` のほうがラベルが多く載る。忠実版は `label_policy="msdial"` |
-| ラベルの本数上限 | 片側 25 本（安全弁） | 指定なし（MS2 ビューは `TopN` なし） | `"msdial"` では水平棄却が先に効いて上限に届かない |
-| **一致ピークの色** | 緑でハイライト＋ガイド線 | 概念が無い（色は `SpectrumPeak.SpectrumComment` 由来。既定は側ごとに 1 色） | こちらの追加。静止画では情報量が多い |
-| **採点対象外ピーク** | 灰色で薄く描き、凡例と caption に件数（足切りが非ゼロのときだけ） | 概念が無い（足切り後のスペクトルをそのまま描く） | こちらの追加。§14.7。上流は採点対象だけを見せるので「描かれているのに採点外」が起きない |
-| 色 | `#2471a3` / `#c0392b`（volcano と同系統） | 純 Blue / 純 Red | |
-| **差分・積の重ね描き** | 無い | ある（`UpperDifferenceSpectrumModel` / `UpperProductSpectrumModel`） | |
-| **対話操作** | 無い（静止 PNG、`output="payload"` で座標） | ツールチップ（m/z・強度・`SpectrumComment`）・ズーム | |
+同じもの: 上=測定 / 下=参照で m/z 軸共有・上下それぞれ自分の最大値で正規化・素のステム（先端マーカー無し）・m/z ラベルは小数 4 桁で強度降順（上流 `Format="F4"`）・ラベルの衝突回避の貪欲法。
+
+| | こちら | MS-DIAL |
+|---|---|---|
+| 縦軸スケール | `relative` / `sqrt` / `log10`（`Absolute` 無し） | Relative / Absolute / Log10 / Sqrt（上下独立） |
+| **既定の衝突判定** | 水平＋垂直（`"auto"`）。忠実版は `label_policy="msdial"` | 水平のみ |
+| ラベルの本数上限 | 片側 25 本（安全弁） | 指定なし（MS2 ビューは `TopN` なし） |
+| **一致ピークの色** | 緑でハイライト＋ガイド線 | 概念が無い（色は `SpectrumPeak.SpectrumComment` 由来。既定は側ごとに 1 色） |
+| **採点対象外ピーク** | 灰色で薄く描き、凡例と caption に件数（足切りが非ゼロのときだけ。§14.7） | 概念が無い（足切り後のスペクトルを描く） |
+| 色 | `#2471a3` / `#c0392b`（volcano と同系統） | 純 Blue / 純 Red |
+| 差分・積の重ね描き | 無い | ある（`UpperDifferenceSpectrumModel` / `UpperProductSpectrumModel`） |
+| 対話操作 | 無い（静止 PNG、`output="payload"` で座標） | ツールチップ（m/z・強度・`SpectrumComment`）・ズーム |
 
 ### 照合の詳細（`detail=true`）とライブラリの検索
 
-`library_match_feature(detail=true)`（opt-in。再解析で使う）は、既存の列の並びを変えずに
-TSV の末尾へ 1 列を足し、payload に 4 つの欄を足す。`detail` を渡さない戻り値は変わらない
-（`inchikey` は 2026-11-14 から既定の列。§14.6）。
+`library_match_feature(detail=true)`（opt-in）は、既存の列の並びを変えずに TSV の末尾へ 1 列を足し、payload に 4 つの欄を足す。`detail` を渡さない戻り値は変わらない。
 
 | 欄 | 意味 |
 |---|---|
@@ -461,21 +213,13 @@ TSV の末尾へ 1 列を足し、payload に 4 つの欄を足す。`detail` �
 | `measured_peaks` | 照合に使った測定スペクトル（全ピーク `[m/z, 強度]`） |
 | `alignments` | 候補ごと（`rank` 順）の一致したピーク `[m/z, 測定の強度, 参照の強度]`。強度は採点の前処理（足切り・正規化）の後の値 |
 
-`library_search` は読み込んだライブラリのレコードを名前（大小を問わない部分一致）・分子式
-（完全一致）・InChIKey（先頭 14 文字）で引く。スペクトルは返さず、ピーク数 `n_peaks` だけ。
-`dcl_spot_spectrum`（`.dcl` の節）は spot_id で代表 MS/MS の全ピークを返す。
-
+`library_search` は読み込んだライブラリのレコードを名前（大小を問わない部分一致）・分子式（完全一致）・InChIKey（先頭 14 文字）で引く。スペクトルは返さず、ピーク数 `n_peaks` だけ。`dcl_spot_spectrum`（`dcl` トピック）は spot_id で代表 MS/MS の全ピークを返す。
 
 ### データセットが覚えているライブラリ（LibraryRecord）
 
-データセットは、同定に使われた参照ライブラリを 1 件覚える（`metabolomix.dataset.library_memory`）。
-後段の MS/MS 照合は、利用者にライブラリを名指しさせずにこれを引く。戻り値に出るのは
-ファイル名と sha256 だけで、置き場所（`path`）は出さない。
+データセットは同定に使われた参照ライブラリを 1 件覚える（`metabolomix.dataset.library_memory`）。後段の MS/MS 照合はライブラリを名指しせずにこれを引く。戻り値にはファイル名と sha256 だけを出し、置き場所（`path`）は出さない。
 
-解析フォルダで読んだとき、記憶はそのフォルダの**今の** `*_Loaded.*.dbs`（MS-DIAL 自身が保存した写し）に
-従う。読み込みのたびに測り直すので、フォルダの dbs が書き換わっていれば、読み直した記憶は新しい
-中身に付け直される（`mismatch` になるのは、読み込み済みのデータセットの記憶と今のファイルが
-食い違うとき、pipeline の run が固定した sha256 と今のファイルが違うとき、またはジョブの実効メソッドが宣言するファイルが無い・読めないとき）。
+解析フォルダで読んだとき、記憶はそのフォルダの**今の** `*_Loaded.*.dbs`（MS-DIAL が保存した写し）に従い、読み込みのたびに測り直す（dbs が書き換わっていれば、読み直した記憶は新しい中身に付く）。`mismatch` になるのは、読み込み済みのデータセットの記憶と今のファイルが食い違うとき、pipeline の run が固定した sha256 と今のファイルが違うとき、ジョブの実効メソッドが宣言するファイルが無い・読めないとき。
 
 | 欄 | 意味 |
 |---|---|
@@ -484,27 +228,15 @@ TSV の末尾へ 1 列を足し、payload に 4 つの欄を足す。`detail` �
 | `origin` | `loaded_dbs`（フォルダ）/ `effective_method`（ジョブの実効メソッド。sha256 は読んだ時点で測る）/ `run_inputs`（pipeline の run が固定した入力。固定時の sha256 と今を突き合わせる）/ 無し |
 | `lbm_also` | MSP に加えて LBM も照合に使った（`library_mode="msp_then_lbm"`、フォルダに LBM の dbs もある、またはジョブの実効メソッドが MSP と LBM の両方を宣言している） |
 
-- 解析フォルダに非 LBM の `*_Loaded.*.dbs` が 2 本以上あると `unknown`（どちらが代表になったか
-  フォルダからは決められない）。LBM の dbs（`.lbm2.dbs` など）は数えず、`lbm_also` にする。
+- 解析フォルダに非 LBM の `*_Loaded.*.dbs` が 2 本以上あると `unknown`。LBM の dbs（`.lbm2.dbs` など）は数えず、`lbm_also` にする。
 - LBM の dbs だけが 2 本以上あるときは `lbm_only` で `file` / `path` は無し、`candidates` に LBM のファイル名。
 - ジョブの実効メソッドが宣言するファイルが無い・読めないときは `mismatch`。
 - mzTab-M を直接読んだときは常に `unknown`（mzTab-M は使ったライブラリを持たない）。
-- 入口ごとの出どころ（`load_dataset`）: `directory` はフォルダの
-  `*_Loaded.*.dbs`、`job_path` はジョブの実効メソッド、`pipeline_path` は run が固定した入力
-  （どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`load_dataset` の
-  `library_record` がこの記録を（`path` を外して）返す。
+- 入口ごとの出どころ（`load_dataset`）: `directory` はフォルダの `*_Loaded.*.dbs`、`job_path` はジョブの実効メソッド、`pipeline_path` は run が固定した入力（どちらのアダプタで読んでも同じ）、`mztab_path` は `unknown`。`load_dataset` の `library_record` がこの記録を（`path` を外して）返す。
 
 #### LBM が代表になった特徴の印（`is_lbm_annotator`）
 
-`.arf2` の代表の `annotator_id` が、LBM 由来かどうかの手がかりになる。Console の注釈器キーは
-ライブラリのファイルのパスになりうる: LBM は常にそのパス（末尾が `.lbm` + 数字）、MSP は
-`library_mode="msp_only"` のとき `Msp file path` のパス、`msp_then_lbm` では設定表の名前
-（pipeline の既定は `LabMsp`）。実データ（`msp_then_lbm` の run）では、MSP 由来の代表は名前の ID、
-LBM 由来の代表はパスの ID だった。
+`.arf2` の代表の `annotator_id` から LBM 由来かを判定する。Console の注釈器キーは、LBM なら常にライブラリのパス（末尾が `.lbm` + 数字）、MSP は `library_mode="msp_only"` で `Msp file path` のパス、`msp_then_lbm` では設定表の名前（pipeline の既定は `LabMsp`）。
 
-- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）、`.msp` + 数字（`msp_only` の MSP のパス）なら
-  **False**（MSP 由来）。それ以外は **None**（判定できない）。GUI の注釈器 ID は自由名なので、どの規則にも合わない
-  ことは MSP 由来の証拠にならない（`msp_then_lbm` の設定表の名前も None）。
-- **注釈器 ID は、どちらのライブラリのフルパスも含みうる**（`msp_only` の MSP、LBM は常に）。
-  ツールの戻り値に `annotator_id` の生の値を出さない。出してよいのは導出した真偽かファイル名だけ。
-  データセットの `feature_metadata[].annotator_id` はファイル名の部分だけを持つ。
+- 末尾（ファイル名の部分）が `.lbm` + 数字なら **True**（LBM 由来）、`.msp` + 数字（`msp_only` の MSP のパス）なら **False**（MSP 由来）、それ以外は **None**（判定できない）。GUI の注釈器 ID は自由名で、`msp_then_lbm` の設定表の名前も None。None は MSP 由来の証拠にならない。
+- **注釈器 ID はライブラリのフルパスを含みうる**（`msp_only` の MSP、LBM は常に）。ツールの戻り値に `annotator_id` の生の値を出さない（出すのは導出した真偽かファイル名だけ）。データセットの `feature_metadata[].annotator_id` はファイル名の部分だけを持つ。
