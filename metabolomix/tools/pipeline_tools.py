@@ -76,7 +76,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         `method_overrides`（単位ごと）: `{Console のキー: 値}`。メソッドの原本は変えず、実効メソッドの値を
         上書きする（例 `{"Minimum peak height": 50000, "N percent detected in one group": 50}`）。同じ値の
         受け先を持つ別名が原本にあれば、それも同じ値にする。Console が読むキーと型（MsdialWorkbench afd5f95 の
-        ConfigParser）で検査し、知らないキー（`details.suggestions` に近い綴り）・型に合わない値（`Minimum peak
+        ConfigParser）で検査し、知らないキー（`details.suggestions` に近い綴り）・現用の Console のビルドが読まない
+        キー（`Number of threads`・`Lbm annotator priority`・`Detailed alignment provenance`・`Annotation candidates`
+        とその別名）・型に合わない値（`Minimum peak
         height` は整数。`1e5` は不可）・ほかの欄が受け持つキー（`Ion mode`・ライブラリやファイルのパス。
         `Alignment reference file ID` は `alignment_reference="method"` のときだけ）・計画が自分で書くキーと
         重なるものは `PIPELINE_REQUEST_INVALID`。上書きが変われば別の run になり、resume では変えられない。

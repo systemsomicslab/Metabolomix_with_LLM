@@ -23,6 +23,10 @@ pipeline の要求の `method_overrides`（`{キー: 値}`）を受けるとき�
 上流の置換の誤りで大文字を含み、小文字にしたキーと一致しない（Console はこの 2 つを読まない）。
 表には載せず、`UNREADABLE_KEYS` で理由を添えて断る。
 
+現用の Console のビルド（設定の `[msdial] exe` の MSDIALCUI.exe）は afd5f95 より前に作ったもので、
+表のキーのうち後から上流に入った 7 つを読まない（Console は作り直さない。手順書 v8 の計画）。
+表には残し（上流の事実）、`NOT_IN_CURRENT_BUILD` で理由を添えて断る。Console を作り直したら照らし直す。
+
 stdlib だけに依存する（pipeline の worker も import する）。
 """
 from __future__ import annotations
@@ -37,6 +41,7 @@ __all__ = [
     "CONSOLE_KEYS",
     "ConsoleKey",
     "MethodOverrideError",
+    "NOT_IN_CURRENT_BUILD",
     "RESERVED_KEYS",
     "UNREADABLE_KEYS",
     "UPSTREAM_COMMIT",
@@ -278,6 +283,28 @@ UNREADABLE_KEYS: dict[str, str] = {
         "大文字を含み、小文字にしたキーと一致しない）。既定値のまま走ります。"),
 }
 
+#: 上流（afd5f95）の Console は読むが、現用のビルドが読まないキー（小文字 → 上流でそのキーを足した PR）。
+#: 2026-11-17 に、現用の MSDIALCUI.exe（sha256 1f036636b5f6…68bb）の文字列定数（UTF-16）に
+#: 表のキーがあるかを照らして決めた（表の 166 キーのうち無いのはこの 7 つ）。現用のビルドは #783 の
+#: 注釈器設定表のキーは読むが、`ReadLbmAnnotatorPriority` は持たない。
+_CURRENT_BUILD_MISSING: dict[str, str] = {
+    "number of threads": "#795",
+    "lbm annotator priority": "#783",
+    "lbm annotation priority": "#783",
+    "detailed alignment provenance": "#791",
+    "export detailed alignment provenance": "#791",
+    "annotation candidates": "#793",
+    "export annotation candidates": "#793",
+}
+
+#: 現用ビルドが読まないキー（小文字 → 理由）。
+NOT_IN_CURRENT_BUILD: dict[str, str] = {
+    key: (f"現用の MS-DIAL Console のビルドはこのキーを読みません（上流の MsdialWorkbench {pr} で"
+          "足されたキーで、現用ビルドはそれより前のもの。Console は知らないキーを黙って捨てる）。"
+          "上書きしても既定値のまま走ります。")
+    for key, pr in _CURRENT_BUILD_MISSING.items()
+}
+
 _INT_TEXT = re.compile(r"^[+-]?\d+$")
 
 
@@ -369,7 +396,7 @@ def normalize_overrides(overrides, *, alignment_reference_from_method: bool) -> 
     """`method_overrides` を検査し、`{表記の綴り: 文字列の値}`（表記の昇順）にして返す。
 
     断るもの（MethodOverrideError）: 辞書でない・Console の読まないキー（近い綴りを候補に添える）・
-    ほかの欄が受け持つキー・同じキーを 2 度（大文字小文字違いも）・同じ受け先を持つ別名を 2 つ・
+    現用の Console のビルドが読まないキー（`NOT_IN_CURRENT_BUILD`）・ほかの欄が受け持つキー・同じキーを 2 度（大文字小文字違いも）・同じ受け先を持つ別名を 2 つ・
     型に合わない値・ASCII でない／改行を含む値（Console はメソッドを ASCII で 1 行ずつ読む）。
     `Alignment reference file ID` は `alignment_reference_from_method` のときだけ受ける。
     """
@@ -384,6 +411,9 @@ def normalize_overrides(overrides, *, alignment_reference_from_method: bool) -> 
         key = _canonical_key(raw_key)
         if key in UNREADABLE_KEYS:
             raise MethodOverrideError(UNREADABLE_KEYS[key], key=raw_key)
+        if key in NOT_IN_CURRENT_BUILD:
+            raise MethodOverrideError(NOT_IN_CURRENT_BUILD[key], key=raw_key,
+                                      upstream_pr=_CURRENT_BUILD_MISSING[key])
         if key in RESERVED_KEYS:
             raise MethodOverrideError(
                 f"{raw_key} は method_overrides では変えられません。代わりに {RESERVED_KEYS[key]}。",

@@ -155,7 +155,8 @@ metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execut
                     `data/.msdial-console.lock`。待つ間 `pipeline_status` は `waiting`）、mzML の切れの検査（raw_integrity.py）、
                     失敗の見立て（failure_diagnosis.py。msdial.log から原因と疑わしいファイル）、
                     Console が読むメソッドのキーと型の照合表（method_keys.py。pipeline の要求の `method_overrides` を
-                    検査する。上流の ConfigParser.cs から写したもので、上流を上げたら照らし直す）。
+                    検査する。上流の ConfigParser.cs から写したもので、上流を上げたら照らし直す。現用の Console の
+                    ビルドが読まないキーは `NOT_IN_CURRENT_BUILD` で断る。Console を作り直したら照らし直す）。
                     MCP の入口は pipeline と tools/console_tools.py（メソッドファイルの候補と雛形）
 metabolomix/rawmeta/   raw の取得時刻のメタデータ（.wiff の OLE・mzML・Thermo .raw・Bruker .d・Agilent .d の AcqData/Contents.xml・.wiff2 は同じ幹の .wiff。読めないファイルがあっても読めた分の取得順は残す。スペクトルは解さない。stdlib と core/atomic_io だけに依存）と、
                     ISA / mwTab の試料の表から因子の列付きの sample-manifest.v2 を組む部品。MCP の入口は
