@@ -57,6 +57,23 @@ def test_keys_console_cannot_read_are_refused_with_the_reason():
     assert "読みません" in err.message
 
 
+@pytest.mark.parametrize("key", ["Number of threads", "LBM annotator priority", "Lbm annotation priority",
+                                 "Detailed alignment provenance", "Export detailed alignment provenance",
+                                 "Annotation candidates", "export annotation candidates"])
+def test_keys_the_current_console_build_does_not_read_are_refused(key):
+    """上流の表にはあるが、現用の MSDIALCUI.exe が持たないキー。通すと上書きが黙って効かない。"""
+    err = _error({key: 4 if key == "Number of threads" else True})
+    assert "現用" in err.message
+    assert err.details["upstream_pr"].startswith("#")
+
+
+def test_keys_this_repository_relies_on_are_read_by_the_current_build():
+    """結果を大きく変えるキー（上書きの主な使い道）は、現用ビルドの断りに入っていない。"""
+    assert not {key.lower() for key in method_file_mod.KEY_PARAM_KEYS} & set(mk.NOT_IN_CURRENT_BUILD)
+    assert _normalize({"Minimum peak height": 50000, "N percent detected in one group": 50}) == {
+        "Minimum peak height": "50000", "N percent detected in one group": "50"}
+
+
 @pytest.mark.parametrize("key", ["Ion mode", "Msp file path", "Lbm file path", "Text DB file path",
                                  "MSP annotator settings file path"])
 def test_keys_owned_by_other_request_fields_are_refused(key):
@@ -114,3 +131,5 @@ def test_every_enum_key_lists_its_values_and_reserved_keys_exist():
     assert set(mk.RESERVED_KEYS) <= set(mk.CONSOLE_KEYS)
     assert mk.ALIGNMENT_REFERENCE_KEY in mk.CONSOLE_KEYS
     assert not set(mk.UNREADABLE_KEYS) & set(mk.CONSOLE_KEYS)
+    # 現用ビルドが読まないキーは上流の表のキー（表から消さずに断る）。
+    assert set(mk.NOT_IN_CURRENT_BUILD) <= set(mk.CONSOLE_KEYS)

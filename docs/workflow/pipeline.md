@@ -105,7 +105,8 @@ sha256・出どころ。置き場所は載せない)・`alignment_reference` だ
 
 要求の `method_overrides`(単位のキー。`{Console のキー: 値}`): `metabolomix/pipeline/request.py` の `resolve_request()` が
 `metabolomix/console/method_keys.py` の `normalize_overrides()` でキーと型を検査し(照合表は MsdialWorkbench afd5f95 の
-`ConfigParser.cs` から。Console は知らないキーと型に合わない値を黙って捨てる)、`{表記の綴り: 文字列}` に正規化して要求に保存する
+`ConfigParser.cs` から。Console は知らないキーと型に合わない値を黙って捨てる。現用の Console のビルドが読まない 7 キーは
+`NOT_IN_CURRENT_BUILD` で断る)、`{表記の綴り: 文字列}` に正規化して要求に保存する
 (要求の hash に入るので、上書きが変われば別の run。空の `{}` は省いたのと同じ)。`metabolomix/pipeline/inputs.py` の
 `inspect_inputs()` はメソッドを読んだ直後に上書きを当て(原本に宣言のある別名も同じ値にする。`alias_keys()`)、以後の解決
 (LBM・MSP・足切り)は上書き後の値を見る。計画が自分で書くキー(ライブラリ・パスの絶対化・アライメントの参照)と重なれば
