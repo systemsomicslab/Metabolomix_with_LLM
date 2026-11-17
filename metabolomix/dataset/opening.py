@@ -74,6 +74,8 @@ class OpenedDataset:
         他の入口は None
     run_root: `directory` で開いた解析フォルダが pipeline の run の中にあり、その run の試料の対応表と
         ライブラリの記録を当てたときの run の根（基の指紋が run の記録と受領を数えるのに使う）
+    method_params: run の単位が Console に渡した実効メソッドの主なキー（`receipt.unit_method_params`。
+        run の外の解析フォルダ・旧 v1 の run・mzTab-M の直接指定では None）
     """
 
     dataset: DatasetState
@@ -86,6 +88,18 @@ class OpenedDataset:
     mztab_path: str | None = None
     polarity: str | None = None
     run_root: str | None = None
+    method_params: dict | None = None
+
+
+def _unit_method_params(unit) -> dict | None:
+    """run の単位の実効メソッドの主なキー（旧 v1 の run と、まだ書いていない単位は None）。"""
+    if unit is None or unit.legacy:
+        return None
+    from metabolomix.pipeline import receipt as receipt_mod
+    from metabolomix.pipeline import store
+
+    record_unit = store.run_units(unit.record).get(unit.polarity) or {}
+    return receipt_mod.unit_method_params(unit.unit_root, record_unit.get("inputs") or {})
 
 
 def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_path=None,
@@ -417,7 +431,8 @@ def _open(kind: str, raw: str, path: str, adapter: str, measure: str,
     return OpenedDataset(dataset=ds, kind=kind, path=path, adapter=adapter,
                          selection=selection, notes=notes, mztab_path=mztab_path,
                          polarity=polarity,
-                         run_root=str(unit.pipeline_root) if unit is not None else None)
+                         run_root=str(unit.pipeline_root) if unit is not None else None,
+                         method_params=_unit_method_params(unit))
 
 
 #: 解析フォルダから pipeline の run の根（`pipeline-run.json` のあるフォルダ）を探す深さ

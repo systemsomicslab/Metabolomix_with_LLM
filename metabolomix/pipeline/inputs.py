@@ -42,6 +42,7 @@ from pathlib import Path
 
 from metabolomix.console import job_manager
 from metabolomix.console import method_file as method_file_mod
+from metabolomix.console import method_keys as method_keys_mod
 from metabolomix.console import raw_integrity
 from metabolomix.console import runner as console_runner
 from metabolomix.console.input_prep import _companions_of
@@ -624,6 +625,28 @@ def choose_alignment_reference(primary_names: list[str], manifest_rows: list[dic
             "injection_order_source": source, "method_value": method_value}
 
 
+# ---------- 要求の上書き（method_overrides） ----------
+
+def _apply_user_overrides(request: dict, method_keys: dict) -> tuple[dict, dict]:
+    """要求の `method_overrides` を、原本に宣言のある別名へも広げて返す。
+
+    戻り値は (実効メソッドへ書く上書き, `{キー: {"from": 原本の値か None, "to": 値}}`)。
+    原本が同じ値の受け先を別名の綴りで宣言していると、上書きの行と別名の行が両方残り、
+    Console の読み方（後の行が勝つ／最初の行が勝つ）しだいで上書きが効かない。
+    別名の行も同じ値で差し替えて、どちらで読んでも上書きの値になるようにする。
+    """
+    requested = dict(request.get("method_overrides") or {})
+    out: dict[str, str] = {}
+    for key, value in requested.items():
+        out[key] = value
+        for alias in method_keys_mod.alias_keys(key):
+            if alias.lower() in method_keys:
+                out[alias] = value
+    overridden = {key: {"from": method_keys.get(key.lower()), "to": value}
+                  for key, value in out.items()}
+    return out, overridden
+
+
 # ---------- 公開API: inspect_inputs ----------
 
 def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
@@ -650,6 +673,10 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
     chosen_method = _resolve_method(source_root, request)
     method_path = Path(chosen_method["path"])
     method_keys = method_file_mod.read_method_keys(method_path)
+    # 要求の上書き（`method_overrides`。検査と正規化は要求の段で済んでいる）を、計画が
+    # メソッドを読む前に当てる——ライブラリ・足切りの解決も上書き後の値を見る。
+    user_overrides, overridden = _apply_user_overrides(request, method_keys)
+    method_keys = {**method_keys, **{key.lower(): value for key, value in user_overrides.items()}}
 
     library_mode = request.get("library_mode", "auto")
     # 最終選択後にだけ厳格な参照解決を行う（select_methodのグルーピングは弱い版）。
@@ -718,6 +745,19 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
             [p.name for p in primaries], manifest_rows, method_value=method_value)
         overrides[method_file_mod.ALIGNMENT_REFERENCE_KEY] = str(alignment_reference["file_id"])
 
+    # 計画が自分で書くキー（ライブラリ・パスの絶対化・アライメントの参照）と上書きが重なれば
+    # 断る。黙ってどちらかを勝たせると、要求か計画のどちらかが効かないまま走る。
+    if user_overrides:
+        planned = {key.lower(): key for key in overrides}
+        clashes = sorted(key for key in user_overrides if key.lower() in planned)
+        if clashes:
+            raise DomainError(
+                "PIPELINE_REQUEST_INVALID",
+                f"method_overrides の {clashes} は、この計画（library_mode={library_mode!r}）が"
+                "自分で書くキーです。method_overrides から外してください。",
+                {"keys": clashes, "library_mode": library_mode})
+        overrides = {**user_overrides, **overrides}
+
     # Console を起動する前に判定する（起動後だと全検体の解析を終えてから落ちる）。
     _assert_project_save_possible(request, exe_info["path"])
 
@@ -733,6 +773,11 @@ def inspect_inputs(source_root: Path, request: dict, *, exe_path: Path,
             "effective_relative_path": None,
             "effective_sha256": None,
             "overrides": overrides,
+            # 要求の上書き（別名へ広げた分も含む）と、その前の原本の値（宣言が無ければ null）。
+            **({"user_overrides": overridden} if overridden else {}),
+            # 結果を大きく変えるキーの実効値と、宣言の無い（Console の既定で走る）キー。
+            "key_params": method_file_mod.extract_key_params(method_keys),
+            "key_params_undeclared": method_file_mod.undeclared_key_params(method_keys),
         },
         "alignment_reference": alignment_reference,
         # msp_then_lbm の LBM は研究室の資産なので、receipt と report がファイル名と出どころで

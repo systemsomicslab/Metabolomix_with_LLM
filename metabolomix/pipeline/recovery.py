@@ -171,10 +171,20 @@ def _receipt_summary(pipeline_root: Path, record: dict) -> dict | None:
     if next_call:
         next_call = next_call.replace(receipt_mod.PIPELINE_PATH_PLACEHOLDER,
                                       str(pipeline_root).replace("\\", "/"))
+    # 実効メソッドの主なキーは受領ではなく実効メソッドから読み直す（このキーを書く前の受領の run も同じに見せる）。
+    run_units = store.run_units(record)
+    method_params = {}
+    for polarity in validated:
+        unit = run_units.get(polarity) or {}
+        params = receipt_mod.unit_method_params(pipeline_root / (unit.get("unit_root") or polarity),
+                                                unit.get("inputs") or {})
+        if params is not None:
+            method_params[polarity] = params
     return {
         "relative_path": receipt_mod.RECEIPT_RELATIVE_PATH,
         "analysis_dirs": {p: str(pipeline_root / units[p]["analysis_dir"]) for p in validated},
         "alignment": {p: units[p].get("alignment") for p in validated},
+        **({"method_params": method_params} if method_params else {}),
         "warnings": [w.get("code") for w in data.get("warnings") or []],
         "next": next_call,
     }

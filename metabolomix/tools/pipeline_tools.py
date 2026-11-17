@@ -54,9 +54,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         `pipeline-request.v2` は `PIPELINE_REQUEST_INVALID`）。
         共有の項目: `library_mode` / `measure` / `keep_extension` / `timeout_s` / `save_project` /
         `output_root` / `alignment_reference`。
-        1 極性: `polarity` / `method_file` / `lbm_file` / `msp_file` / `sample_manifest` をトップに置く。
+        1 極性: `polarity` / `method_file` / `lbm_file` / `msp_file` / `sample_manifest` / `method_overrides`
+        をトップに置く。
         2 極性: `units: [{"polarity", "raw_dir", "method_file"?, "lbm_file"?, "msp_file"?,
-        "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir`（`dataset_root` 相対）は
+        "sample_manifest"?, "keep_extension"?, "method_overrides"?}]`（1〜2 件。`polarity` と `raw_dir`（`dataset_root` 相対）は
         必須で重ならない。`sample_manifest` の既定は `<raw_dir>/sample-manifest.tsv`）。`units` とトップの
         単位の項目は混ぜられない。相対パスは `dataset_root` 基準。
         知らない項目は `PIPELINE_REQUEST_INVALID`（`details.unknown_keys`）。消えた下流の項目
@@ -72,6 +73,13 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
         （`include` を問わない）の注入順の中央（偶数なら小さい方）にする。注入順は実験情報シートの
         `injection_order`、1 件でも欠ければファイル名順（`injection_order_source: "filename"`）。`"method"` は
         メソッドの宣言のまま。resume では変えられない（`NEW_PIPELINE_REQUIRED`）。
+        `method_overrides`（単位ごと）: `{Console のキー: 値}`。メソッドの原本は変えず、実効メソッドの値を
+        上書きする（例 `{"Minimum peak height": 50000, "N percent detected in one group": 50}`）。同じ値の
+        受け先を持つ別名が原本にあれば、それも同じ値にする。Console が読むキーと型（MsdialWorkbench afd5f95 の
+        ConfigParser）で検査し、知らないキー（`details.suggestions` に近い綴り）・型に合わない値（`Minimum peak
+        height` は整数。`1e5` は不可）・ほかの欄が受け持つキー（`Ion mode`・ライブラリやファイルのパス。
+        `Alignment reference file ID` は `alignment_reference="method"` のときだけ）・計画が自分で書くキーと
+        重なるものは `PIPELINE_REQUEST_INVALID`。上書きが変われば別の run になり、resume では変えられない。
     request_id:
         冪等性キー。同じ内容の再送は同じ結果、別内容は `IDEMPOTENCY_CONFLICT`。
 
@@ -81,7 +89,9 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     `PIPELINE_REQUEST_INVALID`。ただしファイルの下流の項目は読み飛ばして警告 `REQUEST_FILE_DOWNSTREAM_IGNORED`
     （Console は回す）、明示の `units` に負けたファイルのトップの単位のキーは警告 `REQUEST_FILE_UNIT_KEYS_IGNORED`。
 
-    戻り値の `resolved.units.<極性>`: `method`（`source_path` / `sha256`）・`lbm`（msp_then_lbm ではファイル名・
+    戻り値の `resolved.units.<極性>`: `method`（`source_path` / `sha256` / 結果を大きく変えるキーの実効値
+    `key_params` と宣言の無い（Console の既定で走る）キー `key_params_undeclared` / 上書きしたキーの
+    `user_overrides`（`{"from": 原本の値か null, "to": 値}`））・`lbm`（msp_then_lbm ではファイル名・
     sha256・出どころだけ）・`polarity`（`value` / `source`）・`library_mode`・`msp`（ファイル名・sha256・出どころ、
     msp_then_lbm では `priority`。置き場所は載せない）・`alignment_reference`（`file_id`・`sample_file`・
     `injection_order_source`・`method_value`。この欄の無い古い計画を再利用した run では null）・msp_only /
@@ -148,7 +158,9 @@ def pipeline_status(pipeline_path: str, include_details: bool = False) -> str:
         `stage_statuses` / `errors` / `needs_input` / `warnings` で足りる）。
 
     `units` は極性ごとの状態（`pending` / `running` / `validated` / `failed`）。受領を書いた後は `receipt`
-    （検証を通った極性の解析フォルダ・照合した `.arf`・次に呼ぶ `load_dataset(...)`）も返す。旧形式
+    （検証を通った極性の解析フォルダ・照合した `.arf`・次に呼ぶ `load_dataset(...)`・`method_params`: 極性ごとの
+    実効メソッドの `key_params` / `undeclared` / `overrides`）も返す。値を変えて処理し直すのは、要求に
+    `method_overrides` を足した `pipeline_run`（新しい run）。旧形式
     （pipeline-run.v1）の run も読め、`legacy: true` と注意 1 行が付く（再開・取消はできない）。
 
     `status="running"` のときだけ worker の生存を確かめ、居なければ `observed_health="worker_missing"` と

@@ -223,10 +223,16 @@ class MethodCandidate:
 
 # 候補どうしの差を読むのに要る少数キー。全キー（実測 287 行 / 11.7 KB）を候補ごとに
 # 返すと戻り値が肥大する。綴りは実ファイル（param_POS_generated.txt）準拠。
+#: ピークの拾い方とアライメントの足切り（`Minimum peak width` / `Mass slice width` /
+#: `Force insert peaks in gap filling` / `Peak count filter` / `N percent detected in one group`）は
+#: 特徴の数と gap-fill の割合を大きく変えるので含める（2026-11-17 ST003750 で、既定のままの
+#: 足切りなしが 81,266 スポットの過剰な分割を生んだ）。
 KEY_PARAM_KEYS: tuple[str, ...] = (
     "Ion mode",
     "Target omics",
     "Minimum peak height",
+    "Minimum peak width",
+    "Mass slice width",
     "Retention time begin",
     "Retention time end",
     "MS1 mass range begin",
@@ -234,6 +240,9 @@ KEY_PARAM_KEYS: tuple[str, ...] = (
     "MS1 tolerance for centroid",
     "Retention time tolerance for alignment",
     "MS1 tolerance for alignment",
+    "Force insert peaks in gap filling",
+    "Peak count filter",
+    "N percent detected in one group",
     "Searched adduct ions",
 )
 
@@ -268,6 +277,16 @@ def extract_key_params(method_keys: dict[str, str]) -> dict[str, str]:
         else:
             out[key] = value
     return out
+
+
+def undeclared_key_params(method_keys: dict[str, str]) -> list[str]:
+    """`KEY_PARAM_KEYS` のうちメソッドに宣言の無い（空の）キー。Console はその既定値で走る。
+
+    既定値そのものは書かない（`ParameterBase` の既定を機種別のパラメータが上書きしうるので、
+    推測の値を事実として見せない）。
+    """
+    return [key for key in KEY_PARAM_KEYS
+            if key != ION_MODE_KEY and not (method_keys.get(key.lower()) or "").strip()]
 
 
 def read_method_keys(path: Path) -> dict[str, str]:

@@ -35,12 +35,14 @@ from pathlib import Path
 
 from metabolomix.analysis.sample_manifest import parse_manifest
 from metabolomix.console import job_manager
+from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError, atomic_write_json
 from metabolomix.pipeline import inputs as inputs_mod
 from metabolomix.pipeline import request as request_mod
 from metabolomix.pipeline import store
 
 __all__ = [
+    "unit_method_params",
     "PIPELINE_PATH_PLACEHOLDER",
     "RECEIPT_OUTPUT_NAME",
     "RECEIPT_RELATIVE_PATH",
@@ -309,6 +311,31 @@ def _samples(pipeline_root: Path, record: dict, request: dict | None, polarity: 
     return out
 
 
+def unit_method_params(unit_root: Path, inputs: dict) -> dict | None:
+    """単位が Console に渡した実効メソッドの、結果を大きく変えるキーの値。
+
+    `key_params` は実効メソッドの値（`method_file.KEY_PARAM_KEYS`）、`undeclared` は宣言の無い
+    （Console の既定で走る）キー、`overrides` は要求の `method_overrides` が変えたキー
+    （`{"from": 原本の値か null, "to": 値}`）。実効メソッドをまだ書いていない・読めない単位は None。
+    受領を書く前の run（古い run を含む）でも、実効メソッドのファイルから読み直せる。
+    """
+    method = (inputs or {}).get("method") or {}
+    rel = method.get("effective_relative_path")
+    path = Path(unit_root) / rel if rel else None
+    # `read_method_keys` は無いファイルを空の辞書で返す。それを「全部未宣言」と見せない。
+    if path is None or not path.is_file():
+        return None
+    try:
+        keys = method_file_mod.read_method_keys(path)
+    except OSError:
+        return None
+    out = {"key_params": method_file_mod.extract_key_params(keys),
+           "undeclared": method_file_mod.undeclared_key_params(keys)}
+    if method.get("user_overrides"):
+        out["overrides"] = method["user_overrides"]
+    return out
+
+
 def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
                   polarity: str, unit: dict, warnings: list[dict]) -> dict:
     status = store.unit_status(record, polarity)
@@ -343,7 +370,8 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
         "alignment": outputs.get("alignment"),
         "method": {"file": _file_name(method.get("source_path")),
                    "sha256": method.get("sha256"),
-                   "effective_sha256": method.get("effective_sha256")},
+                   "effective_sha256": method.get("effective_sha256"),
+                   **(unit_method_params(unit_root, inputs) or {})},
         "library": _library(inputs),
         # Console の版は欄に置かない: ジョブ（analysis-job.json）は版を記録しないので、
         # 置けばいつも null になる。実行体は名前と sha256 で特定する。

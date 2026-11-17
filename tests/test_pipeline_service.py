@@ -251,9 +251,14 @@ def test_plan_receipt_shows_the_resolved_settings_per_unit(tmp_path, monkeypatch
                              "alignment_reference"}
     assert resolved["library_mode"] == "auto"
     assert resolved["msp"] == {"file": None, "sha256": None, "source": "not_used"}
+    # 結果を大きく変えるキー（KEY_PARAM_KEYS）の実効値と、宣言の無いキーは起動前に見せる。
+    assert "Minimum peak height" in (resolved["method"]["key_params"]
+                                     | dict.fromkeys(resolved["method"]["key_params_undeclared"]))
+    assert "user_overrides" not in resolved["method"]   # 上書きが無ければ鍵ごと出さない
     text = json.dumps(receipt, ensure_ascii=False)
     assert "raw_stat" not in text and "entries" not in text
-    assert len(text) < 1500, len(text)
+    # 上限は KEY_PARAM_KEYS（16 キー）の値と未宣言の一覧を載せた分だけ広げた（2026-11-17）。
+    assert len(text) < 2200, len(text)
 
     # 起動する側（pipeline_run）の要約は最小のまま。
     assert "resolved" not in service._dispatch_summary(

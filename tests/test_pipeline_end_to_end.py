@@ -65,6 +65,19 @@ def test_single_polarity_run_ends_with_receipt(pipeline_harness):
     assert status["receipt"]["next"] == \
         f'load_dataset(pipeline_path="{str(root).replace(chr(92), "/")}", polarity="negative")'
 
+    # 実効メソッドの主なキー（受領と状態の両方。上書きが無ければ overrides の鍵は出さない）。
+    method = receipt["units"]["negative"]["method"]
+    assert method["key_params"]["Ion mode"].lower() == "negative"
+    assert "Minimum peak height" in method["undeclared"]
+    assert "overrides" not in method
+    assert status["receipt"]["method_params"]["negative"]["key_params"] == method["key_params"]
+
+    # load_dataset の入口（open_dataset）も同じものを返す。
+    from metabolomix.dataset.opening import _unit_method_params
+    from metabolomix.pipeline import session_handoff
+    unit_run = session_handoff.resolve_unit(root, "negative")
+    assert _unit_method_params(unit_run) == status["receipt"]["method_params"]["negative"]
+
 
 def test_two_polarity_run_has_two_analysis_folders(pipeline_harness):
     run = pipeline_harness.start(two_polarity=True)
