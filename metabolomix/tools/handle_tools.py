@@ -204,7 +204,9 @@ def load_dataset(directory: str | None = None, mztab_path: str | None = None,
 
     戻り値: `dataset_handle`・`assay_kind`・読んだアダプタ・選んだ `.arf`・ライブラリ（ファイル名と sha256）・
     `caveat`（意味論の要約。未読でその種別にまだ出していないときだけ。種別の確定後の最初の 1 回は
-    `record_objective` が運ぶ）・`summary`・`sample_counts`・`overview`・`next`。概観の比較と PCA は `result_id`
+    `record_objective` が運ぶ）・`summary`・`sample_counts`・`overview`・`next`。pipeline の run の単位なら
+    `processing`（Console に渡した実効メソッドの `key_params`・宣言の無い `undeclared`・上書きの `overrides`。
+    変えて処理し直すのは `pipeline_run` の `request.method_overrides`）。概観の比較と PCA は `result_id`
     で掘れるが直近の結果にはしない。欄の意味、ハンドルの並行・待ち、種別の引き継ぎは
     `docs_read(topic="reanalysis", section="データセットのハンドル")`。
     """
@@ -501,6 +503,9 @@ def _load_now(*, directory: str | None = None, mztab_path: str | None = None,
         **({"library_note": note} if note else {}),
         "library_record": public_view(ds.library_record),
         "arf2": Path(arf2).name if arf2 else None,
+        # pipeline の run の単位なら、Console に渡した実効メソッドの主なキー（ピーク高・足切り・
+        # 上書き）。変えて処理し直すのは pipeline_run の request.method_overrides。
+        **({"processing": opened.method_params} if opened.method_params else {}),
         "dcl": Path(dcl).name if dcl else None,
         "reused_base": opened.reused_base,
         "open_handles": len(handles.registry.list()),

@@ -100,7 +100,17 @@ worker 自身の確かめは「workerが1回分を進める経路」の節(手�
 手順 5 の `_resolved_settings` は `plan_pipeline` の発送 receipt にだけ足す(`_dispatch_summary(include_resolved=True)`)。
 載せるのは解決済みの method(`source_path` / `sha256`)・LBM・polarity(`value` / `source`)・`library_mode`・MSP(ファイル名・
 sha256・出どころ。置き場所は載せない)・`alignment_reference` だけで、`raw_stat`・`entries`・`overrides` などの中間データは
-`record["inputs"]` に残す。`pipeline_run` の receipt は最小のまま。
+`record["inputs"]` に残す。method には結果を大きく変えるキー(`metabolomix/console/method_file.py` の `KEY_PARAM_KEYS`)の実効値
+`key_params`・宣言の無いキー `key_params_undeclared`・要求の上書き `user_overrides` も載せる。`pipeline_run` の receipt は最小のまま。
+
+要求の `method_overrides`(単位のキー。`{Console のキー: 値}`): `metabolomix/pipeline/request.py` の `resolve_request()` が
+`metabolomix/console/method_keys.py` の `normalize_overrides()` でキーと型を検査し(照合表は MsdialWorkbench afd5f95 の
+`ConfigParser.cs` から。Console は知らないキーと型に合わない値を黙って捨てる)、`{表記の綴り: 文字列}` に正規化して要求に保存する
+(要求の hash に入るので、上書きが変われば別の run。空の `{}` は省いたのと同じ)。`metabolomix/pipeline/inputs.py` の
+`inspect_inputs()` はメソッドを読んだ直後に上書きを当て(原本に宣言のある別名も同じ値にする。`alias_keys()`)、以後の解決
+(LBM・MSP・足切り)は上書き後の値を見る。計画が自分で書くキー(ライブラリ・パスの絶対化・アライメントの参照)と重なれば
+`PIPELINE_REQUEST_INVALID`。上書きは計画の `method.overrides` に入り、`stage_inputs()` が実効メソッドへ書く(原本は変えない)。
+計画の指紋にも入る。
 
 `library_mode="msp_only"`: LBM を解決せず(`Lbm file path` は空)、研究室の参照ライブラリ(.msp)を `msp_file` か極性の設定
 (`[library] msp_positive` / `msp_negative`)から決めて実効メソッドの `Msp file path` に書く。メソッドが宣言する Text DB と
@@ -152,6 +162,9 @@ hash も完了済み run の再利用も変わらない。ただし古い要求�
 5.    └─ metabolomix/pipeline/receipt.py  read_receipt()
 6.    └─ [失敗・取消で終わった工程があるとき] metabolomix/pipeline/recovery.py  _stage_errors()
 7.       └─ metabolomix/pipeline/receipt.py  stage_error_summary()
+
+受領の要約の `method_params` は `metabolomix/pipeline/receipt.py` の `unit_method_params()` が単位の実効メソッドを読み直して
+作る(受領より前の run も同じに見える)。`load_dataset` の `processing` も同じもの。
 
 `load_run` は読取専用で、このツールは `pipeline-run.json` を書き換えない。`status="running"` のときだけ `same_process` で
 worker identity の生存を確かめ、結果は `status` を変えずに `observed_health` で返す。単位ごとの状態(`units`)と、受領があれば

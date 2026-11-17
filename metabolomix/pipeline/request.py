@@ -7,9 +7,9 @@ pipeline は「生データ → MS-DIAL Console → 検証済みの解析フォ�
 **形は 2 つ受け、保存は 1 つ（v3 の正規形）にする。**
 
 - 1 極性の形（今までの形）: `polarity` `method_file` `lbm_file` `msp_file` `sample_manifest`
-  をトップに置く。正規化で `units: [{"raw_dir": ".", …}]` の 1 単位になる。
+  `method_overrides` をトップに置く。正規化で `units: [{"raw_dir": ".", …}]` の 1 単位になる。
 - 2 極性の形: `units: [{"polarity", "raw_dir", "method_file"?, "lbm_file"?, "msp_file"?,
-  "sample_manifest"?, "keep_extension"?}]`（1〜2 件。`polarity` と `raw_dir` は必須、
+  "sample_manifest"?, "keep_extension"?, "method_overrides"?}]`（1〜2 件。`polarity` と `raw_dir` は必須、
   `raw_dir` は `dataset_root` 相対、極性もフォルダも重ならない）。`units` があるときに
   トップへ単位のキーを置くと `PIPELINE_REQUEST_INVALID`。
 
@@ -37,6 +37,11 @@ pipeline は「生データ → MS-DIAL Console → 検証済みの解析フォ�
 v3。`"pipeline-request.v2"`（実データ 0 本で廃止）は `PIPELINE_REQUEST_INVALID`
 （`details.removed_schema`）。
 
+**`method_overrides`**（単位のキー。`{Console のキー: 値}`）はメソッドの原本の値を実効メソッドで
+上書きする（原本は書き換えない）。キーと値は `console.method_keys.normalize_overrides` が Console の
+`ConfigParser` の照合表で検査し、`{表記の綴り: 文字列}` に正規化して保存する（同じ上書きは書き方が
+違っても同じ内容 hash）。空の `{}` は省いたのと同じ（正規形に載せない。既存の run の hash を動かさない）。
+
 resume で変えられるのは試料の対応表（`sample_manifest`）だけ（1 極性の run はトップの
 `sample_manifest`、2 極性は `units: {<極性>: {"sample_manifest": …}}`）。上流の条件を
 変えるなら新しい run（`NEW_PIPELINE_REQUIRED`）。
@@ -47,6 +52,7 @@ import copy
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+from metabolomix.console.method_keys import MethodOverrideError, normalize_overrides
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.core.polarity_names import canonical_polarity
 
@@ -96,10 +102,17 @@ _SHARED_KEYS = frozenset({
 })
 
 #: 1 極性の形でトップに置く単位のキー。
-_UNIT_KEYS = frozenset({"polarity", "method_file", "lbm_file", "msp_file", "sample_manifest"})
+_UNIT_KEYS = frozenset({"polarity", "method_file", "lbm_file", "msp_file", "sample_manifest",
+                        "method_overrides"})
+
+#: 単位の正規形で、空なら載せないキー（載せると既存の run の内容 hash が動く）。
+_UNIT_OPTIONAL_KEYS = frozenset({"method_overrides"})
 
 #: `units[i]` が受けるキー。
 _UNIT_ENTRY_KEYS = _UNIT_KEYS | {"raw_dir", "keep_extension"}
+
+#: 単位の正規形に必ずあるキー。
+_UNIT_NORMALIZED_KEYS = _UNIT_ENTRY_KEYS - _UNIT_OPTIONAL_KEYS
 _UNIT_REQUIRED_KEYS = frozenset({"polarity", "raw_dir"})
 
 #: 要求（明示・ファイル）が受けるトップのキー。
@@ -133,7 +146,7 @@ _SHARED_DEFAULTS = {
 #: 明示 null を拒むキー（null は「無効化」を意味する設定だけの語彙。`sample_manifest` だけが受ける）。
 _NULL_REJECTED_KEYS = frozenset({
     "method_file", "lbm_file", "polarity", "keep_extension", "output_root",
-    "library_mode", "msp_file", "alignment_reference", "units", "raw_dir",
+    "library_mode", "msp_file", "alignment_reference", "units", "raw_dir", "method_overrides",
 })
 
 _MAX_UNITS = 2
@@ -204,7 +217,7 @@ def _normalize_raw_dir(value, index: int) -> str:
 
 
 def _unit_entry(source: dict, raw_dir: str) -> dict:
-    return {
+    entry = {
         "polarity": canonical_polarity(source.get("polarity")),
         "raw_dir": raw_dir,
         "method_file": source.get("method_file"),
@@ -213,6 +226,23 @@ def _unit_entry(source: dict, raw_dir: str) -> dict:
         "sample_manifest": source.get("sample_manifest"),
         "keep_extension": source.get("keep_extension"),
     }
+    # 空の上書きは載せない（既存の run と同じ内容 hash に保つ）。検査と正規化は
+    # `_validate_units`（共有の `alignment_reference` を見るため）。
+    if source.get("method_overrides") != {} and source.get("method_overrides") is not None:
+        entry["method_overrides"] = copy.deepcopy(source["method_overrides"])
+    return entry
+
+
+def _check_method_overrides(unit: dict, index: int, *, alignment_reference: str) -> None:
+    """単位の `method_overrides` を Console の照合表で検査し、その場で正規化する。"""
+    if "method_overrides" not in unit:
+        return
+    try:
+        unit["method_overrides"] = normalize_overrides(
+            unit["method_overrides"],
+            alignment_reference_from_method=(alignment_reference == "method"))
+    except MethodOverrideError as exc:
+        _fail(f"units[{index}].method_overrides: {exc.message}", index=index, **exc.details)
 
 
 def _units_from_list(units, *, origin: str) -> tuple[list, list]:
@@ -233,7 +263,8 @@ def _units_from_list(units, *, origin: str) -> tuple[list, list]:
         _reject_disallowed_explicit_null(entry, where=f"units[{index}]の")
         normalized.append(_unit_entry(entry, _normalize_raw_dir(entry["raw_dir"], index)))
         sources.append({key: (origin if key in entry else "default")
-                        for key in sorted(_UNIT_ENTRY_KEYS)})
+                        for key in sorted(_UNIT_ENTRY_KEYS)
+                        if key not in _UNIT_OPTIONAL_KEYS or key in entry})
     return normalized, sources
 
 
@@ -245,8 +276,12 @@ def _validate_units(data: dict) -> None:
     seen_polarity: dict = {}
     seen_raw_dir: dict = {}
     for index, unit in enumerate(units):
-        if not isinstance(unit, dict) or set(unit) != _UNIT_ENTRY_KEYS:
+        if not isinstance(unit, dict) or not (
+                _UNIT_NORMALIZED_KEYS <= set(unit) <= _UNIT_ENTRY_KEYS):
             _fail(f"units[{index}]の形が正規形ではありません。", index=index)
+        _check_method_overrides(unit, index,
+                                alignment_reference=data.get("alignment_reference",
+                                                             "median_injection"))
         polarity = unit["polarity"]
         if polarity is not None and polarity not in _POLARITY_VALUES:
             _fail(f"polarityが不正です（positive / negative。pos / neg / + / - も可）: {polarity!r}",
@@ -386,7 +421,8 @@ def _layer_units(explicit: dict, from_file: dict) -> tuple[list, list]:
     picked = {key: _pick(key) for key in _UNIT_KEYS}
     unit = _unit_entry({key: value for key, (value, _src) in picked.items()}, ".")
     sources = {key: picked[key][1] if key in picked else "default"
-               for key in sorted(_UNIT_ENTRY_KEYS)}
+               for key in sorted(_UNIT_ENTRY_KEYS)
+               if key not in _UNIT_OPTIONAL_KEYS or key in unit}
     return [unit], [sources]
 
 
@@ -484,6 +520,7 @@ def unit_request(request: dict, index: int, dataset_root: Path) -> dict:
     flat = {key: request.get(key) for key in _SHARED_KEYS}
     for key in _UNIT_KEYS:
         flat[key] = unit.get(key)
+    flat["method_overrides"] = dict(unit.get("method_overrides") or {})
     if unit.get("keep_extension"):
         flat["keep_extension"] = unit["keep_extension"]
     flat["raw_dir"] = unit.get("raw_dir") or "."

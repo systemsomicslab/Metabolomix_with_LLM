@@ -51,6 +51,11 @@
   - 解析フォルダが pipeline の run の中にあれば、`directory=` で開いても run の試料の対応表（実験情報シートと受領）から群と役割を
     当てる（注記が出る）。その単位が検証を通っていなければ、`pipeline_path` と同じ探索専用の印（`exploratory_reason` に run と
     単位の名前）も付く。
+  - run の単位なら `load_dataset` は `processing` も返す: Console に渡した実効メソッドの `key_params`（最小ピーク高・ピーク幅・
+    マススライス幅・RT と m/z の範囲・アライメントの許容幅・gap-fill の強制・`Peak count filter`・`N percent detected in one
+    group`・付加体）、`undeclared`（メソッドに宣言が無く Console の既定で走ったキー。既定値そのものは書かない）、`overrides`
+    （要求の `method_overrides` が変えたキーの `from` / `to`）。特徴の数・gap-fill の割合・1 化合物の分割はこれらで大きく変わる。
+    値を変えて処理し直すのは `pipeline_run` の `request.method_overrides`（新しい run）。
 - **MS/MS の実スペクトルは `.dcl`**（`dcl` トピック）。`.arf` のセルの MS/MS の有無は取得の参照があることだけを示す。
 - **最初の概観**。`dataset_overview`（`load_dataset(overview=True)` の `overview` も同じ）は品質 → 全体 → クラス → 分子種の
   4 段の事実（ID つき）。2 群の向きは仮、クラスの段は付加体の選別の後だけ。§11.9。

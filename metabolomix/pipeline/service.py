@@ -124,6 +124,10 @@ def _plan_fingerprint(plan: dict) -> str:
     msp_sha256 = (plan.get("msp") or {}).get("sha256")
     if msp_sha256:
         content["msp_sha256"] = msp_sha256
+    # 要求の上書きは Console が読む実効メソッドを変えるので「入力」に入れる（無ければ指紋は変えない）。
+    user_overrides = (plan.get("method") or {}).get("user_overrides")
+    if user_overrides:
+        content["method_overrides"] = {key: entry["to"] for key, entry in user_overrides.items()}
     return canonical_hash(content)
 
 
@@ -208,8 +212,12 @@ def _resolved_settings(inputs: dict) -> dict:
                         "sha256": lbm.get("sha256")}
     else:
         resolved_lbm = {"path": lbm.get("path"), "sha256": lbm.get("sha256")}
+    resolved_method = {"source_path": method.get("source_path"), "sha256": method.get("sha256")}
+    for key in ("user_overrides", "key_params", "key_params_undeclared"):
+        if method.get(key) is not None:
+            resolved_method[key] = method[key]
     resolved = {
-        "method": {"source_path": method.get("source_path"), "sha256": method.get("sha256")},
+        "method": resolved_method,
         "lbm": resolved_lbm,
         "polarity": {"value": polarity.get("value"), "source": polarity.get("source")},
         "library_mode": library_mode,
