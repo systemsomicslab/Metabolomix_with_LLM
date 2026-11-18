@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -1212,7 +1213,7 @@ def test_analysis_run_v1_unchanged_golden(data, tmp_path):
     handle = _open(data)
     out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle))
     assert list(out) == ["status", "schema", "rule_hash", "merge_split", "input_fingerprint",
-                         "comparison", "group_ref", "group_test", "analyses", "note"]
+                         "comparison", "group_ref", "group_test", "analyses", "record", "note"]
     assert out["schema"] == "analysis-result.v1"
     assert list(out["analyses"][0]) == [
         "analysis_id", "n_features_in", "n_features_out", "bh_population_n", "n_rows", "n_tested",
@@ -1354,20 +1355,79 @@ def test_analysis_run_v2_exclusions_compare_names_and_ids_on_one_key(tmp_path):
     assert warn == [{"code": "dataset_exclusions_not_in_spec", "n_samples": 1, "n_features": 0}]
 
 
-def test_analysis_run_does_not_touch_session_or_reports(tmp_path):
+def test_analysis_run_does_not_touch_session_and_writes_only_its_record(tmp_path):
     import copy
     state = _v2_state(tmp_path)
     before = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
               state.sample_names[:], state.feature_matrix.copy())
     handle_before = session_state.session.current_handle_id
-    R.dataset_analysis_run(_v2_spec(analyses=[{"analysis_id": "cmp", "kind": "compare"},
-                                              {"analysis_id": "pc", "kind": "pca"}], primary="cmp"))
+    out = json.loads(R.dataset_analysis_run(_v2_spec(
+        analyses=[{"analysis_id": "cmp", "kind": "compare"}, {"analysis_id": "pc", "kind": "pca"}],
+        primary="cmp")))
     after = (dict(state.__dict__.get("results", {}) or {}), copy.deepcopy(state.stat_matrices),
              state.sample_names[:], state.feature_matrix)
     assert after[:3] == before[:3] and (after[3] == before[3]).all()
     assert session_state.session.dataset is state
     assert session_state.session.current_handle_id == handle_before
-    assert not (tmp_path / "analysis" / "reports").exists()
+    reports = tmp_path / "analysis" / "reports"
+    written = [p.relative_to(reports).as_posix() for p in reports.rglob("*") if p.is_file()]
+    assert written == [f"stats/{out['record']['record_id']}.json"]
+
+
+def test_analysis_run_v2_writes_a_record_per_call(tmp_path):
+    """呼ぶたびに reports/stats/ へ記録を 1 件（spec・正規化した spec・rule_hash・ハンドル・戻り値・時刻）。"""
+    _v2_state(tmp_path)
+    spec = _v2_spec()
+    first = json.loads(R.dataset_analysis_run(spec))
+    second = json.loads(R.dataset_analysis_run(spec))
+    assert first["record"]["written"] is True and second["record"]["written"] is True
+    assert first["record"]["path"] != second["record"]["path"]
+    stats = tmp_path / "analysis" / "reports" / "stats"
+    assert sorted(p.name for p in stats.iterdir()) == sorted(
+        f"{r['record']['record_id']}.json" for r in (first, second))
+    record = _strict_loads(Path(first["record"]["path"]).read_text(encoding="utf-8"))
+    assert record["schema"] == "lipidmix.stats-record.v1" and record["step"] == "analysis_run"
+    assert record["record_id"] == first["record"]["record_id"] and record["created_at"]
+    assert record["settings"]["spec"] == spec
+    assert record["settings"]["normalized_spec"]["schema"] == "analysis-spec.v2"
+    assert record["settings"]["rule_hash"] == first["rule_hash"]
+    assert record["inputs"]["input_fingerprint"] == first["input_fingerprint"]
+    assert {"dataset_handle", "source_kind", "source", "polarity", "assay_kind"} <= record["inputs"].keys()
+    assert record["inputs"]["dataset_handle"] == session_state.session.current_handle_id
+    returned = {k: v for k, v in first.items() if k != "record"}
+    assert record["summary"] == returned
+    assert "path" not in record     # 場所は戻り値だけ（記録の中身は解析フォルダを動かしても変わらない）
+
+
+def test_analysis_run_v1_record_names_the_handle(data, tmp_path):
+    handle = _open(data)
+    out = json.loads(R.dataset_analysis_run(_spec(data), dataset_handle=handle,
+                                            output_path=str(tmp_path / "v1.json")))
+    record = json.loads(Path(out["record"]["path"]).read_text(encoding="utf-8"))
+    assert Path(out["record"]["path"]).parent == data["mztab"].parent / "reports" / "stats"
+    assert record["step"] == "analysis_run" and record["settings"]["rule_hash"] == out["rule_hash"]
+    assert record["settings"]["spec"] == _spec(data)
+    assert record["inputs"]["dataset_handle"] == handle
+    assert record["inputs"]["source"] == data["mztab"].name
+    assert record["summary"]["output_path"] == out["output_path"]
+    assert record["summary"]["analyses"] == out["analyses"]
+
+
+def test_analysis_run_without_a_record_place_still_succeeds(tmp_path):
+    """外部の行列でデータセットも [paths] reports_dir も無ければ、記録は書かずに理由を返す（解析は成功）。"""
+    matrix = tmp_path / "m.tsv"
+    matrix.write_text("feature_id\t" + "\t".join(SAMPLES) + "\n"
+                      + "".join(f"F{i}\t" + "\t".join(str(v + i) for v in BASE) + "\n" for i in range(3)),
+                      encoding="utf-8")
+    groups = tmp_path / "g.tsv"
+    groups.write_text("sample\tgroup\n" + "".join(f"{s}\t{s[:2]}\n" for s in SAMPLES), encoding="utf-8")
+    out = json.loads(R.dataset_analysis_run({
+        "input": {"source": "tsv", "matrix_path": str(matrix)},
+        "groups": {"source": "tsv", "path": str(groups)},
+        "comparison": {"reference": "HC", "test": "RA"},
+        "analyses": [{"analysis_id": "main", "test": {"kind": "welch"}}]}))
+    assert out["status"] == "success", out
+    assert out["record"]["written"] is False and out["record"]["reason"].startswith("NO_REPORT_DIR")
 
 
 # ---------- 2026-11-13 の事実確認（担当 1: MS/MS とライブラリ） ----------

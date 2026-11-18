@@ -27,7 +27,8 @@
 
 前提: `input.source=dataset` ならデータセット（ハンドルか対話のセッション。無ければ `missing_state`）。外部の表
 （`tsv` / `maf` / `mwtab` / `xlsx`）なら要らない。状態変更: なし（`dataset_alignment_qc` がハンドルに持つ最後の結果も
-読まない）。`output_path` を渡すと結果の JSON を書く。
+読まない）。呼ぶたびに `reports/stats/` へ記録を 1 件書く（`_write_run_record()`。書けなくても解析は成功）。
+`output_path` を渡すと結果の JSON を書く。
 
 1. metabolomix/tools/reanalysis_tools.py  dataset_analysis_run()
 2. ├─ metabolomix/tools/_holder.py  resolve_holder()
@@ -73,7 +74,10 @@
 42. ├─ [output_path なし] metabolomix/analysis/stats_run_summary.py  first_by_p()
 43. ├─ metabolomix/tools/reanalysis_tools.py  _aggregate_summary()
 44. ├─ [集約の要約を切った] metabolomix/tools/reanalysis_tools.py  _aggregate_cut_notes()
-45. └─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
+45. ├─ [correlate] metabolomix/tools/reanalysis_tools.py  _correlate_summary()
+46. └─ metabolomix/tools/reanalysis_tools.py  _write_run_record()
+47.    ├─ metabolomix/tools/reanalysis_tools.py  _handle_identity()
+48.    └─ metabolomix/analysis/stats_records.py  write_stats_record()
 
 - 効かない設定は `normalize_spec(spec, notes=...)` が捨てて `notes` に書く（`rule_hash` に入らない）。`correction=none` の
   `bh_population`・`thresholds.q`、`_uses_injection_order()` が偽の `injection_order`、`_uses_covariates()` が偽の
@@ -87,7 +91,7 @@
   `_aggregate_summary()` がリストごとに切り、`_aggregate_cut_notes()` が切ったものだけを `notes` に名指す（§2 の戻り値（v1））。
 
 `spec["schema"] == "analysis-spec.v2"` は `resolve_holder()` のあと v1 の鎖でなく次へ振り分ける（データセットは常に要る。
-除外は spec の `input` だけで、`dataset_exclude` の除外は読まない。状態変更・記録なし。§2.1）。
+除外は spec の `input` だけで、`dataset_exclude` の除外は読まない。状態変更なし。記録は v1 と同じ。§2.1）。
 
 1. metabolomix/tools/reanalysis_tools.py  _analysis_run_v2()
 2. ├─ metabolomix/analysis/stats/spec_v2.py  normalize_spec_v2()
@@ -97,7 +101,8 @@
 6. │     ├─ [compare / composition] metabolomix/analysis/stats_run_summary.py  confounding_summary()
 7. │     └─ [composition] metabolomix/analysis/stats_run_summary.py  composition_warnings()
 8. ├─ metabolomix/analysis/stats_run_summary.py  inline_rows()
-9. └─ metabolomix/tools/reanalysis_tools.py  write_result()
+9. ├─ metabolomix/tools/reanalysis_tools.py  write_result()
+10. └─ metabolomix/tools/reanalysis_tools.py  _write_run_record()
 
 `confounding_summary()` が compare / composition の要約の `confounding`（composition は内側の比較のもの）を、
 `composition_warnings()` が composition の `warnings` に内側の比較の注意を重ねずに足す（§2.1）。

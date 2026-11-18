@@ -258,8 +258,9 @@ subject_source, groups: {群: 個体数}, quant, steps, warnings, record, next}`
     極性の塊（特徴の分け方と極性ごとの測定）が入る（統合でないデータセットの `matrix_id` は変わらない）。
 - `quant` は定量で作ったデータセット（内部標準で換算済み）のときだけ `{normalized, method, unit}`、それ以外は null。
 - `record` は `reports/stats/` への記録 1 件（`{written: true, record_id, path}`）。書けなければ `{written: false, reason}` で、
-  前処理は成功している。記録は追記専用（`lipidmix.stats-record.v1`: `step` は `preprocess` / `compare` / `pca`、`inputs`・
-  `parent_ids`・`settings`・`summary`）で、比較・PCA の記録は前処理の記録を `parent_ids` に持つ。
+  前処理は成功している。記録は追記専用（`lipidmix.stats-record.v1`: `step` は `preprocess` / `compare` / `pca` / `overview` /
+  `analysis_run`〔`dataset_analysis_run`。`reanalysis.md` §2〕、`inputs`・`parent_ids`・`settings`・`summary`）で、比較・PCA の記録は
+  前処理の記録を `parent_ids` に持つ。
 - **古くなる**: `dataset_exclude`・試料の表の更新（`dataset_set_sample_metadata`。`group` だけの変更も）・データの入れ替えで、
   登録した行列は古くなり（`matrix_id` を渡すと `missing_state`。`dataset_preprocess` からやり直す）、その行列から出した比較・
   PCA の結果も現在のものとして通らない。

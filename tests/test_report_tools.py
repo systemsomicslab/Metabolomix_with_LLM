@@ -209,6 +209,84 @@ class ReportEdgeCaseTests(unittest.TestCase):
         self.assertNotIn("status=draft", listing)
 
 
+#: 旧版の mtime（2026-11-18T14:30:12Z）と、それを .history/ の名前にした時刻。
+_OLD_MTIME = 1795012212
+_OLD_STAMP = "20261118T143012Z"
+
+
+class ReportHistoryTests(unittest.TestCase):
+    """上書きの前の版を reports/.history/<slug>.<旧版の mtime の UTC>.md へ移す（PM が段の境で版を選ぶ）。"""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        _open_analysis_dir(self.tmp)
+        self.enterContext(config_env(self.tmp, {}))
+        self.reports = self.tmp / "reports"
+        self.history = self.reports / notes.HISTORY_DIR
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _age(self, path):
+        os.utime(path, (_OLD_MTIME, _OLD_MTIME))
+
+    def test_overwrite_moves_the_old_version_with_its_mtime(self):
+        server.write_report("a-1", "DS", "## 結論\n古い本文")
+        self._age(self.reports / "a-1.md")
+        server.write_report("a-1", "DS", "## 結論\n新しい本文", status="final")
+        old = self.history / f"a-1.{_OLD_STAMP}.md"
+        self.assertTrue(old.is_file())
+        self.assertIn("古い本文", old.read_text(encoding="utf-8"))
+        self.assertEqual(int(old.stat().st_mtime), _OLD_MTIME)
+        self.assertIn("新しい本文", (self.reports / "a-1.md").read_text(encoding="utf-8"))
+        # 同じ秒の旧版がもう 1 つあれば -2 を付ける（上書きしない）
+        self._age(self.reports / "a-1.md")
+        server.write_report("a-1", "DS", "## 結論\n3 番目")
+        self.assertEqual(sorted(p.name for p in self.history.iterdir()),
+                         [f"a-1.{_OLD_STAMP}-2.md", f"a-1.{_OLD_STAMP}.md"])
+        self.assertIn("新しい本文", (self.history / f"a-1.{_OLD_STAMP}-2.md").read_text(encoding="utf-8"))
+
+    def test_same_content_is_not_rewritten(self):
+        server.write_report("a-1", "DS", "## 結論\n同じ")
+        self._age(self.reports / "a-1.md")
+        server.write_report("a-1", "DS", "## 結論\n同じ")
+        self.assertFalse(self.history.exists())
+        self.assertEqual(int((self.reports / "a-1.md").stat().st_mtime), _OLD_MTIME)
+
+    def test_read_report_and_the_index_ignore_history(self):
+        server.write_report("a-1", "DS", "## 結論\n古い")
+        server.write_report("a-1", "DS", "## 結論\n新しい", status="final")
+        # .history/ に別の ID のレポートがあっても索引に出さない
+        (self.history / "ghost.md").write_text(
+            "---\ntype: report\nanalysis_id: ghost\nstatus: draft\n---\n\nx\n", encoding="utf-8")
+        self.assertIn("新しい", server.read_report("a-1"))
+        listing = server.read_report()
+        self.assertEqual(listing.count("a-1"), 1)
+        self.assertIn("status=final", listing)
+        self.assertNotIn("ghost", listing)
+
+    def test_objective_update_keeps_only_the_version_before_the_call(self):
+        server.record_objective("exp-1", dataset="NEG", sub_questions=["最初"],
+                                add_subquestions=["作成と同時に足す"])
+        self.assertFalse(self.history.exists())       # 作成の呼び出しの途中の版は残さない
+        path = self.reports / "exp-1.objective.md"
+        before = path.read_text(encoding="utf-8")
+        self._age(path)
+        # 欄の更新と小問の追記を 1 回の呼び出しで（書き換えは 2 回）→ 残すのは呼ぶ前の版だけ
+        server.record_objective("exp-1", dataset="POS", add_subquestions=["追記"])
+        self.assertEqual([p.name for p in self.history.iterdir()], [f"exp-1.objective.{_OLD_STAMP}.md"])
+        self.assertEqual((self.history / f"exp-1.objective.{_OLD_STAMP}.md").read_text(encoding="utf-8"),
+                         before)
+        meta, subqs, _ = notes.parse_objective(path)
+        self.assertEqual(meta["dataset"], "POS")
+        self.assertEqual(len(subqs), 3)
+        # 何も変えない呼び出しは版を足さない
+        server.record_objective("exp-1", dataset="POS")
+        self.assertEqual(len(list(self.history.iterdir())), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 

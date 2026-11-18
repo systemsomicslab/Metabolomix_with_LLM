@@ -2,6 +2,7 @@
 
 write_report / read_report（ID を省くと一覧）/ save_figure。
 レポート先は `[paths] reports_dir`（あれば先）→ データセットの解析フォルダ配下 `reports/`（mcp_core）。
+上書きの前の版はその `.history/` へ移す（`notes.keep_history`。read_report と索引は見ない）。
 各ツールは `dataset_handle` で読み書きするハンドルを選ぶ（省略時は直近）。save_figure は `dataset_plot` が置いた
 `ds.figures` から描き、ファイルへの書き方は `plot_tools.write_figure_files`（`dataset_plot(output_path=...)` と共有）。
 deps: mcp_core / plot_tools（遅延 import）/ notes。
@@ -37,6 +38,7 @@ def write_report(
     """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する。
 
     body: frontmatter を除く Markdown 本文（見出しは自由）。所見が増えたら本文を作り直して呼び直す。
+    上書きの前の版は reports/.history/<slug>.<旧版の mtime の UTC>.md へ移す（中身が同じなら書かない）。
     置き場所: lipidmix.local.toml の [paths] reports_dir を優先し、書けなければ解析フォルダ配下 reports/。
     未設定なら解析フォルダ配下 reports/ だけ（リポジトリへは退避しない）。解析フォルダは直近のデータセット
     （か dataset_handle）のもの。設定の置き場所もデータセットも無ければ missing_state（load_dataset）。
@@ -74,6 +76,7 @@ def read_report(analysis_id: str | None = None, dataset_handle: str | None = Non
 
     dataset_handle: 解析フォルダを決めるハンドル（省けば直近）。
     候補の置き場所（解析フォルダ配下と退避先）に同じ analysis_id が複数あれば mtime が最新のものを使う。
+    上書きの前の版（`.history/`）は読まない。
     """
     holder = _resolve_holder(dataset_handle)
     if isinstance(holder, str):
@@ -134,6 +137,8 @@ def save_figure(kind: str, analysis_id: str, title: str | None = None,
                 result_id: str | None = None, dataset_handle: str | None = None,
                 contrast_id: str | None = None) -> str:
     """データセットの図を reports/figures/<analysis_id>_<kind>.png に保存する（報告書に埋め込む図）。
+
+    上書きの前の版（PNG と .svg）は reports/.history/<名前>.<旧版の mtime の UTC>.png へ移す（同じ図なら戻す）。
 
     `dataset_plot` が最後に作った図（`ds.figures[kind]`）を描く。一度も描いていなければ missing_state
     （`dataset_plot`）。画面に出すだけなら `dataset_plot`（`output_path` で任意の場所にも書ける）。戻りの相対パスは
@@ -374,8 +379,11 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder,
     from metabolomix.tools.plot_tools import write_figure_files
 
     kind = record["kind"]
-    out_path = _figures_dir(holder) / f"{notes.make_slug(analysis_id)}_{kind}.png"
-    written = write_figure_files(ds, record, out_path, title=title)
+    figures_dir = _figures_dir(holder)
+    out_path = figures_dir / f"{notes.make_slug(analysis_id)}_{kind}.png"
+    written = _write_keeping_history(
+        out_path, figures_dir.parent / notes.HISTORY_DIR,
+        lambda: write_figure_files(ds, record, out_path, title=title))
     both = "（同名の .svg も保存）" if len(written) > 1 else ""
     label = _LABELS[kind]
     origin = f" result_id={record['result_id']}" if record.get("result_id") else ""
@@ -384,6 +392,28 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder,
     if notes_out:
         text += "\nnotes: " + " ".join(notes_out)
     return text
+
+
+def _write_keeping_history(out_path, history_dir, write):
+    """`write()` で図を書く前に、旧版（PNG と同名の .svg）を `history_dir` へ移す。
+
+    書けなかったら旧版を戻す。書いた図が旧版と同じバイト列なら旧版を戻す（mtime も元のまま）。
+    """
+    import os
+
+    olds = [(path, notes.keep_history(path, history_dir))
+            for path in (out_path, out_path.with_suffix(".svg"))]
+    try:
+        written = write()
+    except BaseException:
+        for path, old in olds:
+            if old is not None and not path.exists():
+                os.replace(old, path)
+        raise
+    for path, old in olds:
+        if old is not None and path.is_file() and path.read_bytes() == old.read_bytes():
+            os.replace(old, path)
+    return written
 
 
 def _figures_dir(holder):

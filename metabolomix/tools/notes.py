@@ -7,6 +7,7 @@ MCP にも session にも依存しない純ロジック。`tools/reports.py` と
   書き出し（`dump_frontmatter`）と読み取り（`parse_frontmatter`）はこのモジュールの中で閉じ、
   往復で値が変わらないことをテストで縛る。
 - 書き込みは置き場ごとのロックファイルで直列にする（`write_note`）。
+- 上書きの前の版は置き場の `.history/` へ移す（`keep_history`。中身が同じなら書かない）。
 - 名前（`analysis_id`）は呼び出し側（LLM）由来なので、置き場の外へ出るものは `note_path`
   で弾く。
 """
@@ -14,6 +15,7 @@ MCP にも session にも依存しない純ロジック。`tools/reports.py` と
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 import os
 import re
@@ -208,19 +210,57 @@ def note_path(directory: str | Path, slug: str) -> Path:
     return path
 
 
-def write_note(directory: str | Path, slug: str, meta: dict, body: str) -> Path:
+#: 上書きの前の版の置き場（reports/ の直下。read_report・索引・目的の読み戻しは見ない）。
+HISTORY_DIR = ".history"
+
+
+def keep_history(path: str | Path, history_dir: str | Path) -> Path | None:
+    """`path` があれば `history_dir/<stem>.<旧版の mtime の UTC>[-n]<拡張子>` へ移し、移した先を返す（無ければ None）。
+
+    `os.replace` で移すので mtime は旧版のまま。同じ名前があれば `-2`・`-3` … を付ける。
+    """
+    path = Path(path)
+    if not path.is_file():
+        return None
+    history_dir = Path(history_dir)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = history_dir / f"{path.stem}.{stamp}{path.suffix}"
+    n = 2
+    while target.exists():
+        target = history_dir / f"{path.stem}.{stamp}-{n}{path.suffix}"
+        n += 1
+    os.replace(path, target)
+    return target
+
+
+def _same_text(path: Path, text: str) -> bool:
+    try:
+        return path.read_text(encoding="utf-8") == text
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def write_note(directory: str | Path, slug: str, meta: dict, body: str, *,
+               history: bool = True) -> Path:
     """frontmatter 付きノートを書き出す（ディレクトリは必要なら作成）。
 
+    既にあれば、中身が同じなら書かない（mtime も変えない）。違えば `history=True` のとき旧版を
+    `<directory>/.history/` へ移してから書く（`keep_history`）。`history=False` は同じ呼び出しの中で
+    書いたばかりのファイルを書き直すとき（途中の版を残さない）。
     slug の検証はロック取得（= mkdir）より**前**に行う。あとで検証すると、拒否した
     呼び出しが空の置き場だけを残す。
     """
     directory = Path(directory)
     path = note_path(directory, slug)
+    text = dump_frontmatter(meta) + "\n\n" + (body or "").strip() + "\n"
     with _directory_lock(directory):
-        path.write_text(
-            dump_frontmatter(meta) + "\n\n" + (body or "").strip() + "\n",
-            encoding="utf-8",
-        )
+        if path.is_file():
+            if _same_text(path, text):
+                return path
+            if history:
+                keep_history(path, directory / HISTORY_DIR)
+        path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -294,14 +334,14 @@ def write_objective(
     return write_note(directory, slug or objective_slug(analysis_id), meta, body)
 
 
-def update_objective_meta(path: str | Path, updates: dict) -> Path:
-    """frontmatter のみ更新し本文は温存する。"""
+def update_objective_meta(path: str | Path, updates: dict, *, history: bool = True) -> Path:
+    """frontmatter のみ更新し本文は温存する（`history` は `write_note` と同じ）。"""
     path = Path(path)
     meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     meta.update(updates)
     if "confirmed_objective" in updates:
         meta["confirmed"] = bool(updates["confirmed_objective"])
-    return write_note(path.parent, path.stem, meta, body)
+    return write_note(path.parent, path.stem, meta, body, history=history)
 
 
 def _append_under_section(body: str, header: str, new_line: str) -> str:
@@ -333,10 +373,12 @@ def _append_under_section(body: str, header: str, new_line: str) -> str:
     return "\n".join(out)
 
 
-def add_subquestions(path: str | Path, texts: list[str], *, initial: bool = False) -> Path:
+def add_subquestions(path: str | Path, texts: list[str], *, initial: bool = False,
+                     history: bool = True) -> Path:
     """創発的な小問を採番（既存 Q の最大+1）して本文に追記する。
 
     `initial=True` は「派生する小問」の節へ足す（小問を省いて作った目的に、後から最初の小問を足すとき）。
+    `history` は `write_note` と同じ。
     """
     path = Path(path)
     meta, subqs, body = parse_objective(path)
@@ -346,4 +388,4 @@ def add_subquestions(path: str | Path, texts: list[str], *, initial: bool = Fals
     for text in texts:
         new_body = _append_under_section(new_body, header, f"- Q{next_n}: {text}")
         next_n += 1
-    return write_note(path.parent, path.stem, meta, new_body)
+    return write_note(path.parent, path.stem, meta, new_body, history=history)

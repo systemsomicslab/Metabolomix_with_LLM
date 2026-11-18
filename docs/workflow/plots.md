@@ -114,7 +114,8 @@
 データセットが無ければ `load_dataset`）。置き場の図が古い（`_stale_figure`）か、`invalidate_results` が捨てた印
 （`ds.discarded_figures`）があれば保存せず `STALE_FIGURE`（文言は `_discarded_message`。因子の列だけの更新は
 `invalidate_results` の `reason` に広げる前の列が渡るので群を挙げない。`details` は §11.4.9）。
-状態変更: `reports/figures/` に PNG（`loadings` `group_intensity` `species` `species_pca` は SVG も）を書く。
+状態変更: `reports/figures/` に PNG（`loadings` `group_intensity` `species` `species_pca` は SVG も）を書く。上書きの前の版は
+`reports/.history/` へ移す（`_write_keeping_history()`。書けなければ戻し、同じバイト列でも戻す）。
 
 - `kind` は `dataset_plot` の kind（`FIGURE_KINDS`。`source` 引数は無い）。未知の `kind` は `{"status": "error"}`。`result_id` を使わない kind
   （`group_intensity` `species` `eic` 系）への `result_id` と、volcano 以外への `contrast_id` は使わずに置き場の図を保存し、
@@ -142,10 +143,12 @@
 8. │  └─ metabolomix/analysis/result_state.py  is_current()
 9. ├─ [DomainError] metabolomix/tools/_contrast_choice.py  contrast_envelope()
 10.└─ metabolomix/tools/reports.py  _save_record()
-11.   └─ metabolomix/tools/plot_tools.py  write_figure_files()
-12.      ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
-13.      │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
-14.      ├─ [kind=loadings / group_intensity / species / species_pca] metabolomix/plots/render.py  render_files()
-15.      │  ├─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
-16.      │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
-17.      └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()
+11.   └─ metabolomix/tools/reports.py  _write_keeping_history()
+12.      ├─ metabolomix/tools/notes.py  keep_history()
+13.      └─ metabolomix/tools/plot_tools.py  write_figure_files()
+14.         ├─ [kind=pca / volcano] metabolomix/plots/result_output.py  save_result_figure()
+15.         │  └─ [kind=pca] metabolomix/plots/pca_scores.py  render_pca_scores()
+16.         ├─ [kind=loadings / group_intensity / species / species_pca] metabolomix/plots/render.py  render_files()
+17.         │  ├─ metabolomix/plots/pca_loadings.py  render_loadings_plot()
+18.         │  └─ metabolomix/plots/group_intensity.py  render_group_intensity_plot()
+19.         └─ [kind=eic / eic_compounds] metabolomix/plots/eic.py  render_eic_plot()
