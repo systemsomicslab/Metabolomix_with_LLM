@@ -322,6 +322,7 @@ def record_objective(
     """実験目的を解析フォルダ配下 reports/<analysis_id>.objective.md に記録する（作成と更新）。
 
     その analysis_id の目的が無ければ渡した欄だけで作り（欠けた欄は空。後から足せる）、あれば渡した欄だけを直す。
+    直す前の版は reports/.history/ へ移す（呼ぶ前の版だけ。中身が変わらなければ書かない）。
     sub_questions: Q1..Qn の本文。小問の無い目的にだけ足し、小問のある目的では無視する。
     add_subquestions: 既存 Q の最大+1 で採番して追記する（既存の小問は書き換えない）。
     biological_context: 対象系（生物種/細胞/処理）。
@@ -373,8 +374,8 @@ def record_objective(
         try:
             path = notes.write_objective(report_dir, analysis_id, meta_fields, sub_questions or [],
                                          slug=slug)
-            if add_subquestions:
-                notes.add_subquestions(path, add_subquestions)
+            if add_subquestions:   # 書いたばかりの版を .history/ に残さない
+                notes.add_subquestions(path, add_subquestions, history=False)
         except (ValueError, OSError) as exc:
             return str(exc)
         if assay_kind is not None:   # 渡さない作成は、ハンドルの種別を動かさない
@@ -400,6 +401,12 @@ def record_objective(
         updates["assay_kind"] = assay_kind
     first_subquestions = False
     try:
+        original = existing.read_bytes()
+
+        def untouched() -> bool:
+            # .history/ に残すのは呼ぶ前の版だけ（この呼び出しが 1 回目に書き換えたあとの途中の版は残さない）
+            return existing.read_bytes() == original
+
         meta, subqs, _body = notes.parse_objective(existing)
         if updates and not meta.get("analysis_dir") and _analysis_dir(holder):
             updates["analysis_dir"] = _analysis_dir(holder)
@@ -408,9 +415,9 @@ def record_objective(
         # 小問の無い目的（欄を省いて作ったもの）にだけ、sub_questions を Q1..Qn として足す。
         first_subquestions = bool(sub_questions) and not subqs
         if first_subquestions:
-            notes.add_subquestions(existing, sub_questions, initial=True)
+            notes.add_subquestions(existing, sub_questions, initial=True, history=untouched())
         if add_subquestions:
-            notes.add_subquestions(existing, add_subquestions)
+            notes.add_subquestions(existing, add_subquestions, history=untouched())
     except (ValueError, OSError) as exc:
         return str(exc)
     if assay_kind is not None:

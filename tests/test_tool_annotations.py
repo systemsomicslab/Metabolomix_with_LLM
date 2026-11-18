@@ -70,7 +70,8 @@ EXPECTED_ANNOTATIONS = {
     "dataset_list": READ_ONLY,
     "dataset_close": LOCAL_DELETE,
     # 再解析の spec のツール。output_path を渡したときだけ JSON を書く（同じ spec なら同じ内容）。
-    "dataset_analysis_run": LOCAL_WRITE,
+    # dataset_analysis_run は呼ぶたびに reports/stats/ へ記録を 1 件足す（dataset_compare と同じ）→ 非冪等。
+    "dataset_analysis_run": LOCAL_WRITE_APPEND,
     "dataset_claim_evidence": LOCAL_WRITE,
     "dataset_novel_candidates": LOCAL_WRITE,
     "dataset_alignment_qc": LOCAL_WRITE,

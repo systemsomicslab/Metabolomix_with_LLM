@@ -1,6 +1,7 @@
 """統計の工程の記録（1 工程 1 ファイル、解析フォルダ配下の `reports/stats/`）。
 
-前処理・比較・PCA の対話ツールが、何をどの設定で計算したかを残す。記録は追記専用
+前処理・比較・PCA・概観の対話ツールと `dataset_analysis_run`（`analysis_run`。spec・戻り値・ハンドル）が、
+何をどの設定で計算したかを残す。記録は追記専用
 （`atomic_io.write_new_json`。同名があれば `STATS_RECORD_EXISTS`）で、リポジトリ側には書かない。
 数値は `json_safe` を通してから `allow_nan=False` で書く（無限大は `"inf"`、NaN は null。
 厳密な JSON の読み手が止まらない）。定量の記録（`quant/records.py`）と同じ形の別系統。
@@ -17,7 +18,7 @@ from metabolomix.core.serialization import json_safe
 __all__ = ["RECORD_SCHEMA", "STEPS", "record_dir", "write_stats_record"]
 
 RECORD_SCHEMA = "lipidmix.stats-record.v1"
-STEPS = ("preprocess", "compare", "pca", "overview")
+STEPS = ("preprocess", "compare", "pca", "overview", "analysis_run")
 
 
 def record_dir(reports_dir: Path) -> Path:

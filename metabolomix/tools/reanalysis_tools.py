@@ -153,11 +153,14 @@ def _dataset_or_error(holder, needed: bool):
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
-                                      idempotentHint=True),
+                                      idempotentHint=False),
           structured_output=False)
 def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
-    """論文の方法を写した spec で行列を作って検定する。状態も記録も書かない（ハンドルは読むだけ）。
+    """論文の方法を写した spec で行列を作って検定する。状態は変えず（ハンドルは読むだけ）、呼ぶたびに記録を 1 件書く。
+
+    記録は `reports/stats/<record_id>.json`（step `analysis_run`: 渡した spec と正規化した spec・`rule_hash`・ハンドルの身元・
+    戻り値・時刻）。戻り値の `record` がその場所（書けなければ `written: false` と理由。解析は成功）。
 
     `spec["schema"] == "analysis-spec.v2"` なら統計エンジン、それ以外は v1（analysis-spec.v1）。spec の形・既定・戻り値の欄は
     `docs_read(topic="reanalysis", section="統計の spec")`（v2 は 2.1）、v1 の `matrix` は `section="行列の recipe"`。
@@ -247,7 +250,7 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                      f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
     if aggregate_cut:
         notes.extend(_aggregate_cut_notes(aggregate_cut, written=written is not None))
-    return json_payload({
+    payload = {
         "status": "success",
         "schema": result["schema"],
         "rule_hash": result["rule_hash"],
@@ -265,9 +268,11 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
         "analyses": summary,
         **({"correlate": _correlate_summary(result["correlate"], inline=written is None)}
            if "correlate" in result else {}),
-        **({"notes": notes} if notes else {}),
-        "note": "判定（再現したか）は返さない。direction は group_test から見た向き。",
-    })
+    }
+    tail = {**({"notes": notes} if notes else {}),
+            "note": "判定（再現したか）は返さない。direction は group_test から見た向き。"}
+    record = _write_run_record(holder, spec, result, {**payload, **tail})
+    return json_payload({**payload, "record": record, **tail})
 
 
 _CONTRIBUTION_COLUMNS = ("feature_id", "share_median", "share_median_ref", "share_median_test",
@@ -371,7 +376,7 @@ def _correlate_summary(block: dict, *, inline: bool) -> dict:
 
 
 def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
-    """analysis-spec.v2 を統計エンジンで実行する（状態を変えず、記録を書かない）。"""
+    """analysis-spec.v2 を統計エンジンで実行する（状態を変えず、記録を 1 件書く）。"""
     from metabolomix.analysis import stats_results
     from metabolomix.analysis import stats_run_summary as S
     from metabolomix.analysis.stats.spec_v2 import normalize_spec_v2, run_spec_v2
@@ -416,16 +421,61 @@ def _analysis_run_v2(spec: dict, holder, output_path: str | None) -> str:
         if truncated:
             notes.append(f"行が {MAX_INLINE_ROWS} を超える解析（{truncated}）は p の小さい順の先頭 "
                          f"{MAX_INLINE_ROWS} 行だけを載せた。全行は output_path を指定して JSON に書く。")
-    return json_payload(json_safe(round_floats({
+    payload = json_safe(round_floats({
         "status": "success", "assay_kind": assay_kind, **summary,
-        **({"output_path": written} if written else {}),
-        **({"notes": notes} if notes else {}),
-        "note": "判定（再現したか）は返さない。状態と記録は変えていない。"})))
+        **({"output_path": written} if written else {})}))
+    tail = {**({"notes": notes} if notes else {}),
+            "note": "判定（再現したか）は返さない。状態は変えていない（記録は record）。"}
+    record = _write_run_record(holder, spec, result, {**payload, **tail})
+    return json_payload({**payload, "record": record, **tail})
 
 
 #: エラーの details で切る一覧のキー（件数は `<key>_n_more` に残す）。
 _DETAIL_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "feature_ids", "candidates", "examples",
                      "unknown_samples", "unknown_features", "columns")
+
+
+def _handle_identity(holder) -> dict:
+    """記録に残すハンドルの身元（ID・入口の種類と名前・極性・種別。パスは書かない）。
+
+    `dataset_handle` を省いた呼び出しは、固定中（`pinned_handle`）か直近のハンドル。
+    """
+    from metabolomix.core import handles, session_state
+    from metabolomix.tools.handle_tools import _input_name
+
+    handle_id = getattr(holder, "handle_id", None)
+    handle = holder if handle_id else None
+    if handle is None:
+        handle_id = session_state.pinned_handle_id() or getattr(holder, "current_handle_id", None)
+        handle = handles.registry.peek(handle_id) if handle_id else None
+    source = getattr(handle, "source", None) or {}
+    return {"dataset_handle": handle_id, "source_kind": source.get("kind"),
+            "source": _input_name(source.get("path")), "polarity": getattr(handle, "polarity", None),
+            "assay_kind": _assay_kind(holder)}
+
+
+def _write_run_record(holder, spec, result: dict, returned: dict) -> dict:
+    """`reports/stats/` に step `analysis_run` の記録を 1 件書く（名前は時刻と乱数で、呼ぶたびに別のファイル）。
+
+    `inputs` はハンドルの身元と `input_fingerprint`、`settings` は渡した spec・正規化した spec・`rule_hash`、
+    `summary` は戻り値（`record` を除く）。書き先が決まらない・書けないときは `{"written": False, "reason"}`。
+    """
+    from metabolomix.analysis import stats_records
+    from metabolomix.core import mcp_core
+
+    try:
+        reports_dir = mcp_core._resolve_report_dir(holder)
+        written = stats_records.write_stats_record(
+            reports_dir, "analysis_run",
+            inputs={**_handle_identity(holder), "input_fingerprint": result["input_fingerprint"]},
+            parent_ids=[],
+            settings={"spec": spec, "normalized_spec": result["spec"], "rule_hash": result["rule_hash"]},
+            summary=returned)
+    except DomainError as exc:
+        return {"written": False, "reason": f"{exc.code}: {exc.message}"}
+    except OSError as exc:
+        return {"written": False, "reason": f"OSError: {exc}"}
+    return {"written": True, "record_id": written["record_id"], "path": written["path"]}
 
 
 def _assay_kind(holder) -> str:

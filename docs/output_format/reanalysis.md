@@ -8,7 +8,8 @@
 - **spec は正規化して返す。** 既定値を埋め、未知のキーは拒否する。結果には正規化した spec と `rule_hash` が入る。
   `rule_hash` は正規化した spec からパスの欄（`path` / `matrix_path`）を除いて作る。入力のファイル（行列・群・共変量・
   注入順の TSV）は `input_fingerprint` に sha256 で入る。
-- **同じ spec・同じ入力なら同じ JSON。** 時刻や乱数の ID は結果に入れない。
+- **同じ spec・同じ入力なら同じ JSON。** 時刻や乱数の ID は結果に入れない（例外は `dataset_analysis_run` の戻り値の
+  `record` だけ。`output_path` の JSON には入らない）。
 - **大きな結果は `output_path` の JSON に書く。** キーは昇順で字下げなし。1 行に収まらない辞書・リストは要素ごとに改行し、
   1 行は辞書のキーと区切りの `,` を含めて 1,000 字以下（数や文字列だけのリストは 1,000 字までずつ詰める。分けられない
   1 つの値の行だけは超える）。`output_path` を省いて上限を超えても断らず、先頭の行だけを載せて `truncated: true` と
@@ -24,6 +25,10 @@
   （`aggregate` と `features.feature_ids`）は誤り。
 - **判定（再現したか・明らかに別物か）は返さない。** 返すのは数字と、spec の規則を機械的に当てた結果だけ。
 - **研究室の参照ライブラリのパスは出さない。** ファイル名と sha256 だけ。
+- **記録は解析フォルダの `reports/` に残る。** `dataset_analysis_run` は呼ぶたびに `reports/stats/` へ 1 件（§2 の「記録」）。
+  `write_report`・`record_objective`・`save_figure` が上書きするファイルの前の版は `reports/.history/<名前>.<旧版の mtime の
+  UTC。例 20261118T143012Z>[-n]<拡張子>` へ移す（mtime は旧版のまま。中身が同じなら書かない・戻す）。`read_report`・その索引・
+  目的の読み戻しは `.history/` を見ない。
 
 ## 1. データセットのハンドル
 
@@ -301,7 +306,7 @@
 （外部の行列では `merge_split` は hash に入らない）。
 
 **戻り値（v1）。** `{status, schema, rule_hash, merge_split: {enabled, source, n_groups_used, n_groups_skipped, groups_hash},
-input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?, analyses, correlate?, notes?, note}`。
+input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?, analyses, correlate?, record, notes?, note}`。
 `analyses[]` は解析ごとの要約（`n_rows`・`n_tested`・`n_meets_thresholds`・`n_constant_in_group` ほか）。`output_path` を
 省けば解析ごとに行を TSV（`rows`。上の行の欄の順）で返し、**50 行を超える解析は p の小さい順の先頭 50 行だけ**を載せる
 （`truncated: true`・`rows_order: "p_ascending"`。`n_rows` は全件。p が null の行は後ろ。断らない）。`correlate` の行も TSV で、
@@ -319,6 +324,12 @@ input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?,
   切ったときだけ書く）。
 
 切るのは戻り値の要約だけで、`output_path` の JSON・`rule_hash` は全メンバーのまま。
+
+**記録（v1・v2 とも）。** 呼ぶたびに `reports/stats/<record_id>.json` を 1 件書く（`lipidmix.stats-record.v1`、`step:
+"analysis_run"`。`record_id` は時刻と乱数で、呼び直しても上書きしない）。`inputs` はハンドルの身元（`dataset_handle`・
+`source_kind`・`source`〔入力の名前だけ〕・`polarity`・`assay_kind`）と `input_fingerprint`、`settings` は `spec`（渡したまま）・
+`normalized_spec`・`rule_hash`、`summary` は戻り値（`record` を除く）、`created_at` が時刻。戻り値の `record` は
+`{written: true, record_id, path}`、書き先が決まらない・書けなければ `{written: false, reason}`（解析は成功）。
 
 ### 2.1 統計エンジンの spec（analysis-spec.v2）と結果（analysis-result.v2）
 
@@ -371,7 +382,7 @@ input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?,
 `input_fingerprint.sample_table_hash` に陰イオンの測定（`quant_state.polarity_runs`）が、`matrix_id` に極性の塊が入る。
 
 **戻り値は要約だけ。** `{status, schema: "analysis-result.v2", rule_hash, matrix_id, input_fingerprint: {dataset_hash,
-sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごとの要約:
+sample_table_hash}, primary, warnings, analyses, record}`（`record` は §2 の「記録」）。`analyses[]` は解析ごとの要約:
 
 - compare: `n_rows`・`n_tested`・`verdicts: {changed, unchanged, inconclusive}`・`n_q_below`（`q ≤ 閾値`）・`test`・`warnings`・
   `confounding`（群とバッチの交絡 `{batch_status, by_contrast}`）・`p_adjust_method`、要因の F があれば `factorial`（効果ごとの

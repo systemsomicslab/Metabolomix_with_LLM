@@ -692,6 +692,41 @@ def test_save_figure_twice_overwrites_and_succeeds(tmp_path):
     assert png.read_bytes()[:4] == PNG_MAGIC and svg.read_bytes() != b"old"
 
 
+def test_save_figure_moves_the_overwritten_version_to_history(tmp_path, monkeypatch):
+    """上書きの前の版（PNG と .svg）を reports/.history/<名前>.<旧版の mtime の UTC>.<拡張子> へ移す。"""
+    import os
+
+    _analysed()
+    figures, history = tmp_path / "reports" / "figures", tmp_path / "reports" / ".history"
+    plot_tools.dataset_plot(kind="loadings", top_n=3)
+    reports.save_figure("loadings", "hist")
+    png, svg = figures / "hist_loadings.png", figures / "hist_loadings.svg"
+    assert not history.exists()
+    old_time = 1795012212                      # 2026-11-18T14:30:12Z
+    for path in (png, svg):
+        path.write_bytes(b"old")
+        os.utime(path, (old_time, old_time))
+    reports.save_figure("loadings", "hist")
+    for name in ("hist_loadings.20261118T143012Z.png", "hist_loadings.20261118T143012Z.svg"):
+        kept = history / name
+        assert kept.read_bytes() == b"old" and int(kept.stat().st_mtime) == old_time
+    assert png.read_bytes()[:4] == PNG_MAGIC
+    # 同じ PNG を保存し直したら旧版を戻す（.history/ に足さず、mtime も元のまま）
+    mtime = png.stat().st_mtime
+    reports.save_figure("loadings", "hist")
+    assert len(list(history.glob("hist_loadings.*.png"))) == 1 and png.stat().st_mtime == mtime
+    # 書けなかったら旧版をその場に戻す
+    before = png.read_bytes()
+
+    def fail(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(plot_tools, "write_figure_files", fail)
+    with pytest.raises(OSError):
+        reports.save_figure("loadings", "hist")
+    assert png.read_bytes() == before and len(list(history.glob("hist_loadings.*.png"))) == 1
+
+
 # ---------- feature_id の型（整数でも文字列でも同じ特徴に当たる） ----------
 
 def _call_through_server(name: str, arguments: dict):
