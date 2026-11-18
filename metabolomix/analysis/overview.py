@@ -191,9 +191,44 @@ def _order_next(drift: list[dict], *, drift_unsure: bool, sheet_order_biased: bo
     return ["dataset_set_sample_metadata（injection_order に実際の測定順を入れる）"] if sheet else []
 
 
+_BLOCK_GROUPS = 10                 # 技術反復らしいまとまりの事実の文に載せる群の上限（全部は data に）
+_BLOCK_LAYOUT = {"consecutive": "で連続", "interleaved": "で巡回（1, 2, 3, 1, 2, 3, …）"}
+_BLOCK_ORDER = {"injection_order": "注入順", "table": "試料の表の順"}
+
+
+def _range(values: list[float], digits: int = 2) -> str:
+    lo, hi = min(values), max(values)
+    return _g(lo, digits) if _g(lo, digits) == _g(hi, digits) else f"{_g(lo, digits)}〜{_g(hi, digits)}"
+
+
+def _replicate_block_fact(found: dict) -> str:
+    """データから見つけた技術反復らしいまとまり（`quality.replicate_blocks` の `found`）の事実の文。"""
+    groups = found["groups"]
+    k = found["k"]
+    shown = []
+    for g in groups[:_BLOCK_GROUPS]:
+        name = "(群なし)" if g["group"] is None else g["group"]
+        layout = ("相関から束ねた" if g["layout"] == "data"
+                  else _BLOCK_ORDER.get(g["order"], g["order"]) + _BLOCK_LAYOUT[g["layout"]])
+        shown.append(f"{name}（{layout}）" + " ".join("[" + ", ".join(b) + "]" for b in g["blocks"]))
+    more = f"; ほか {len(groups) - _BLOCK_GROUPS} 群は記録の data" if len(groups) > _BLOCK_GROUPS else ""
+    skipped = found.get("skipped") or []
+    other = ("。見ていない群（注入が少ない・割り切れない・実検出の特徴が足りない）: "
+             + ", ".join("(群なし)" if s["group"] is None else str(s["group"]) for s in skipped) if skipped else "")
+    return (f"subject_id が無いのに、群の中の注入が {k} 本ずつの技術反復らしいまとまりに分かれる（{len(groups)} 群。"
+            "群のすべての注入で実検出の特徴の log2 の相関で、まとまりの中と間の差 "
+            + _range([g["margin"] for g in groups])
+            + f"・近い {k - 1} 本が仲間の割合 " + _range([100 * g["purity"] for g in groups], 3) + "%"
+            + "・特徴ごとの ICC の中央値 " + _range([g["median_icc"] for g in groups]) + "）: "
+            + "; ".join(shown) + more + other
+            + "。いまは注入を独立な試料として数えている。データから見た候補なので、同じ個体の反復かを実験の記述で"
+              "確かめてから subject_id を入れる（自動では入れていない）")
+
+
 def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict], confounding: dict,
                   replicate_warnings: list, verdict: str, reasons: list[str], n_qc: int, n_blank: int,
-                  drift_note: str | None, pca_id: str | None, drift_rerunnable: bool = True) -> dict:
+                  drift_note: str | None, pca_id: str | None, drift_rerunnable: bool = True,
+                  replicate_blocks: dict | None = None) -> dict:
     """品質の段。判定（ok / caution / poor / not_evaluable）と理由のコードを最初の事実に置く。
 
     `drift_rerunnable` は drift_note の補正を dataset_preprocess(drift_mode="on") で当てられるか（統合した
@@ -205,7 +240,10 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     （統合したデータセットで陽イオン以外の極性なら、その極性のハンドルへのシートと統合し直し。`_order_next`）。
     統合し直す手は `next` の中で除外（`dataset_exclude`）と `dataset_preprocess(drift_mode="on")` より前に置く: 統合し直すと
     統合したハンドルに当てた除外は引き継がれず、前処理の行列も前のハンドルに残るので、書いた順に行えば両方が
-    統合し直してできたハンドルに当たる。"""
+    統合し直してできたハンドルに当たる。
+
+    `replicate_blocks`（`quality.replicate_blocks` の戻り値）が `found` なら、群ごとのまとまりの候補を挙げた事実を足し
+    （データに戻り値そのもの）、`next` に subject_id の入れ方を足す（名前からの反復の注意と同じ 1 つ。subject_id は入れない）。"""
     f = _Facts("Q")
     f.add(f"判定 {verdict}" + (f"（{', '.join(reasons)}）" if reasons else "")
           + f"。QC {n_qc} 本・ブランク {n_blank} 本"
@@ -259,6 +297,9 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     if replicate_warnings:
         f.add(f"反復注入らしい試料名が {len(replicate_warnings)} 組あるのに subject_id が無い（独立な試料として数えている）",
               stems=[w.get("stem") for w in replicate_warnings])
+    blocks_found = (replicate_blocks or {}).get("status") == "found"
+    if blocks_found:
+        f.add(_replicate_block_fact(replicate_blocks), replicate_blocks=replicate_blocks)
     if drift_note:
         f.add(drift_note, drift="off_undecided")
     nxt = [f'dataset_plot(kind="pca", result_id="{pca_id}", color_by="batch")'] if pca_id else []
@@ -270,7 +311,7 @@ def quality_facts(*, rsd: dict, failed: dict, detection: dict, drift: list[dict]
     if drift_note and drift_rerunnable:
         nxt.append('dataset_preprocess(drift_mode="on")')
     nxt += [x for x in order_next if x not in remerge]
-    if replicate_warnings:
+    if replicate_warnings or blocks_found:
         nxt.append("dataset_set_sample_metadata（subject_id を入れて反復をまとめる）")
     return {"verdict": verdict, "facts": f.items, "next": " / ".join(nxt) or "なし"}
 

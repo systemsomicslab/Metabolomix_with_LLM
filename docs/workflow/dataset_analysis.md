@@ -128,7 +128,8 @@ QC/blank/unknown/standard・`include=false` を比較群に混ぜない。
   注入順で見る）。ρ に使った QC の注入順がファイルの順かもしれない行には `analysis/stats/data.py` の `order_may_be_file_order()` で
   印を付け、手順 21 の `quality_facts()` がドリフトの兆候の事実の但し書きにする。統合したデータセットではその極性の入れ直し方を
   `analysis/stats/preprocess.py` の `runs_remedy()`（極性ごとの `run_remedy()` を陽イオンを最後に並べる。`dataset_preprocess` の
-  注意と同じ文と順）から書く（`next` の手の順は 11.9）
+  注意と同じ文と順）から書く（`next` の手の順は 11.9）。subject_id が無いときの技術反復らしいまとまりも前処理前の値から
+  `analysis/stats/quality.py` の `replicate_blocks()` が見つけ（候補を挙げるだけ）、手順 10 の判定と手順 21 の事実に渡す
 - PCA（手順 12〜13）
 - spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では止めず、
   `allow_confounded=True` で対比に印を付ける。探索専用のデータセットは `analysis/dataset_export.py` の `exploratory_reason()` の
