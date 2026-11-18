@@ -102,6 +102,63 @@ def test_standard_only_is_dropped_from_class_only():
     assert excluded["standard_only"] == ["#0 PG 34:1|PG 16:0_18:1"]
 
 
+MIXED_CATALOG = CATALOG + [
+    {"MasterAlignmentID": 8, "Name": "Ginsenoside Rb1", "Ontology": "Triterpene saponins"},
+    {"MasterAlignmentID": 9, "Name": "w/o MS2: Saikosaponin A", "Ontology": "Triterpene saponins"},
+    {"MasterAlignmentID": 10, "Name": "Cer 12:0;O3/8:0(2OH)", "Ontology": "Cer_AP"},
+]
+
+
+def test_lipid_assay_drops_non_lipid_names_from_class_sums_only():
+    items, excluded = gi.resolve_items(["Triterpene saponins", "Cer_AP", "PG", "Ginsenoside Rb1"], MIXED_CATALOG,
+                                       assay_kind="lipid")
+    assert _ids(items[0]) == [] and items[0]["parts"][0]["kind"] == "class"
+    assert _ids(items[1]) == [10] and _ids(items[2]) == [0, 1, 5]
+    assert _ids(items[3]) == [8]                                    # 名前で指定すれば描く
+    assert excluded["non_lipid"] == ["#8 Ginsenoside Rb1", "#9 w/o MS2: Saikosaponin A"]
+    # 脂質アッセイでなければ除かない
+    for kind in (None, "metabolite", "unknown"):
+        items, excluded = gi.resolve_items(["Triterpene saponins"], MIXED_CATALOG, assay_kind=kind)
+        assert _ids(items[0]) == [8, 9] and excluded["non_lipid"] == []
+
+
+# 研究室 MSP の ClassyFire のクラスの行（名前が IUPAC 名）。組成式から救えば MS-DIAL の脂質クラスに当たる
+RESCUE_CATALOG = CATALOG + [
+    {"MasterAlignmentID": 11, "Name": "no MS2: 1,2-Dioleoyl-sn-glycero-3-phosphocholine",
+     "Ontology": "Phosphatidylcholines", "Formula": "C44H84NO8P"},
+    {"MasterAlignmentID": 12, "Name": "7.alpha.,24(S)-Dihydroxy-4-cholesten-3-one",
+     "Ontology": "Phosphatidylcholines", "Formula": "C27H44O3"},
+    {"MasterAlignmentID": 13, "Name": "MassSpecGymID0000001", "Ontology": "Triacylglycerols",
+     "Formula": "C57H104O6"},
+]
+
+
+def test_lipid_assay_class_items_take_spots_moved_by_class_and_formula():
+    items, excluded = gi.resolve_items(["PC", "Phosphatidylcholines", "TG", "TG 54:3"], RESCUE_CATALOG,
+                                       assay_kind="lipid")
+    # PC は LBM の PC（内部標準 #2 は除く）と、組成式から PC に移った #11。元のクラス名でも #11 に当たる
+    assert _ids(items[0]) == [3, 11] and items[0]["parts"][0]["kind"] == "class"
+    assert _ids(items[1]) == [11]
+    # TG のスポットは無くても、移った #13 で TG はクラスとして当たる。和の組成の略記は名前ではない
+    assert _ids(items[2]) == [13] and items[2]["parts"][0]["kind"] == "class"
+    assert items[3]["parts"][0]["kind"] == "none"
+    # 組成式がクラスの形に合わない行は非脂質。注釈（名前・クラス）は変えない
+    assert excluded["non_lipid"] == ["#12 7.alpha.,24(S)-Dihydroxy-4-cholesten-3-one"]
+    assert items[0]["spots"][1] == {"spot_id": 11, "name": "no MS2: 1,2-Dioleoyl-sn-glycero-3-phosphocholine",
+                                    "ontology": "Phosphatidylcholines"}
+    # 脂質アッセイでなければ移さない
+    items, excluded = gi.resolve_items(["PC", "Phosphatidylcholines", "TG"], RESCUE_CATALOG, assay_kind="metabolite")
+    assert _ids(items[0]) == [3] and _ids(items[1]) == [11, 12] and items[2]["parts"][0]["kind"] == "none"
+
+
+def test_assigned_annotations_are_not_rescued_with_the_original_formula():
+    # 付け替えた注釈の組成式は分からないので、元の組成式で救わない
+    curation = {"assign": {13: {"name": "MassSpecGymID0000009", "ontology": "Triacylglycerols"}}}
+    items, excluded = gi.resolve_items(["Triacylglycerols"], RESCUE_CATALOG, curation=curation,
+                                       assay_kind="lipid")
+    assert _ids(items[0]) == [] and excluded["non_lipid"] == ["#13 MassSpecGymID0000009"]
+
+
 def test_item_count_limits():
     with pytest.raises(ValueError):
         gi.resolve_items([], CATALOG)

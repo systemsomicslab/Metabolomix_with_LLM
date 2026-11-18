@@ -217,6 +217,12 @@ class PreparedMatrix:
     # 反復のまとめの前の線形値）。片群一定の印（compare の `constant_in_group`）が埋め値を探す。
     # 外から作った行列（stats/external.py・手で組んだもの）は None で、compare は個体の log2 で調べる。
     sample_raw_values: np.ndarray | None = None
+    #: 残した特徴の注釈の名前（`StudyData.feature_names` の写し）。脂質アッセイの組成が脂質名の文法で読めない
+    #: 注釈を脂質クラスから外すのに読む。外から作った行列は空（名前が無い特徴は判定しない）。
+    feature_names: dict = field(default_factory=dict)
+    #: 残した特徴の注釈の組成式（`StudyData.feature_formulas` の写し）。脂質アッセイの組成が、名前で読めない研究室 MSP
+    #: の脂質をクラスと組成式から脂質クラスへ救うのに読む。外から作った行列は空。
+    feature_formulas: dict = field(default_factory=dict)
 
 
 def _positive(x: np.ndarray) -> np.ndarray:
@@ -1255,6 +1261,8 @@ def preprocess(study: StudyData, config: dict) -> PreparedMatrix:
         dataset_hash=study.dataset_hash, subject_source=source, warnings=notes,
         feature_classes={f: c for f, c in study.feature_classes.items() if f in kept},
         annotated_features=frozenset(f for f in study.annotated_features if f in kept),
+        feature_names={f: n for f, n in study.feature_names.items() if f in kept},
+        feature_formulas={f: v for f, v in study.feature_formulas.items() if f in kept},
         sample_values=np.array(values[bio], copy=True),
         sample_ids=[samples[k].sample_id for k in bio],
         sample_detected=None if detected is None else np.array(detected[bio], copy=True),

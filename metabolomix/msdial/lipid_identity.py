@@ -10,6 +10,7 @@ import re
 import threading
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from metabolomix.msdial import peak_verification as pv
 
@@ -42,17 +43,92 @@ def _clean_msdial_name(name: str):
 #: （ハンドルの読み込みはワーカースレッドで走る。`curation/trend.py` と同じ流儀）。
 _SHARED_PARSER = None
 _PARSER_LOCK = threading.Lock()
+#: 文法ごとの「決して読めない文字列」を見分ける表（`_grammar_screen`。`_SHARED_PARSER.parser_list` と同じ順）。
+#: pygoslin の内部の形が想定と違えば None（表を使わず `LipidParser.parse` をそのまま呼ぶ）。
+_SCREENS = None
+
+
+def _grammar_screen(parser):
+    """文法 1 本が受け付けうる文字列の必要条件の表: `(小文字にするか, 文字の集合, 隣り合う 2 文字の集合,
+    先頭の文字の集合, 末尾の文字の集合)`。全文一致でない（EOF を使わない）文法は None（表で除かない）。
+
+    pygoslin は文法をチョムスキー標準形（`TtoNT`: 文字 → それを導く規則、`NTtoNT`: 規則の対 → それを導く規則）
+    にして CYK で読み、全文一致の文法は末尾に `EOF_SIGN` を足して読む。導ける文字列の隣り合う 2 文字は、どれも
+    ある規則の対（B, C）について「B が導く文字列の末尾の文字 × C が導く文字列の先頭の文字」に入る（2 文字を
+    両方含む最も低い節で分かれる）。各規則の先頭・末尾の文字の集合を不動点で求め、この集合を作る（実際に
+    現れる 2 文字の上位集合なので、ここに無い 2 文字を含む文字列はその文法では決して読めない）。
+    """
+    from pygoslin.parser.Parser import FattyAcidParser
+
+    if not getattr(parser, "used_eof", False):
+        return None
+    mask = (1 << 32) - 1
+    first: dict = {}
+    last: dict = {}
+    for ch, rules in parser.TtoNT.items():
+        for rule in rules:
+            first.setdefault(rule, set()).add(ch)
+            last.setdefault(rule, set()).add(ch)
+    pairs = [(key >> 32, key & mask, rules) for key, rules in parser.NTtoNT.items()]
+    changed = True
+    while changed:
+        changed = False
+        for left, right, rules in pairs:
+            head, tail = first.get(left), last.get(right)
+            for rule in rules:
+                if head and not head <= first.setdefault(rule, set()):
+                    first[rule] |= head
+                    changed = True
+                if tail and not tail <= last.setdefault(rule, set()):
+                    last[rule] |= tail
+                    changed = True
+    bigrams = {x + y for left, right, _ in pairs for x in last.get(left, ()) for y in first.get(right, ())}
+    start = parser.START_RULE
+    return (isinstance(parser, FattyAcidParser), frozenset(parser.TtoNT), frozenset(bigrams),
+            frozenset(first.get(start, ())), frozenset(last.get(start, ())))
+
+
+def _may_parse(screen, parser, text: str) -> bool:
+    """その文法が `text` を読みうるか（False なら決して読めない。`parser.parse` と同じ前処理の後で表と照らす）。"""
+    if screen is None:
+        return True
+    lower, alphabet, bigrams, heads, tails = screen
+    t = (text.lower() if lower else text).strip(" ") + parser.EOF_SIGN
+    if t[0] not in heads or t[-1] not in tails or not alphabet.issuperset(t):
+        return False
+    return all(t[k:k + 2] in bigrams for k in range(len(t) - 1))
 
 
 def _parse_lipid(clean: str):
-    """共有パーサで 1 つ解析する（pygoslin が無ければ ImportError、解析不能なら例外）。"""
-    global _SHARED_PARSER
+    """共有パーサで 1 つ解析する（pygoslin が無ければ ImportError、解析不能なら例外）。
+
+    `LipidParser.parse` と同じく文法を順に試し、最初に読めた文法の結果を返す。ただし、その文法では決して読めない
+    文字列（`_may_parse` が False）ではその文法を走らせない（結果は同じ。読めない名前は 6 本の文法をすべて CYK で
+    走らせるので、天然物・医薬品の名前が多いと遅い）。
+    """
+    global _SHARED_PARSER, _SCREENS
     from pygoslin.parser.Parser import LipidParser
 
     with _PARSER_LOCK:
         if _SHARED_PARSER is None:
             _SHARED_PARSER = LipidParser()
-        return _SHARED_PARSER.parse(clean)
+            try:
+                _SCREENS = [_grammar_screen(p) for p in _SHARED_PARSER.parser_list]
+            except Exception:   # pygoslin の内部の形が違う: 表を使わない
+                _SCREENS = None
+        if _SCREENS is None:
+            return _SHARED_PARSER.parse(clean)
+        from pygoslin.domain.LipidExceptions import LipidException
+
+        _SHARED_PARSER.parser_event_handler = None
+        for screen, parser in zip(_SCREENS, _SHARED_PARSER.parser_list):
+            if not _may_parse(screen, parser, clean):
+                continue
+            lipid = parser.parse(clean, raise_error=False)
+            if lipid is not None:
+                _SHARED_PARSER.parser_event_handler = parser.parser_event_handler
+                return lipid
+        raise LipidException("Lipid not found")
 
 
 def normalize_lipid_name(name: str) -> dict:
@@ -124,6 +200,194 @@ def lipid_species_of(name) -> str | None:
         return species.get_lipid_string(LipidLevel.SPECIES)
     except Exception:
         return None
+
+
+#: 同位体の標識（内部標準）: `(d7)` `[d9]` `(13C16)` `-d31`。脂質名かどうかを読むときだけ外す
+#: （長鎖塩基の `d18:1` は `:` が続くので当たらない）。
+_ISOTOPE_TAG_RE = re.compile(r"\s*[(\[](?:d\d+|13C\d*)[)\]]|-d\d+(?![\d:])")
+
+#: 注釈の名前が無いことを表す MS-DIAL の値（`dataset.msdial_identity._has_name` と同じ。大小は問わない）。
+_NO_NAME = ("", "unknown", "null")
+
+
+def has_annotation_name(name) -> bool:
+    """注釈の名前があるか（空・`Unknown`・`null` でない。限定子接頭辞だけの名前も無いとみなす）。"""
+    if not isinstance(name, str):
+        return False
+    clean, _ = _clean_msdial_name(name)
+    return clean.strip().casefold() not in _NO_NAME
+
+
+@lru_cache(maxsize=65536)
+def _parses(text: str) -> bool:
+    """共有パーサで読めるか（pygoslin が無ければ ImportError を通す。例外は覚えない）。名前の形は名前どうしで
+    重なる（限定子だけが違う名前など）ので、形ごとに覚える。"""
+    try:
+        _parse_lipid(text)
+    except ImportError:
+        raise
+    except Exception:
+        return False
+    return True
+
+
+#: 内部標準（SPLASH など）の名前の鎖の区切りの `-`（`SM d18:1-18:1` `PC 15:0-18:1` `TG 15:0-18:1-15:0`）。
+#: 鎖と鎖の間（`数:数` の後で、次も `数:数`）の `-` だけを `/` に直す（`PC O-16:0` の `O-` は当たらない）。
+_CHAIN_DASH_RE = re.compile(r"(\d+:\d+)-(?=[dt]?\d+:\d+)")
+#: 脂質の略記の鎖（`34:1`）。名前から MS-DIAL の脂質クラスを決める（`msp_lipid.from_name`）のは、これを含む名前だけ。
+_CHAIN_TOKEN_RE = re.compile(r"\d+:\d+")
+
+
+@lru_cache(maxsize=65536)
+def _name_forms(name: str) -> tuple[str, ...]:
+    """名前を脂質名の文法（GOSLIN）で読むときに試す形（重ねない。この順）。
+
+    限定子接頭辞と `|` を外した名前 → 注記・付加体の表記を切り、古い MS-DIAL の書式・英語のクラス名を略記に
+    直した名前（`pathway.msp_lipid.shorthand`。`msms_rules.name_lipid_species` の `name_cleaned` と同じ直し）
+    → それぞれから同位体の標識（`(d7)` など。内部標準）を外した名前 → その鎖の区切りの `-` を `/` に直した名前と、
+    その略記（`SM d18:1-18:1(d9)` → `SM d18:1/18:1` → `SM 18:1;O2/18:1`）。
+    """
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
+
+    forms: list[str] = []
+
+    def add(text):
+        if text and text not in forms:
+            forms.append(text)
+
+    clean, _ = _clean_msdial_name(name)
+    add(clean)
+    add(msp_lipid.shorthand(clean))
+    for text in list(forms):
+        bare = _ISOTOPE_TAG_RE.sub("", text).strip()
+        add(bare)
+        joined = _CHAIN_DASH_RE.sub(r"\1/", bare)
+        if joined != bare:
+            add(joined)
+            add(msp_lipid.shorthand(joined))
+    return tuple(forms)
+
+
+@lru_cache(maxsize=65536)
+def lipid_name_parses(name) -> bool | None:
+    """注釈の名前が脂質名の文法（GOSLIN）で読めるか。脂質アッセイでクラスに数えてよいかの判定に使う。
+
+    `_name_forms` の形のどれかが読めれば True、どれも読めなければ False（天然物・医薬品などの名前。
+    `Ginsenoside Rb1` など）。GOSLIN は慣用名（`Oleic acid` `Cholesterol`）も読む。名前が無ければ False
+    （呼び出し側が `has_annotation_name` で先に分ける）。pygoslin が無ければ None（判定できない）。
+    """
+    if not has_annotation_name(name):
+        return False
+    try:
+        return any(_parses(text) for text in _name_forms(name))
+    except ImportError:  # pygoslin 未導入
+        return None
+
+
+class LipidCall(NamedTuple):
+    """脂質アッセイでの注釈 1 つの扱い（`lipid_annotation_class`）。
+
+    `is_lipid`: 脂質クラスに数えるか（pygoslin が無ければ None＝判定できない）。
+    `lipid_class`: 数えるクラス（脂質でなければ None）。元のクラスと違えば、そのクラスへ移して数える。
+    `route`: `lbm_class` / `name` / `class_formula` / `name_grammar` / `unmatched` / `grammar_unavailable`。
+    `rescued`: 規則 3（クラスと組成式）だけで脂質になったか（名前は脂質名の文法で読めない。研究室 MSP の IUPAC 名・ID）。
+    """
+    is_lipid: bool | None
+    lipid_class: str | None
+    route: str
+    rescued: bool
+
+
+#: `LipidCall.route` の値。
+ROUTE_LBM_CLASS = "lbm_class"
+ROUTE_NAME = "name"
+ROUTE_CLASS_FORMULA = "class_formula"
+ROUTE_NAME_GRAMMAR = "name_grammar"
+ROUTE_UNMATCHED = "unmatched"
+ROUTE_GRAMMAR_UNAVAILABLE = "grammar_unavailable"
+
+
+def _text_or_none(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if value and value.casefold() != "null" else None
+
+
+def lipid_annotation_class(name, ontology, formula=None) -> LipidCall:
+    """脂質アッセイで、この注釈（名前・クラス・組成式）を脂質クラスに数えてよいかと、数えるクラス。
+
+    次のどれかなら脂質（上から順に見る）:
+    1. クラス（ontology）が MS-DIAL の脂質クラス（`pathway.msdial_lipid_classes.MSDIAL_LIPID_CLASSES`）。クラスは
+       そのまま（`lbm_class`）。MS-DIAL の略記はクラストークン＝Ontology の文法（output-format core §2.1）で、GOSLIN が
+       読めない形（`Cer 12:0;O3/8:0(2OH)`・`AHexCer (O-14:1)12:1;O2/12:1`・`NAGly 17:0`）も含む。
+    2. 名前を GOSLIN で読める（`lipid_name_parses`）。名前の頭部から MS-DIAL の脂質クラスが決まれば
+       （`pathway.msp_lipid.from_name`）そのクラスへ移す（`name`）。
+    3. クラスが研究室 MSP の ClassyFire の脂質クラス（`msp_lipid.CLASSYFIRE_TO_CLASS`）で、クラスと組成式から作った
+       和の組成の略記（`msp_lipid.from_class_formula`）を GOSLIN で読める。その略記のクラス（`PC` `TG` `EtherPC` …）
+       へ移す（`class_formula`）。名前が IUPAC 名・ID で読めない研究室 MSP の脂質を救う。名前で読めたが 2. で
+       クラスが決まらない注釈も、ここでクラスが決まれば移す。
+    2. で読めて 3. でクラスが決まらなければ、元のクラスのまま（`name_grammar`）。どれでもなければ脂質でない
+    （`unmatched`。`Ginsenoside Rb1`・`Enniatin B`・ClassyFire のクラスと組成式が合わない行など）。
+    注釈の名前・クラスそのものは変えない（数えるクラスを返すだけ）。pygoslin が無ければ判定しない（`is_lipid` が None）。
+    """
+    onto = ontology.strip() if isinstance(ontology, str) else ""
+    return _lipid_call(name if isinstance(name, str) else None, onto, _text_or_none(formula))
+
+
+@lru_cache(maxsize=65536)
+def _lipid_call(name: str | None, onto: str, formula: str | None) -> LipidCall:
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
+    from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
+
+    if onto in MSDIAL_LIPID_CLASSES:
+        return LipidCall(True, onto, ROUTE_LBM_CLASS, False)
+    unavailable = LipidCall(None, None, ROUTE_GRAMMAR_UNAVAILABLE, False)
+    parses = lipid_name_parses(name)
+    if parses is None:
+        return unavailable
+    named = has_annotation_name(name)
+    if parses and _CHAIN_TOKEN_RE.search(name):
+        for text in _name_forms(name):
+            by_name = msp_lipid.from_name(text)
+            if isinstance(by_name, tuple):
+                return LipidCall(True, by_name[1], ROUTE_NAME, False)
+    rest = msp_lipid.split_qualifier(name)[1] if named else None
+    built = msp_lipid.from_class_formula(onto, formula, rest)
+    if isinstance(built, tuple):
+        try:
+            if _parses(built[0]):
+                return LipidCall(True, built[1], ROUTE_CLASS_FORMULA, not parses)
+        except ImportError:  # pygoslin 未導入
+            return unavailable
+    if parses:
+        return LipidCall(True, onto or None, ROUTE_NAME_GRAMMAR, False)
+    return LipidCall(False, None, ROUTE_UNMATCHED, False)
+
+
+def may_move_lipid_class(name, ontology) -> bool:
+    """`lipid_annotation_class` がこの注釈を元のクラスと違うクラスへ移しうるか（GOSLIN を使わない安い前段）。
+
+    移すのは、クラスが MS-DIAL の脂質クラスでなく、研究室 MSP の ClassyFire の対応表（`msp_lipid.CLASSYFIRE_TO_CLASS`）に
+    あるか、名前に鎖（`34:1`）があるときだけ。False なら、脂質と読めてもクラスは元のまま（図のクラスの展開が、移った
+    特徴を探す範囲を絞るのに使う）。
+    """
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
+    from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
+
+    onto = ontology.strip() if isinstance(ontology, str) else ""
+    if onto in MSDIAL_LIPID_CLASSES:
+        return False
+    return onto in msp_lipid.CLASSYFIRE_TO_CLASS or bool(_CHAIN_TOKEN_RE.search(name if isinstance(name, str) else ""))
+
+
+def is_lipid_annotation(name, ontology, formula=None) -> bool | None:
+    """脂質アッセイで、この注釈を脂質クラスに数えてよいか（`lipid_annotation_class` の `is_lipid`）。
+
+    名前の無い注釈は、クラスと組成式（規則 1・3）だけで決まる（呼び出し側が `has_annotation_name` で先に分ける）。
+    pygoslin が無ければ None（判定できない）。
+    """
+    return lipid_annotation_class(name, ontology, formula).is_lipid
 
 
 def _read_tsv(path: Path) -> list[dict]:

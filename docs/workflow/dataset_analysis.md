@@ -133,7 +133,11 @@ QC/blank/unknown/standard・`include=false` を比較群に混ぜない。
 - spec v2 の比較（手順 15〜18。群が 1 つ・全群をまとめた表で完全交絡なら回さない。一部の対だけの完全交絡では止めず、
   `allow_confounded=True` で対比に印を付ける。探索専用のデータセットは `analysis/dataset_export.py` の `exploratory_reason()` の
   理由で段の先頭に印の事実を置く）
-- 選別の後だけ組成（手順 20）
+- 選別の後だけ組成（手順 20。脂質アッセイでは、注釈が `msdial/lipid_identity.py` の `lipid_annotation_class()`（MS-DIAL の
+  脂質クラスか、名前を `lipid_name_parses()` が GOSLIN で読めるか、研究室 MSP の ClassyFire の脂質クラスと組成式から
+  `pathway/msp_lipid.py` の `from_class_formula()` が作った略記を読めるか）で脂質と言えない特徴をクラスから外して `non_lipid` に
+  数え、MS-DIAL の脂質クラスが決まった特徴はそのクラスへ移して `lipid_class_relabel` に数える。手順 23 の `class_facts()` が
+  どちらも段の最後の事実にする）
 
 比較と PCA は `make_current=False` で `ds.results` に置き、直近（`last_differential` / `last_pca`）は動かさない。事実の組み立ては
 `analysis/overview.py`（手順 6・11・19・21〜24）。概観は `ds.results[ovw_…]`（`kind="overview"`、手順 25）と `reports/stats/`

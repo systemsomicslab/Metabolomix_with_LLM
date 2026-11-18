@@ -34,7 +34,8 @@ _PCA_COMPONENTS = 5
 _SPECIES_VALUES = {"share": "share", "intensity": "height"}
 
 _EXCLUDED_LABELS = (("internal_standard", "内部標準"), ("manual", "手動除外"), ("curation", "判断"),
-                    ("auto_likely_wrong", "自動判定"), ("standard_only", "標準液"), ("no_msms", "MS/MS なし"))
+                    ("auto_likely_wrong", "自動判定"), ("standard_only", "標準液"), ("non_lipid", "非脂質"),
+                    ("no_msms", "MS/MS なし"))
 
 
 def _helpers():

@@ -105,7 +105,8 @@ def _meta(ds, spot_id: int, index: dict[int, int]) -> dict:
 
 def _catalog(ds, index: dict[int, int]) -> list[dict]:
     return [{"MasterAlignmentID": sid, "Name": _meta(ds, sid, index).get("name") or "",
-             "Ontology": _meta(ds, sid, index).get("ontology") or ""} for sid in sorted(index)]
+             "Ontology": _meta(ds, sid, index).get("ontology") or "",
+             "Formula": _meta(ds, sid, index).get("formula") or ""} for sid in sorted(index)]
 
 
 def _msms(ds, index: dict[int, int]) -> dict[int, bool] | None:
@@ -218,7 +219,8 @@ def resolve_selection(ds, items, *, apply_curation: bool = True, exclude_auto_li
     catalog = _catalog(ds, index)
     try:
         resolved, excluded = gi.resolve_items(
-            items, catalog, curation=curation, standard_only=standard_only, manual=manual)
+            items, catalog, curation=curation, standard_only=standard_only, manual=manual,
+            assay_kind=getattr(ds, "assay_kind", None))
     except ValueError as exc:
         raise _bad(str(exc)) from exc
     _attach_feature_ids(resolved, excluded, catalog, curation, manual, index, ds)
