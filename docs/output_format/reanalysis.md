@@ -359,16 +359,38 @@ input_fingerprint, input_read?, comparison, group_ref, group_test, output_path?,
 あれば、結果の `warnings` に `{"code": "dataset_exclusions_not_in_spec", "n_samples", "n_features"}`（効いていない除外の件数）。
 組成のクラスは種別によらず MS-DIAL の ontology（特徴の `ontology`。無い特徴は `unclassified_features` に数える）で切る。
 ハンドルの `assay_kind`（`record_objective(assay_kind=...)`。spec には載らず、戻り値の `assay_kind` に出る）が変えるのは
-ラベル `class_label_kind`（`lipid` なら `lipid_class`、ほかは `msdial_ontology`）と、次の非脂質の入れ物だけ。
-**`lipid` では、注釈が脂質名の文法に乗らない特徴を脂質クラスに数えない**（研究室 MSP を先に引く run で当たる天然物・
-医薬品の名前など）。乗るのは、クラスが MS-DIAL の脂質クラス（`PC` `Cer_AP` `AHexCer` `ASM` …。MS-DIAL の略記はクラス
-トークン＝Ontology の文法で、GOSLIN が読めない `Cer 12:0;O3/8:0(2OH)` も含む）か、名前を GOSLIN で読める（限定子・`|` の後・
-注記・付加体の表記・同位体の標識を外し、古い書式と英語のクラス名を略記に直して読む。`Oleic acid` `Cholesterol` のような
-慣用名も読む）注釈。研究室 MSP の ClassyFire 系のクラスで名前が IUPAC 名・ID のもの（`1,2-Dioleoyl-sn-glycerol`、
-`MassSpecGymID…`）は乗らない側に入る。乗らない特徴は `non_lipid`（ラベル `non-lipid`）にまとめて件数と元のクラスの
-内訳を返し、クラスの合計・CLR・絶対量・`n_classes`・欠測の数え（`zero_handling`）から外す（注釈そのものは変えない）。名前の無い特徴は判定しない。`metabolite` / `unknown` ではクラス・
-CLR・絶対量の数字は変わらない。`rule_hash` は spec の hash なので種別によらず同じ（同じ spec でも `lipid` では数字が
-違いうるので、戻り値の `assay_kind` と `non_lipid` を併記する）。
+ラベル `class_label_kind`（`lipid` なら `lipid_class`、ほかは `msdial_ontology`）と、次の非脂質の入れ物・クラスの移し替えだけ。
+**`lipid` では、脂質と読めない注釈の特徴を脂質クラスに数えない**（研究室 MSP を先に引く run で当たる天然物・医薬品の名前など）。
+脂質と読むのは次のどれかに当たる注釈（`msdial/lipid_identity.py` の `lipid_annotation_class()`。上から順に見る）:
+
+1. クラスが MS-DIAL の脂質クラス（`PC` `Cer_AP` `AHexCer` `ASM` …。MS-DIAL の略記はクラストークン＝Ontology の文法で、
+   GOSLIN が読めない `Cer 12:0;O3/8:0(2OH)` も含む）。クラスはそのまま。
+2. 名前を GOSLIN で読める（限定子・`|` の後・注記・付加体の表記・同位体の標識を外し、内部標準の鎖の区切りの `-` を `/` に
+   直し（`SM d18:1-18:1(d9)` → `SM d18:1/18:1`）、古い書式と英語のクラス名を略記に直して読む。`Oleic acid` `Cholesterol`
+   のような慣用名も読む）。名前に鎖（`34:1`）があり、頭部から MS-DIAL の脂質クラスが決まれば（`pathway/msp_lipid.py` の
+   `from_name()`）そのクラスへ移す。
+3. クラスが研究室 MSP の ClassyFire の脂質クラスで、クラスと組成式から作った和の組成の略記（`from_class_formula()`）を
+   GOSLIN で読める。名前が IUPAC 名・ID の研究室 MSP の脂質（`1,2-Dioleoyl-sn-glycerol`→`DG 36:2`、
+   `MassSpecGymID…`）を救い、その略記のクラスへ移す。2. で読めてもクラスが決まらない注釈も、ここで決まれば移す。
+   対応表（`msp_lipid.CLASSYFIRE_TO_CLASS`）: `Phosphatidylcholines`→`PC`、`Phosphatidylethanolamines`→`PE`、
+   `Phosphatidylserines`→`PS`、`Phosphatidylglycerols`→`PG`、`Phosphatidylinositols` と `1-phosphatidyl-1D-myo-inositols`
+   →`PI`、`1,2-diacylglycerol-3-phosphates`→`PA`、`1-`/`2-acyl-sn-glycero-3-phosphocholines`→`LPC`、
+   `1-acyl-sn-glycero-3-phosphoethanolamines`→`LPE`、`1-acyl-glycerol-3-phosphoserines`→`LPS`、
+   `Lysophosphatidylglycerols`→`LPG`、エーテルの PC / PE の 4 クラス→`EtherPC` / `EtherPE`、`Triacylglycerols`→`TG`、
+   `1,2-`/`1,3-diacylglycerols`→`DG`、`1-`/`2-monoacylglycerols`→`MG`、`Long-chain` / `Very long-chain` /
+   `Medium-chain fatty acids` と `Lineolic acids and derivatives`→`FA`、`Acyl carnitines`→`CAR`、
+   `N-acylethanolamines`→`NAE`、`Sphingomyelins`→`SM`。組成式がそのクラスの形に合わない行（クラスの付け違い）・
+   名前の頭部の語がクラスと食い違う行は救わない。MS-DIAL で複数のクラスに分かれる `Ceramides` `Long-chain ceramides`
+   `Very long-chain ceramides` `Phosphosphingolipids` `Glycosyl-N-acylsphingosines` `Cholesterols and derivatives` と、
+   表に無いクラス（胆汁酸・ステロイド・プロスタグランジンなど）は、名前で読めなければ脂質と読まない。
+
+読めない特徴は `non_lipid`（ラベル `non-lipid`、規則 `lipid_annotation_unmatched`）にまとめて件数と元のクラスの内訳を返し、
+クラスの合計・CLR・絶対量・`n_classes`・欠測の数え（`zero_handling`）から外す。2.・3. で移した特徴は移した先のクラスで
+数え（`Phosphatidylcholines` の特徴が LBM の `PC` と同じクラスに入る）、`lipid_class_relabel` に数と内訳を返す。注釈の名前・
+クラスそのものは変えない。名前の無い特徴は判定しない。pygoslin が無ければ何も外さず移さない（警告
+`lipid_grammar_unavailable`）。`metabolite` / `unknown` ではクラス・CLR・絶対量の数字は変わらない。`rule_hash` は spec の
+hash なので種別によらず同じ（同じ spec でも `lipid` では数字が違いうるので、戻り値の `assay_kind` と `non_lipid`・
+`lipid_class_relabel` を併記する）。
 
 **前処理は尋ねない。** `drift.mode="auto"` は、補正できても内部標準で換算済みの値か、注入順が MS-DIAL の既定（ファイルの
 順）かもしれないときは補正を当てない。そのとき前処理の `steps` のドリフトの段に `reason`・`reasons`・
@@ -385,7 +407,8 @@ sample_table_hash}, primary, warnings, analyses}`。`analyses[]` は解析ごと
   `confounding`（群とバッチの交絡 `{batch_status, by_contrast}`）・`p_adjust_method`、要因の F があれば `factorial`（効果ごとの
   `{df1, n_tested, n_q_below}`）。
 - composition: compare の欄に `tables`（`clr` / `absolute` ごとの同じ件数）・`class_label_kind`・`n_classes`、`lipid` なら
-  `non_lipid`（`label`・`n_features`・`by_ontology` の上位 10。0 でも出す）。`confounding` は
+  `non_lipid`（`label`・`n_features`・`by_ontology` の上位 10。0 でも出す）と `lipid_class_relabel`（`n_features`・
+  `n_rescued`・`moves` の上位 10 の `{from, to, route, n_features, n_rescued}`。0 でも出す）。`confounding` は
   内側の比較のもの（`absolute`、無ければ `clr`。同じ個体なので同じ値）。`warnings` は組成の注意に内側の比較の注意（完全交絡・
   注入順の偏り・`constant_in_group`・`units_missing_model_values` ほか）を足し、コードで重ねない。内側から来た注意は
   `tables`（`absolute` / `clr`）にどの表のものかを持つ。
@@ -462,10 +485,13 @@ preprocess: {steps, warnings, subject_source}, primary, analyses: [{analysis_id,
   - エラー: `PLSDA_SPECIFICATION_INVALID`（引数）・`STATISTIC_GROUP_TOO_SMALL`（2 個体以上のクラスが 2 つ未満、またはグループが
     1 つだけのクラスがある。`details.class_groups`・`group_by`）・`PLSDA_MISSING_VALUES`（`impute=none` で欠測あり）・
     `PLSDA_TOO_FEW_FEATURES`（値の変わる特徴が 2 未満）。
-- **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, non_lipid, zero_handling, clr,
-  absolute, unit, warnings}`。`non_lipid` は `lipid` でだけ `{label: "non-lipid", rule: "lipid_name_unparsable", n_features,
-  by_ontology（元のクラス → 数。多い順）, feature_ids, examples（元のクラスごとに 1 つの {feature_id, name, ontology}。最大 10）}`、
-  ほかの種別は null（pygoslin が無く判定できなければ null と警告 `lipid_grammar_unavailable`）。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から除く
+- **`stats-composition.v1`**（composition）: `{class_label_kind, classes, unclassified_features, non_lipid, lipid_class_relabel,
+  zero_handling, clr, absolute, unit, warnings}`。`classes` は数えたクラス（移した先）→ 特徴 ID。`non_lipid` は `lipid` でだけ
+  `{label: "non-lipid", rule: "lipid_annotation_unmatched", n_features, by_ontology（元のクラス → 数。多い順）, feature_ids,
+  examples（元のクラスごとに 1 つの {feature_id, name, ontology}。最大 10）}`。`lipid_class_relabel` も `lipid` でだけ
+  `{rule: "msdial_lipid_class_from_name_or_class_formula", n_features, n_rescued（3. だけで脂質になった＝名前で読めない数）,
+  moves: [{from（元のクラス）, to（移した先）, route（"name" / "class_formula"）, n_features, n_rescued, example: {feature_id,
+  name}}]（多い順）}`。どちらもほかの種別は null（pygoslin が無く判定できなければ null と警告 `lipid_grammar_unavailable`）。`clr` / `absolute` はそれぞれ stats-compare.v1。クラスの合計が 0 以下の個体があるクラスは `clr` から除く
   （`zero_handling.excluded_classes`）。欠測のメンバーは合計に 0 として入り、その件数と警告
   `class_total_includes_missing_members` を出す。
 - 中の `warnings[]` は `{code, message, ...}`。長い一覧（`samples` など）は要約で切る。

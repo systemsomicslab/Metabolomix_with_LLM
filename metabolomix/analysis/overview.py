@@ -372,21 +372,36 @@ def global_facts(*, pca_result: dict | None, labels: dict, record: dict | None, 
 # --- クラス --------------------------------------------------------------------------------
 
 def _non_lipid_count(comp: dict) -> int:
-    """組成が脂質クラスから外した特徴（脂質名の文法に乗らない注釈。`non_lipid`）の数。外していなければ 0。"""
+    """組成が脂質クラスから外した特徴（脂質と読めない注釈。`non_lipid`）の数。外していなければ 0。"""
     return int((comp.get("non_lipid") or {}).get("n_features") or 0)
 
 
 def _non_lipid_fact(f: _Facts, comp: dict) -> None:
-    """脂質アッセイで、脂質名の文法に乗らない注釈の特徴を非脂質として外した事実（無ければ足さない）。"""
+    """脂質アッセイで、脂質と読めない注釈の特徴を非脂質として外した事実（無ければ足さない）。"""
     block = comp.get("non_lipid") or {}
     n = _non_lipid_count(comp)
     if not n:
         return
     top = list((block.get("by_ontology") or {}).items())[:5]
-    f.add(f"脂質名の文法に乗らない注釈の特徴 {n} 個は非脂質（{block.get('label')}）としてクラスの集計"
+    f.add(f"脂質と読めない注釈の特徴 {n} 個は非脂質（{block.get('label')}）としてクラスの集計"
           "（合計・CLR・分子種の数）から外した。元のクラスの上位: " + "、".join(f"{c} {k}" for c, k in top),
           n_features=n, by_ontology=dict(top),
           examples=[e.get("name") for e in (block.get("examples") or [])[:5]])
+
+
+def _relabel_fact(f: _Facts, comp: dict) -> None:
+    """脂質アッセイで、名前か ClassyFire のクラスと組成式から MS-DIAL の脂質クラスへ移して数えた事実（無ければ足さない）。"""
+    block = comp.get("lipid_class_relabel") or {}
+    n = int(block.get("n_features") or 0)
+    if not n:
+        return
+    top = (block.get("moves") or [])[:5]
+    f.add(f"MS-DIAL の脂質クラスでないクラス（研究室 MSP の ClassyFire など）の注釈の特徴 {n} 個は、名前かクラスと組成式から"
+          "MS-DIAL の脂質クラスへ移して数えた"
+          f"（うち名前で読めず組成式で救ったもの {int(block.get('n_rescued') or 0)} 個。注釈そのものは変えない）。"
+          "上位: " + "、".join(f"{m['from']}→{m['to']} {m['n_features']}" for m in top),
+          n_features=n, n_rescued=int(block.get("n_rescued") or 0),
+          moves=[{k: m.get(k) for k in ("from", "to", "route", "n_features")} for m in top])
 
 
 def class_facts(*, composition_result: dict | None, gate: str | None, gate_next: str,
@@ -401,7 +416,7 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
     if absolute is None:
         n_non_lipid = _non_lipid_count(comp)
         omitted = ("クラスの付いた特徴が無い" if not n_non_lipid else
-                   f"脂質クラスの付いた特徴が無い（脂質名の文法に乗らない注釈の特徴 {n_non_lipid} 個は非脂質として外した）")
+                   f"脂質クラスの付いた特徴が無い（脂質と読めない注釈の特徴 {n_non_lipid} 個は非脂質として外した）")
         return {"omitted": omitted, "facts": [], "next": gate_next}
     f = _Facts("C")
     _exploratory_fact(f, exploratory)
@@ -447,6 +462,7 @@ def class_facts(*, composition_result: dict | None, gate: str | None, gate_next:
         if w.get("code") == "class_total_includes_missing_members":
             f.add("欠測のメンバーを 0 として合計したクラスがある（欠測の多い群で低めに出る）",
                   classes=w.get("classes", [])[:20])
+    _relabel_fact(f, comp)
     _non_lipid_fact(f, comp)
     nxt = f'dataset_plot(kind="group_intensity", items={_j(items)})' if items else gate_next
     return {"facts": f.items, "table": table, "next": nxt}

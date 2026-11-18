@@ -183,6 +183,25 @@ def test_class_facts_report_non_lipid_annotations_separately():
     assert set(comp_m["classes"]) == {"PC", "PE", "TG", "Triterpene saponins", "Cyclic depsipeptides"}
 
 
+def test_class_facts_report_lab_msp_lipids_moved_to_the_msdial_class():
+    ds = _classed(_ds(per_group=6))
+    # TG の 1 つを研究室 MSP の行（ClassyFire のクラス・名前は ID）にする: 組成式から TG に救われる
+    ds.feature_metadata["f6"].update(name="MassSpecGymID0000001", ontology="Triacylglycerols", formula="C57H104O6")
+    comp, plan = _composition(ds)
+    assert "f6" in comp["classes"]["TG"]
+    sec = overview.class_facts(composition_result=comp, gate=None, gate_next="", plan=plan, quality_note=None)
+    fact = next(f for f in sec["facts"] if "MS-DIAL の脂質クラスへ移して" in f["text"])
+    assert fact["data"]["n_features"] == 1 and fact["data"]["n_rescued"] == 1
+    assert fact["data"]["moves"] == [{"from": "Triacylglycerols", "to": "TG", "route": "class_formula",
+                                      "n_features": 1}]
+    assert "Triacylglycerols→TG 1" in fact["text"]
+    # 移したものが無ければ事実を出さない
+    plain = _classed(_ds(per_group=6))
+    comp_p, plan_p = _composition(plain)
+    sec_p = overview.class_facts(composition_result=comp_p, gate=None, gate_next="", plan=plan_p, quality_note=None)
+    assert not any("移して" in f["text"] for f in sec_p["facts"])
+
+
 def test_class_facts_omitted_names_the_non_lipid_count_when_no_lipid_class_is_left():
     ds = _ds(per_group=6)
     for fid in ds.feature_ids:

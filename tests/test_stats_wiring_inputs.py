@@ -322,10 +322,13 @@ def test_merge_feature_columns_moves_the_name_with_the_class():
     st = _study(np.ones((2, 4)), rows)
     st.feature_classes = {"f1": "Triterpene saponins", "f2": "PC", "f3": "TG"}
     st.feature_names = {"f0": "x", "f1": "Ginsenoside Rb1", "f2": "PC 34:1", "f3": "TG 52:2"}
+    st.feature_formulas = {"f0": "C1", "f2": "C42H82NO8P", "f3": "C55H102O6"}
     out = D.merge_feature_columns(st, [["f0", "f1"], ["f2", "f3"]])
-    # 先頭にクラスが無ければ、クラスを譲った特徴の名前も譲る。先頭にクラスがあれば先頭の名前のまま
+    # 先頭にクラスが無ければ、クラスを譲った特徴の名前・組成式も譲る（譲る側に無ければ先頭のものも消す）。
+    # 先頭にクラスがあれば先頭の名前・組成式のまま
     assert out.feature_classes == {"f0": "Triterpene saponins", "f2": "PC"}
     assert out.feature_names == {"f0": "Ginsenoside Rb1", "f2": "PC 34:1"}
+    assert out.feature_formulas == {"f2": "C42H82NO8P"}
 
 
 def test_preprocess_carries_annotation_names_of_kept_features():
@@ -334,6 +337,15 @@ def test_preprocess_carries_annotation_names_of_kept_features():
     pre = _pre(D.from_dataset(ds, exclude_features=["f1"]))
     assert pre.feature_names == {f: ds.feature_metadata[f]["name"] for f in pre.feature_ids}
     assert "f1" not in pre.feature_names
+
+
+def test_preprocess_carries_annotation_formulas_of_kept_features():
+    ds = _ds()
+    ds.feature_metadata = {f"f{k}": {"ontology": "Triacylglycerols", "name": f"ID{k}", "formula": "C57H104O6"}
+                           for k in range(len(ds.feature_ids))}
+    pre = _pre(D.from_dataset(ds, exclude_features=["f1"]))
+    assert pre.feature_formulas == {f: "C57H104O6" for f in pre.feature_ids}
+    assert "f1" not in pre.feature_formulas
 
 
 # --- 修正ラウンド 1 -------------------------------------------------------------

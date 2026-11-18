@@ -651,7 +651,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 | `curation` | `apply_curation=True`（既定）のとき、人の判断が `wrong` / `redundant` のスポット（`clear` 済みは無効）。`assign` は記録した名前・クラスで扱う。`suspect` は描く。名前指定の部分にも効く |
 | `auto_likely_wrong` | `exclude_auto_likely_wrong=True` のとき、このアラインメント（`.arf2` の sha256 一致）の最新 `curation_review` で `likely_wrong` のスポット。名前指定の部分にも効く。レビューが無ければ除かず `caveats` に出す |
 | `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ。標準液の奇数鎖標準物質がクラス合計に混ざるのを防ぐ）。判定には `dataset_exclude` 済みの試料の行も使う |
-| `non_lipid` | ハンドルの `assay_kind` が `lipid` のとき、注釈が脂質名の文法に乗らないスポット（クラスが MS-DIAL の脂質クラスでなく、名前も GOSLIN で読めない。研究室 MSP の天然物・医薬品の名前など。組成の `non_lipid` と同じ規則。`reanalysis.md` §2.1）。**クラスとして当たった分だけ**除く（名前・特徴 ID で指定した部分は描く）。ほかの種別では空 |
+| `non_lipid` | ハンドルの `assay_kind` が `lipid` のとき、脂質と読めない注釈のスポット（クラスが MS-DIAL の脂質クラスでなく、名前も GOSLIN で読めず、研究室 MSP の ClassyFire の脂質クラスと組成式からも略記を作れない。天然物・医薬品の名前など。組成の `non_lipid` と同じ規則。`reanalysis.md` §2.1）。**クラスとして当たった分だけ**除く（名前・特徴 ID で指定した部分は描く）。ほかの種別では空。同じ規則で MS-DIAL の脂質クラスへ移ったスポット（`Phosphatidylcholines` の IUPAC 名の行など）は、移った先のクラス（`PC`）として指定しても、元のクラス名で指定しても当たる |
 
 図を報告に載せるときは `excluded` の件数と理由を併記する。
 
@@ -798,9 +798,12 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 クラスの合計に入り、見せかけの `unchanged` が出るので、`omitted` と鎖を進める `next`）。mzTab-M など解析フォルダ以外から開いた
 データは定量の鎖が使えないので、`dataset_analysis_run` の `kind="composition"` を案内する。2 群は `class n_species log2fc_total ci_low
 ci_high verdict_total clr_log2fc verdict_clr` の TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F の q
-（`class n_species f_q_total`）。`assay_kind` が `lipid` なら、注釈が脂質名の文法に乗らない特徴（組成の `non_lipid`。
+（`class n_species f_q_total`）。`assay_kind` が `lipid` なら、脂質と読めない注釈の特徴（組成の `non_lipid`。
 `reanalysis.md` §2.1）はクラスにも `n_species` にも入らず、1 つ以上あれば段の最後の事実にその数と元のクラスの上位
-（データに `n_features`・`by_ontology`・`examples`）を出す。脂質クラスが 1 つも残らなければ段を省き、`omitted` にその数を書く。
+（データに `n_features`・`by_ontology`・`examples`）を出す。名前か ClassyFire のクラスと組成式から MS-DIAL の脂質クラスへ
+移した特徴（組成の `lipid_class_relabel`）は移した先のクラスで数え、1 つ以上あればその数・名前で読めず組成式で救った数・
+移し替えの上位（データに `n_features`・`n_rescued`・`moves`）を事実にする。脂質クラスが 1 つも残らなければ段を省き、
+`omitted` にその数を書く。
 
 **分子種（S）** — `changed`（上昇・下降の内訳つき）/ `unchanged` / `inconclusive` の数。**`inconclusive` は「変わっていない」では
 ない**（同等性の幅に収まった `unchanged` だけが変わっていない）。出方（検出の有無）だけに差があり強度の判定は `inconclusive` の特徴の

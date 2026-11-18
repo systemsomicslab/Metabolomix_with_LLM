@@ -11,7 +11,7 @@ import re
 import statistics
 
 from metabolomix.msdial import sample_factors
-from metabolomix.msdial.lipid_identity import has_annotation_name, is_lipid_annotation
+from metabolomix.msdial.lipid_identity import has_annotation_name, lipid_annotation_class, may_move_lipid_class
 
 GROUP_INTENSITY_SCHEMA = "lipidmix.group_intensity.v1"
 MAX_ITEMS = 30
@@ -34,9 +34,11 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), m
     """項目（クラス・名前、`+` で合算）をスポット集合に解決する。spec §3.1 / §5。
 
     manual: `dataset_exclude` で手動除外したスポット ID。クラスにも名前指定にも効く。
-    assay_kind: `"lipid"` なら、クラスとして当たったスポットのうち注釈が脂質名の文法に乗らないもの
-    （天然物・医薬品の名前など。`lipid_identity.is_lipid_annotation`）をクラスの合計に入れない（excluded の
-    `non_lipid`。組成 `composition` の `non_lipid` と同じ規則）。名前指定には効かない。
+    assay_kind: `"lipid"` なら、組成（`composition`）と同じ規則（`lipid_identity.lipid_annotation_class`）で
+    クラスを読む: 脂質と読めない注釈（天然物・医薬品の名前など）はクラスの合計に入れず（excluded の `non_lipid`）、
+    名前か ClassyFire のクラスと組成式から MS-DIAL の脂質クラスが決まったスポットはそのクラスにも当てる
+    （`PC` は `Phosphatidylcholines` から移ったスポットも含む。元のクラス名で指定すれば元のクラスで当たる）。
+    catalog の `Formula`（組成式）を読む。名前指定には効かない。
     """
     items = [str(item) for item in (items or [])]
     if not 1 <= len(items) <= MAX_ITEMS:
@@ -48,14 +50,35 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), m
     manual = {int(s) for s in (manual or ())}
 
     spots = []
+    formula_of: dict[int, str | None] = {}
     for row in catalog:
         sid = int(row["MasterAlignmentID"])
         name, ontology = row.get("Name") or "", (row.get("Ontology") or "").strip()
+        formula_of[sid] = row.get("Formula") or None
         if sid in assign:
             name = assign[sid].get("name") or name
             ontology = (assign[sid].get("ontology") or ontology).strip()
+            formula_of[sid] = None   # 付け替えた注釈の組成式は分からない（元の組成式で救わない）
         spots.append({"spot_id": sid, "name": name, "ontology": ontology})
-    ontologies = {s["ontology"].casefold() for s in spots if s["ontology"]}
+    lipid = assay_kind == "lipid"
+    calls: dict = {}
+
+    def lipid_call(spot):
+        sid = spot["spot_id"]
+        if sid not in calls:
+            calls[sid] = lipid_annotation_class(spot["name"], spot["ontology"], formula_of.get(sid))
+        return calls[sid]
+
+    # 脂質アッセイで MS-DIAL の脂質クラスへ移ったスポット（移った先のクラス名 → スポット）。移りうるものだけ読む。
+    moved: dict[str, list[dict]] = {}
+    if lipid:
+        for s in spots:
+            if (s["ontology"] and has_annotation_name(s["name"])
+                    and may_move_lipid_class(s["name"], s["ontology"])):
+                call = lipid_call(s)
+                if call.is_lipid and call.lipid_class and call.lipid_class != s["ontology"]:
+                    moved.setdefault(call.lipid_class.casefold(), []).append(s)
+    ontologies = {s["ontology"].casefold() for s in spots if s["ontology"]} | set(moved)
 
     excluded = {key: set() for key in _EXCLUDED_KEYS}
 
@@ -76,8 +99,8 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), m
         if as_class and spot["spot_id"] in standard_only:
             excluded["standard_only"].add(label)
             return False
-        if (as_class and assay_kind == "lipid" and has_annotation_name(spot["name"])
-                and is_lipid_annotation(spot["name"], spot["ontology"]) is False):
+        if (as_class and lipid and has_annotation_name(spot["name"])
+                and lipid_call(spot).is_lipid is False):
             excluded["non_lipid"].add(label)
             return False
         return True
@@ -92,7 +115,10 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), m
         for part in parts:
             key = part.casefold()
             if key in ontologies:
-                hits = [s for s in spots if s["ontology"].casefold() == key and keep(s, as_class=True)]
+                direct = [s for s in spots if s["ontology"].casefold() == key]
+                seen = {s["spot_id"] for s in direct}
+                candidates = direct + [s for s in moved.get(key, ()) if s["spot_id"] not in seen]
+                hits = [s for s in candidates if keep(s, as_class=True)]
                 kind = "class"
             else:
                 hits = [s for s in spots if key in _candidate_names(s["name"]) and keep(s, as_class=False)]

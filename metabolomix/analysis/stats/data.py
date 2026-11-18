@@ -62,8 +62,11 @@ class StudyData:
     feature_classes: dict[str, str] = field(default_factory=dict)
     annotated_features: frozenset[str] = frozenset()
     #: 特徴 ID → 注釈の名前（`feature_metadata[fid]["name"]`。名前の無い特徴は持たない）。脂質アッセイの組成が
-    #: 脂質名の文法に乗らない注釈を脂質クラスから外すのに読む（`composition`）。
+    #: 脂質と読めない注釈を脂質クラスから外し、MS-DIAL の脂質クラスへ移すのに読む（`composition`）。
     feature_names: dict[str, str] = field(default_factory=dict)
+    #: 特徴 ID → 注釈の組成式（`feature_metadata[fid]["formula"]`。無い特徴は持たない）。脂質アッセイの組成が、名前で
+    #: 読めない研究室 MSP の脂質を ClassyFire のクラスと組成式から脂質クラスへ救うのに読む（`composition`）。
+    feature_formulas: dict[str, str] = field(default_factory=dict)
     #: 割れのまとめの記録（組ごとの特徴 ID）。除外との区別（matrix_id）のために持つ。
     feature_merges: tuple = ()
     #: バッチが不明な試料の、試料名の 8 桁からの候補（試料 ID → `{"value", "source": "filename_date"}`）。
@@ -427,7 +430,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
                            "detected_mask_shape": list(np.shape(mask))})
     detected = None if mask is None else np.array(np.asarray(mask, dtype=bool).T, copy=True)
     names = _engine_sample_ids(ds)
-    classes, feature_names = {}, {}
+    classes, feature_names, feature_formulas = {}, {}, {}
     for fid, meta in (getattr(ds, "feature_metadata", None) or {}).items():
         ontology = (meta or {}).get("ontology")
         if ontology:
@@ -435,6 +438,9 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
         name = (meta or {}).get("name")
         if isinstance(name, str) and name.strip():
             feature_names[fid] = name
+        formula = (meta or {}).get("formula")
+        if isinstance(formula, str) and formula.strip():
+            feature_formulas[fid] = formula.strip()
     annotated = frozenset(fid for fid, cands in (getattr(ds, "feature_candidates", None) or {}).items()
                           if cands)
     feature_ids = list(ds.feature_ids)
@@ -458,6 +464,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
         feature_ids = [feature_ids[j] for j in keep]
         classes = {f: c for f, c in classes.items() if f not in drop}
         feature_names = {f: n for f, n in feature_names.items() if f not in drop}
+        feature_formulas = {f: v for f, v in feature_formulas.items() if f not in drop}
         annotated = frozenset(f for f in annotated if f not in drop)
         feature_polarity = {f: p for f, p in feature_polarity.items() if f not in drop}
     # 残った特徴の極性の測定だけ（陽イオンは試料の表そのもの）
@@ -467,7 +474,7 @@ def from_dataset(ds, *, exclude_samples=(), exclude_features=(),
                      feature_ids=feature_ids, samples=samples,
                      quant=quant_state_of(ds), dataset_hash=_fingerprint(ds),
                      feature_classes=classes, annotated_features=annotated,
-                     feature_names=feature_names,
+                     feature_names=feature_names, feature_formulas=feature_formulas,
                      batch_candidates=batch_candidates, feature_polarity=feature_polarity,
                      polarity_runs=polarity_runs)
 
@@ -498,6 +505,7 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
     drop: set[int] = set()
     classes = dict(study.feature_classes)
     names = dict(study.feature_names)
+    formulas = dict(study.feature_formulas)
     annotated = set(study.annotated_features)
     merges = tuple(study.feature_merges) + tuple(tuple(p) for p in plans)
     for present in plans:
@@ -513,17 +521,19 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
         if head not in classes:
             donor = next((f for f in present[1:] if f in classes), None)
             if donor is not None:
-                # クラスを譲った特徴の名前も一緒に譲る（脂質名の判定がクラスと同じ注釈を読む）
+                # クラスを譲った特徴の名前・組成式も一緒に譲る（脂質名の判定がクラスと同じ注釈を読む）
                 classes[head] = classes[donor]
-                if donor in names:
-                    names[head] = names[donor]
-                else:
-                    names.pop(head, None)
+                for own in (names, formulas):
+                    if donor in own:
+                        own[head] = own[donor]
+                    else:
+                        own.pop(head, None)
         if any(f in annotated for f in present):
             annotated.add(head)
         for f in present[1:]:
             classes.pop(f, None)
             names.pop(f, None)
+            formulas.pop(f, None)
             annotated.discard(f)
     keep = [i for i in range(len(ids)) if i not in drop]
     kept_ids = [study.feature_ids[i] for i in keep]
@@ -533,4 +543,5 @@ def merge_feature_columns(study: StudyData, groups: list[list[str]]) -> StudyDat
                    detected=None if det is None else det[:, keep],
                    feature_ids=kept_ids,
                    feature_classes=classes, annotated_features=frozenset(annotated),
-                   feature_names=names, feature_merges=merges, feature_polarity=polarity)
+                   feature_names=names, feature_formulas=formulas, feature_merges=merges,
+                   feature_polarity=polarity)

@@ -83,6 +83,15 @@ def test_from_dataset_keeps_annotation_names_for_the_lipid_class_split():
     assert D.from_dataset(no_name).feature_names == {}
 
 
+def test_from_dataset_keeps_annotation_formulas_for_the_lipid_class_rescue():
+    ds = _ds(feature_metadata={"f1": {"ontology": "Phosphatidylcholines", "name": "MassSpecGymID0000001",
+                                      "formula": " C42H82NO8P "},
+                               "f2": {"ontology": "PC", "name": "PC 34:1", "formula": ""},
+                               "f3": {"ontology": "TG", "name": "TG 52:2", "formula": None}})
+    assert D.from_dataset(ds).feature_formulas == {"f1": "C42H82NO8P"}
+    assert D.from_dataset(ds, exclude_features=["f1"]).feature_formulas == {}
+
+
 def test_from_dataset_does_not_mutate_dataset():
     ds = _ds()
     fm, dm = ds.feature_matrix.copy(), ds.detected_mask.copy()

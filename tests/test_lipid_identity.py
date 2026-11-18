@@ -194,9 +194,64 @@ def test_lipid_annotation_accepts_msdial_lipid_classes_even_when_goslin_cannot_r
     # MS-DIAL の脂質クラスでなければ名前で決める（ClassyFire 系のクラス・Unknown）
     assert li.is_lipid_annotation("Oleic acid", "Long-chain fatty acids") is True
     assert li.is_lipid_annotation("Saikosaponin A", "Triterpene saponins") is False
+    # 組成式が無ければ ClassyFire のクラスからは救えない（名前の IUPAC 名は GOSLIN で読めない）
     assert li.is_lipid_annotation("1,2-Dioleoyl-sn-glycerol", "1,2-diacylglycerols") is False
     assert li.is_lipid_annotation("no MS2: Unknown (carbon number 10); PlaSMA ID-657", "Unknown") is False
     assert li.is_lipid_annotation("Enniatin B", None) is False
+
+
+def test_lab_msp_lipids_with_unreadable_names_are_rescued_by_classyfire_class_and_formula():
+    # 規則 3: ClassyFire の脂質クラスと組成式から作った和の組成の略記を GOSLIN が読めば脂質。略記のクラスへ移す
+    cases = [("no MS2: 1,2-Dioleoyl-sn-glycero-3-phosphocholine", "Phosphatidylcholines", "C44H84NO8P", "PC"),
+             ("1,2-Dioleoyl-sn-glycerol", "1,2-diacylglycerols", "C39H72O5", "DG"),
+             ("low score: MassSpecGymID0000001", "Triacylglycerols", "C57H104O6", "TG"),
+             ("MassSpecGymID0000002", "1-alkyl,2-acylglycero-3-phosphocholines", "C42H84NO7P", "EtherPC"),
+             ("L-Propionylcarnitine", "Acyl carnitines", "C10H19NO4", "CAR")]
+    for name, ontology, formula, lbm in cases:
+        call = li.lipid_annotation_class(name, ontology, formula)
+        assert call == (True, lbm, li.ROUTE_CLASS_FORMULA, True), name
+        assert li.is_lipid_annotation(name, ontology, formula) is True
+    # 組成式がクラスの形に合わない（クラスの付け違い）・MS-DIAL で複数のクラスに分かれる・表に無いクラスは救わない
+    for name, ontology, formula in [("7.alpha.,24(S)-Dihydroxy-4-cholesten-3-one", "Phosphatidylcholines", "C27H44O3"),
+                                    ("N-Octanoylsphingosine", "Ceramides", "C26H51NO3"),
+                                    ("Saikosaponin A", "Triterpene saponins", "C42H68O13"),
+                                    ("1,2-Dioleoyl-sn-glycerol", "1,2-diacylglycerols", None)]:
+        assert li.lipid_annotation_class(name, ontology, formula) == (False, None, li.ROUTE_UNMATCHED, False), name
+
+
+def test_lipid_annotation_class_moves_classyfire_lipids_to_the_msdial_class():
+    # MS-DIAL の脂質クラスはそのまま。読める名前は頭部（鎖のある名前だけ）か、クラスと組成式から MS-DIAL のクラスへ移す
+    assert li.lipid_annotation_class("PC 34:1", "PC") == (True, "PC", li.ROUTE_LBM_CLASS, False)
+    assert li.lipid_annotation_class("no MS2: PC 18:0/18:1(9Z)", "Phosphatidylcholines", "C44H86NO8P") == (
+        True, "PC", li.ROUTE_NAME, False)
+    assert li.lipid_annotation_class("PC(16:0/18:1(9Z))", "Phosphatidylcholines", "C42H82NO8P") == (
+        True, "PC", li.ROUTE_CLASS_FORMULA, False)
+    assert li.lipid_annotation_class("Pentadecanoic acid", "Long-chain fatty acids", "C15H30O2") == (
+        True, "FA", li.ROUTE_CLASS_FORMULA, False)
+    # 読めるがクラスが決まらない注釈は元のクラスのまま
+    assert li.lipid_annotation_class("16-Hydroxyhexadecanoic acid", "Long-chain fatty acids", "C16H32O3") == (
+        True, "Long-chain fatty acids", li.ROUTE_NAME_GRAMMAR, False)
+    assert li.lipid_annotation_class("Oleic acid", "Fatty acids and conjugates", "null") == (
+        True, "Fatty acids and conjugates", li.ROUTE_NAME_GRAMMAR, False)
+
+
+def test_splash_internal_standard_names_with_dash_separators_are_lipids():
+    # 内部標準の鎖の区切りの `-` は `/` に直して読む（同位体の標識は外す）
+    for name in ("SM d18:1-18:1(d9)", "Cer d18:1-15:0(d7)", "TG 15:0-18:1(d7)-15:0", "LPC 18:1(d7)"):
+        assert li.lipid_name_parses(name) is True, name
+    assert li.lipid_annotation_class("SM d18:1-18:1(d9)", "Sphingomyelins") == (True, "SM", li.ROUTE_NAME, False)
+    assert li.lipid_annotation_class("Cer d18:1-15:0(d7)", "Long-chain ceramides") == (
+        True, "Cer_NS", li.ROUTE_NAME, False)
+    # エーテルの `O-` は鎖の区切りではない
+    assert li._CHAIN_DASH_RE.sub(r"\1/", "PE O-16:0/18:1") == "PE O-16:0/18:1"
+
+
+def test_may_move_lipid_class_is_a_cheap_superset_of_the_moves():
+    assert li.may_move_lipid_class("MassSpecGymID0000001", "Triacylglycerols") is True
+    assert li.may_move_lipid_class("PC 34:1", "null") is True
+    assert li.may_move_lipid_class("PC 34:1", "PC") is False           # MS-DIAL の脂質クラスは移さない
+    assert li.may_move_lipid_class("Oleic acid", "Fatty acids and conjugates") is False
+    assert li.lipid_annotation_class("PC 34:1", "null") == (True, "PC", li.ROUTE_NAME, False)
 
 
 def test_annotation_name_presence():
@@ -213,10 +268,15 @@ def test_lipid_name_parses_is_none_without_pygoslin(monkeypatch):
 
     monkeypatch.setattr(li, "_parse_lipid", missing)
     li.lipid_name_parses.cache_clear()
+    li._lipid_call.cache_clear()
     try:
         assert li.lipid_name_parses("Ginsenoside Rb1") is None
+        # 判定できない（規則 1 の MS-DIAL の脂質クラスだけは GOSLIN なしで脂質）
+        assert li.lipid_annotation_class("MassSpecGymID0000001", "Triacylglycerols", "C57H104O6").is_lipid is None
+        assert li.lipid_annotation_class("PC 34:1", "PC").is_lipid is True
     finally:
         li.lipid_name_parses.cache_clear()
+        li._lipid_call.cache_clear()
 
 
 if __name__ == "__main__":

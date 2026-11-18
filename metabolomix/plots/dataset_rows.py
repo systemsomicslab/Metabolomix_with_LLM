@@ -105,7 +105,8 @@ def _meta(ds, spot_id: int, index: dict[int, int]) -> dict:
 
 def _catalog(ds, index: dict[int, int]) -> list[dict]:
     return [{"MasterAlignmentID": sid, "Name": _meta(ds, sid, index).get("name") or "",
-             "Ontology": _meta(ds, sid, index).get("ontology") or ""} for sid in sorted(index)]
+             "Ontology": _meta(ds, sid, index).get("ontology") or "",
+             "Formula": _meta(ds, sid, index).get("formula") or ""} for sid in sorted(index)]
 
 
 def _msms(ds, index: dict[int, int]) -> dict[int, bool] | None:

@@ -1273,14 +1273,17 @@ def test_analysis_run_v2_composition_summary_carries_the_inner_confounding(tmp_p
 
 
 def _lipid_mixed_state(tmp_path, assay_kind):
-    """脂質の名前の特徴と、研究室 MSP の天然物の名前の特徴（f6・f7）が混ざったデータセット。"""
+    """脂質の名前の特徴と、研究室 MSP の天然物の名前の特徴（f6・f7）と、研究室 MSP の名前が ID の TG（f9。
+    ClassyFire のクラスと組成式から TG に救われる）が混ざったデータセット。"""
     state = _v2_state(tmp_path)
     names = {"f0": "PC 34:1", "f1": "PC 36:2", "f2": "PC 38:4", "f3": "PE 36:2", "f4": "PE 38:4",
              "f5": "PE 40:6", "f6": "Ginsenoside Rb1", "f7": "no MS2: Saikosaponin A", "f8": "TG 52:2",
-             "f9": "TG 54:3"}
+             "f9": "MassSpecGymID0000001"}
     for fid, name in names.items():
-        onto = "Triterpene saponins" if fid in ("f6", "f7") else name.split()[0]
+        onto = ("Triterpene saponins" if fid in ("f6", "f7") else
+                "Triacylglycerols" if fid == "f9" else name.split()[0])
         state.feature_metadata[fid].update(name=name, ontology=onto)
+    state.feature_metadata["f9"]["formula"] = "C57H104O6"
     state.assay_kind = assay_kind
     return state
 
@@ -1295,15 +1298,20 @@ def test_analysis_run_v2_lipid_composition_keeps_non_lipid_names_out_of_the_clas
     assert comp["class_label_kind"] == "lipid_class" and comp["n_classes"] == 3
     assert comp["non_lipid"] == {"label": "non-lipid", "n_features": 2,
                                  "by_ontology": {"Triterpene saponins": 2}}
+    assert comp["lipid_class_relabel"] == {
+        "n_features": 1, "n_rescued": 1,
+        "moves": [{"from": "Triacylglycerols", "to": "TG", "route": "class_formula", "n_features": 1,
+                   "n_rescued": 1}]}
     inner = _strict_loads(path.read_text(encoding="utf-8"))["analyses"][0]["result"]
-    assert set(inner["classes"]) == {"PC", "PE", "TG"}
+    assert set(inner["classes"]) == {"PC", "PE", "TG"} and inner["classes"]["TG"] == ["f8", "f9"]
     assert inner["non_lipid"]["feature_ids"] == ["f6", "f7"]
     assert {r["feature_id"] for r in inner["absolute"]["rows"]} == {"PC", "PE", "TG"}
-    # 一般代謝物はこれまでどおり: クラスはどの ontology も数え、non_lipid は無い
+    # 一般代謝物はこれまでどおり: クラスはどの ontology も数え、non_lipid・クラスの移し替えは無い
     _lipid_mixed_state(tmp_path, "metabolite")
     out_m = json.loads(R.dataset_analysis_run(spec))
     comp_m = out_m["analyses"][0]
-    assert out_m["assay_kind"] == "metabolite" and comp_m["n_classes"] == 4 and "non_lipid" not in comp_m
+    assert out_m["assay_kind"] == "metabolite" and comp_m["n_classes"] == 5
+    assert "non_lipid" not in comp_m and "lipid_class_relabel" not in comp_m
 
 
 def test_analysis_run_v2_inline_row_limit(tmp_path):

@@ -10,6 +10,7 @@ import re
 import threading
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from metabolomix.msdial import peak_verification as pv
 
@@ -153,50 +154,163 @@ def _parses(text: str) -> bool:
     return True
 
 
+#: 内部標準（SPLASH など）の名前の鎖の区切りの `-`（`SM d18:1-18:1` `PC 15:0-18:1` `TG 15:0-18:1-15:0`）。
+#: 鎖と鎖の間（`数:数` の後で、次も `数:数`）の `-` だけを `/` に直す（`PC O-16:0` の `O-` は当たらない）。
+_CHAIN_DASH_RE = re.compile(r"(\d+:\d+)-(?=[dt]?\d+:\d+)")
+#: 脂質の略記の鎖（`34:1`）。名前から MS-DIAL の脂質クラスを決める（`msp_lipid.from_name`）のは、これを含む名前だけ。
+_CHAIN_TOKEN_RE = re.compile(r"\d+:\d+")
+
+
+@lru_cache(maxsize=65536)
+def _name_forms(name: str) -> tuple[str, ...]:
+    """名前を脂質名の文法（GOSLIN）で読むときに試す形（重ねない。この順）。
+
+    限定子接頭辞と `|` を外した名前 → 注記・付加体の表記を切り、古い MS-DIAL の書式・英語のクラス名を略記に
+    直した名前（`pathway.msp_lipid.shorthand`。`msms_rules.name_lipid_species` の `name_cleaned` と同じ直し）
+    → それぞれから同位体の標識（`(d7)` など。内部標準）を外した名前 → その鎖の区切りの `-` を `/` に直した名前と、
+    その略記（`SM d18:1-18:1(d9)` → `SM d18:1/18:1` → `SM 18:1;O2/18:1`）。
+    """
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
+
+    forms: list[str] = []
+
+    def add(text):
+        if text and text not in forms:
+            forms.append(text)
+
+    clean, _ = _clean_msdial_name(name)
+    add(clean)
+    add(msp_lipid.shorthand(clean))
+    for text in list(forms):
+        bare = _ISOTOPE_TAG_RE.sub("", text).strip()
+        add(bare)
+        joined = _CHAIN_DASH_RE.sub(r"\1/", bare)
+        if joined != bare:
+            add(joined)
+            add(msp_lipid.shorthand(joined))
+    return tuple(forms)
+
+
 @lru_cache(maxsize=65536)
 def lipid_name_parses(name) -> bool | None:
     """注釈の名前が脂質名の文法（GOSLIN）で読めるか。脂質アッセイでクラスに数えてよいかの判定に使う。
 
-    読む順: 限定子接頭辞と `|` を外した名前 → 注記・付加体の表記を切り、古い MS-DIAL の書式・英語のクラス名を
-    略記に直した名前（`pathway.msp_lipid.shorthand`。`msms_rules.name_lipid_species` の `name_cleaned` と同じ直し）
-    → それぞれから同位体の標識（`(d7)` など。内部標準）を外した名前。どれかが読めれば True、どれも読めなければ
-    False（天然物・医薬品などの名前。`Ginsenoside Rb1` など）。GOSLIN は慣用名（`Oleic acid` `Cholesterol`）も読む。
-    名前が無ければ False（呼び出し側が `has_annotation_name` で先に分ける）。pygoslin が無ければ None（判定できない）。
+    `_name_forms` の形のどれかが読めれば True、どれも読めなければ False（天然物・医薬品などの名前。
+    `Ginsenoside Rb1` など）。GOSLIN は慣用名（`Oleic acid` `Cholesterol`）も読む。名前が無ければ False
+    （呼び出し側が `has_annotation_name` で先に分ける）。pygoslin が無ければ None（判定できない）。
     """
     if not has_annotation_name(name):
         return False
-    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
-
-    clean, _ = _clean_msdial_name(name)
-    tried: list[str] = []
-    for text in (clean, msp_lipid.shorthand(msp_lipid.split_qualifier(name)[1])):
-        if text and text not in tried:
-            tried.append(text)
-    for text in list(tried):
-        bare = _ISOTOPE_TAG_RE.sub("", text).strip()
-        if bare and bare not in tried:
-            tried.append(bare)
     try:
-        return any(_parses(text) for text in tried)
+        return any(_parses(text) for text in _name_forms(name))
     except ImportError:  # pygoslin 未導入
         return None
 
 
-def is_lipid_annotation(name, ontology) -> bool | None:
-    """脂質アッセイで、この注釈（名前とクラス）を脂質クラスに数えてよいか（脂質名の文法に乗るか）。
+class LipidCall(NamedTuple):
+    """脂質アッセイでの注釈 1 つの扱い（`lipid_annotation_class`）。
 
-    - クラス（ontology）が MS-DIAL の脂質クラス（`pathway.msdial_lipid_classes.MSDIAL_LIPID_CLASSES`）なら True。
-      MS-DIAL の略記はクラストークン＝Ontology の文法（output-format core §2.1）で、GOSLIN が読めない形
-      （`Cer 12:0;O3/8:0(2OH)`・`AHexCer (O-14:1)12:1;O2/12:1`・`SM 24:1;O2(FA 12:0)`・`NAGly 17:0`）も含む。
-    - それ以外（研究室 MSP の ClassyFire 系のクラスなど）は、名前を GOSLIN で読めるか（`lipid_name_parses`）。
-      読めなければ False（`Ginsenoside Rb1`・`Enniatin B` など）。名前の無い注釈は False（呼び出し側が
-      `has_annotation_name` で先に分ける）。pygoslin が無ければ None（判定できない）。
+    `is_lipid`: 脂質クラスに数えるか（pygoslin が無ければ None＝判定できない）。
+    `lipid_class`: 数えるクラス（脂質でなければ None）。元のクラスと違えば、そのクラスへ移して数える。
+    `route`: `lbm_class` / `name` / `class_formula` / `name_grammar` / `unmatched` / `grammar_unavailable`。
+    `rescued`: 規則 3（クラスと組成式）だけで脂質になったか（名前は脂質名の文法で読めない。研究室 MSP の IUPAC 名・ID）。
     """
+    is_lipid: bool | None
+    lipid_class: str | None
+    route: str
+    rescued: bool
+
+
+#: `LipidCall.route` の値。
+ROUTE_LBM_CLASS = "lbm_class"
+ROUTE_NAME = "name"
+ROUTE_CLASS_FORMULA = "class_formula"
+ROUTE_NAME_GRAMMAR = "name_grammar"
+ROUTE_UNMATCHED = "unmatched"
+ROUTE_GRAMMAR_UNAVAILABLE = "grammar_unavailable"
+
+
+def _text_or_none(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if value and value.casefold() != "null" else None
+
+
+def lipid_annotation_class(name, ontology, formula=None) -> LipidCall:
+    """脂質アッセイで、この注釈（名前・クラス・組成式）を脂質クラスに数えてよいかと、数えるクラス。
+
+    次のどれかなら脂質（上から順に見る）:
+    1. クラス（ontology）が MS-DIAL の脂質クラス（`pathway.msdial_lipid_classes.MSDIAL_LIPID_CLASSES`）。クラスは
+       そのまま（`lbm_class`）。MS-DIAL の略記はクラストークン＝Ontology の文法（output-format core §2.1）で、GOSLIN が
+       読めない形（`Cer 12:0;O3/8:0(2OH)`・`AHexCer (O-14:1)12:1;O2/12:1`・`NAGly 17:0`）も含む。
+    2. 名前を GOSLIN で読める（`lipid_name_parses`）。名前の頭部から MS-DIAL の脂質クラスが決まれば
+       （`pathway.msp_lipid.from_name`）そのクラスへ移す（`name`）。
+    3. クラスが研究室 MSP の ClassyFire の脂質クラス（`msp_lipid.CLASSYFIRE_TO_CLASS`）で、クラスと組成式から作った
+       和の組成の略記（`msp_lipid.from_class_formula`）を GOSLIN で読める。その略記のクラス（`PC` `TG` `EtherPC` …）
+       へ移す（`class_formula`）。名前が IUPAC 名・ID で読めない研究室 MSP の脂質を救う。名前で読めたが 2. で
+       クラスが決まらない注釈も、ここでクラスが決まれば移す。
+    2. で読めて 3. でクラスが決まらなければ、元のクラスのまま（`name_grammar`）。どれでもなければ脂質でない
+    （`unmatched`。`Ginsenoside Rb1`・`Enniatin B`・ClassyFire のクラスと組成式が合わない行など）。
+    注釈の名前・クラスそのものは変えない（数えるクラスを返すだけ）。pygoslin が無ければ判定しない（`is_lipid` が None）。
+    """
+    onto = ontology.strip() if isinstance(ontology, str) else ""
+    return _lipid_call(name if isinstance(name, str) else None, onto, _text_or_none(formula))
+
+
+@lru_cache(maxsize=65536)
+def _lipid_call(name: str | None, onto: str, formula: str | None) -> LipidCall:
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
     from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
 
-    if isinstance(ontology, str) and ontology.strip() in MSDIAL_LIPID_CLASSES:
-        return True
-    return lipid_name_parses(name)
+    if onto in MSDIAL_LIPID_CLASSES:
+        return LipidCall(True, onto, ROUTE_LBM_CLASS, False)
+    unavailable = LipidCall(None, None, ROUTE_GRAMMAR_UNAVAILABLE, False)
+    parses = lipid_name_parses(name)
+    if parses is None:
+        return unavailable
+    named = has_annotation_name(name)
+    if parses and _CHAIN_TOKEN_RE.search(name):
+        for text in _name_forms(name):
+            by_name = msp_lipid.from_name(text)
+            if isinstance(by_name, tuple):
+                return LipidCall(True, by_name[1], ROUTE_NAME, False)
+    rest = msp_lipid.split_qualifier(name)[1] if named else None
+    built = msp_lipid.from_class_formula(onto, formula, rest)
+    if isinstance(built, tuple):
+        try:
+            if _parses(built[0]):
+                return LipidCall(True, built[1], ROUTE_CLASS_FORMULA, not parses)
+        except ImportError:  # pygoslin 未導入
+            return unavailable
+    if parses:
+        return LipidCall(True, onto or None, ROUTE_NAME_GRAMMAR, False)
+    return LipidCall(False, None, ROUTE_UNMATCHED, False)
+
+
+def may_move_lipid_class(name, ontology) -> bool:
+    """`lipid_annotation_class` がこの注釈を元のクラスと違うクラスへ移しうるか（GOSLIN を使わない安い前段）。
+
+    移すのは、クラスが MS-DIAL の脂質クラスでなく、研究室 MSP の ClassyFire の対応表（`msp_lipid.CLASSYFIRE_TO_CLASS`）に
+    あるか、名前に鎖（`34:1`）があるときだけ。False なら、脂質と読めてもクラスは元のまま（図のクラスの展開が、移った
+    特徴を探す範囲を絞るのに使う）。
+    """
+    from metabolomix.pathway import msp_lipid  # msp_lipid がこのモジュールを import するので遅延
+    from metabolomix.pathway.msdial_lipid_classes import MSDIAL_LIPID_CLASSES
+
+    onto = ontology.strip() if isinstance(ontology, str) else ""
+    if onto in MSDIAL_LIPID_CLASSES:
+        return False
+    return onto in msp_lipid.CLASSYFIRE_TO_CLASS or bool(_CHAIN_TOKEN_RE.search(name if isinstance(name, str) else ""))
+
+
+def is_lipid_annotation(name, ontology, formula=None) -> bool | None:
+    """脂質アッセイで、この注釈を脂質クラスに数えてよいか（`lipid_annotation_class` の `is_lipid`）。
+
+    名前の無い注釈は、クラスと組成式（規則 1・3）だけで決まる（呼び出し側が `has_annotation_name` で先に分ける）。
+    pygoslin が無ければ None（判定できない）。
+    """
+    return lipid_annotation_class(name, ontology, formula).is_lipid
 
 
 def _read_tsv(path: Path) -> list[dict]:

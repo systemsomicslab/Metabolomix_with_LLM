@@ -14,7 +14,7 @@ CLASSES = {"pc1": "PC", "pc2": "PC", "pc3": "PC", "tg1": "TG", "tg2": "TG", "tg3
            "cer1": "Cer", "cer2": "Cer"}
 
 
-def _prep(log2, n_a, *, classes=None, quant=None, feature_ids=None, names=None) -> PreparedMatrix:
+def _prep(log2, n_a, *, classes=None, quant=None, feature_ids=None, names=None, formulas=None) -> PreparedMatrix:
     log2 = np.asarray(log2, dtype=float)
     n, g = log2.shape
     feature_ids = feature_ids or FEATS[:g]
@@ -27,7 +27,7 @@ def _prep(log2, n_a, *, classes=None, quant=None, feature_ids=None, names=None) 
         qc_log2=np.empty((0, g)), qc_ids=[], steps=[], config={}, quant=quant, dataset_hash=None,
         subject_source="injection", warnings=[],
         feature_classes=dict(CLASSES if classes is None else classes), annotated_features=frozenset(),
-        feature_names=dict(names or {}))
+        feature_names=dict(names or {}), feature_formulas=dict(formulas or {}))
 
 
 def _data(n_a=5, n_b=5, *, factor=None, sd=0.05, seed=0):
@@ -118,21 +118,24 @@ def test_label_kind_follows_assay_kind():
 
 
 def test_assay_kind_changes_only_the_label_when_all_names_are_lipids():
-    # クラスはいつも ontology（feature_classes）で切る。脂質名で読める名前（と名前の無い特徴）だけなら、
-    # 種別が変えるのはラベルと non_lipid の入れ物（lipid では 0 件）だけ（reanalysis.md §2.1）
+    # クラスはいつも ontology（feature_classes）で切る。MS-DIAL の脂質クラスの脂質名（と名前の無い特徴）だけなら、
+    # 種別が変えるのはラベルと non_lipid・lipid_class_relabel の入れ物（lipid では 0 件）だけ（reanalysis.md §2.1）
     import json
 
-    names = {"pc1": "PC 34:1", "pc2": "w/o MS2: PC 16:0_18:1", "tg1": "TG 52:2", "cer1": "Cer 18:1;O2/16:0"}
+    names = {"pc1": "PC 34:1", "pc2": "w/o MS2: PC 16:0_18:1", "tg1": "TG 52:2"}
     for prep in (_prep(_data(), 5), _prep(_data(), 5, names=names)):
         runs = {k: composition(prep, assay_kind=k, factors=["group"], comparisons=BVA)
                 for k in ("lipid", "metabolite", "unknown")}
-        bodies = {k: json.dumps({key: v for key, v in r.items() if key not in ("class_label_kind", "non_lipid")},
+        blocks = ("class_label_kind", "non_lipid", "lipid_class_relabel")
+        bodies = {k: json.dumps({key: v for key, v in r.items() if key not in blocks},
                                 sort_keys=True, default=str)
                   for k, r in runs.items()}
         assert len(set(bodies.values())) == 1
         assert runs["lipid"]["classes"] and runs["lipid"]["classes"] == runs["metabolite"]["classes"]
         assert runs["lipid"]["non_lipid"]["n_features"] == 0
-        assert runs["metabolite"]["non_lipid"] is None and runs["unknown"]["non_lipid"] is None
+        assert runs["lipid"]["lipid_class_relabel"]["n_features"] == 0
+        for k in ("metabolite", "unknown"):
+            assert runs[k]["non_lipid"] is None and runs[k]["lipid_class_relabel"] is None
 
 
 # 研究室 MSP の天然物・医薬品の名前が付いた特徴（脂質名の文法に乗らない）を足した行列。脂質の側には、MS-DIAL の
@@ -146,7 +149,9 @@ MIXED_NAMES = {"pc1": "PC 34:1", "pc2": "PC 16:0_18:1", "pc3": "low score: PC 36
                "sap1": "Ginsenoside Rb1", "sap2": "w/o MS2: Soyasaponin I", "dep1": "Enniatin B",
                "noname": "Unknown", "cerap": "Cer 12:0;O3/8:0(2OH)", "ole": "Oleic acid"}
 NON_LIPID = ("sap1", "sap2", "dep1")
-LIPID_CLASSES = {"Cer", "Cer_AP", "Long-chain fatty acids", "PC", "TG"}
+# 脂質アッセイでは `Cer`（MS-DIAL の脂質クラスでない）の 2 つは名前の頭部から `Cer_NS` へ移る
+LIPID_CLASSES = {"Cer_NS", "Cer_AP", "Long-chain fatty acids", "PC", "TG"}
+ONTOLOGY_CLASSES = {"Cer", "Cer_AP", "Long-chain fatty acids", "PC", "TG"}
 
 
 def _mixed(seed=0, factor=None):
@@ -163,10 +168,14 @@ def test_lipid_assay_puts_unparsable_names_in_non_lipid_and_keeps_them_out_of_cl
     res = composition(prep, assay_kind="lipid", factors=["group"], comparisons=BVA)
     assert res["class_label_kind"] == "lipid_class"
     # 名前の無い特徴（Unknown）は判定せず、クラス（PC）に数える
-    assert res["classes"] == {"Cer": ["cer1", "cer2"], "Cer_AP": ["cerap"], "Long-chain fatty acids": ["ole"],
+    assert res["classes"] == {"Cer_NS": ["cer1", "cer2"], "Cer_AP": ["cerap"], "Long-chain fatty acids": ["ole"],
                               "PC": ["pc1", "pc2", "pc3", "noname"], "TG": ["tg1", "tg2", "tg3"]}
+    assert res["lipid_class_relabel"] == {
+        "rule": "msdial_lipid_class_from_name_or_class_formula", "n_features": 2, "n_rescued": 0,
+        "moves": [{"from": "Cer", "to": "Cer_NS", "route": "name", "n_features": 2, "n_rescued": 0,
+                   "example": {"feature_id": "cer1", "name": "Cer 18:1;O2/16:0"}}]}
     nl = res["non_lipid"]
-    assert nl["label"] == "non-lipid" and nl["rule"] == "lipid_name_unparsable"
+    assert nl["label"] == "non-lipid" and nl["rule"] == "lipid_annotation_unmatched"
     assert nl["n_features"] == 3 and nl["feature_ids"] == ["sap1", "sap2", "dep1"]
     assert nl["by_ontology"] == {"Triterpene saponins": 2, "Cyclic depsipeptides": 1}
     assert list(nl["by_ontology"]) == ["Triterpene saponins", "Cyclic depsipeptides"]   # 多い順
@@ -192,8 +201,8 @@ def test_lipid_assay_puts_unparsable_names_in_non_lipid_and_keeps_them_out_of_cl
 
 def test_metabolite_assay_keeps_every_ontology_as_a_class():
     res = composition(_mixed(), assay_kind="metabolite", factors=["group"], comparisons=BVA)
-    assert res["non_lipid"] is None
-    assert set(res["classes"]) == LIPID_CLASSES | {"Triterpene saponins", "Cyclic depsipeptides"}
+    assert res["non_lipid"] is None and res["lipid_class_relabel"] is None
+    assert set(res["classes"]) == ONTOLOGY_CLASSES | {"Triterpene saponins", "Cyclic depsipeptides"}
     assert {r["feature_id"] for r in res["absolute"]["rows"]} == set(res["classes"])
 
 
@@ -213,11 +222,70 @@ def test_only_non_lipid_classes_gives_no_composition_and_says_why():
 def test_lipid_grammar_unavailable_keeps_classes_and_warns(monkeypatch):
     from metabolomix.analysis.stats import composition as comp_mod
 
-    monkeypatch.setattr(comp_mod, "is_lipid_annotation", lambda name, ontology: None)
+    from metabolomix.msdial.lipid_identity import LipidCall
+
+    monkeypatch.setattr(comp_mod, "lipid_annotation_class",
+                        lambda name, ontology, formula=None: LipidCall(None, None, "grammar_unavailable", False))
     res = comp_mod.composition(_mixed(), assay_kind="lipid", factors=["group"], comparisons=BVA)
-    assert res["non_lipid"] is None
-    assert "Triterpene saponins" in res["classes"]
+    assert res["non_lipid"] is None and res["lipid_class_relabel"] is None
+    assert "Triterpene saponins" in res["classes"] and "Cer" in res["classes"]   # 外さず、移さない
     assert any(w["code"] == "lipid_grammar_unavailable" for w in res["warnings"])
+
+
+# 研究室 MSP の脂質で名前が IUPAC 名・ID のもの（規則 3 で ClassyFire のクラスと組成式から救う）と、内部標準の名前
+RESCUE_FEATS = ["pc1", "pc2", "tg1", "pcx", "dgx", "badpc", "sm", "ole"]
+RESCUE_CLASSES = {"pc1": "PC", "pc2": "PC", "tg1": "TG", "pcx": "Phosphatidylcholines", "dgx": "1,2-diacylglycerols",
+                  "badpc": "Phosphatidylcholines", "sm": "Sphingomyelins", "ole": "Long-chain fatty acids"}
+RESCUE_NAMES = {"pc1": "PC 34:1", "pc2": "PC 16:0_18:1", "tg1": "TG 52:2",
+                "pcx": "no MS2: 1,2-Dioleoyl-sn-glycero-3-phosphocholine", "dgx": "1,2-Dioleoyl-sn-glycerol",
+                "badpc": "7.alpha.,24(S)-Dihydroxy-4-cholesten-3-one", "sm": "SM d18:1-18:1(d9)",
+                "ole": "Oleic acid"}
+RESCUE_FORMULAS = {"pcx": "C44H84NO8P", "dgx": "C39H72O5", "badpc": "C27H44O3", "ole": "C18H34O2"}
+
+
+def _rescue(seed=0, factor=None):
+    rng = np.random.default_rng(seed)
+    x = rng.normal(20.0, 0.05, (10, len(RESCUE_FEATS)))
+    for j, d in (factor or {}).items():
+        x[5:, j] += d
+    return _prep(x, 5, classes=RESCUE_CLASSES, feature_ids=RESCUE_FEATS, names=RESCUE_NAMES,
+                 formulas=RESCUE_FORMULAS)
+
+
+def test_lipid_assay_rescues_lab_msp_lipids_by_class_and_formula_into_the_msdial_class():
+    prep = _rescue(factor={RESCUE_FEATS.index("pcx"): 2.0})
+    res = composition(prep, assay_kind="lipid", factors=["group"], comparisons=BVA)
+    # IUPAC 名の PC は LBM の PC と同じクラスに入り、DG は DG に。内部標準の SM は名前の頭部から SM に。
+    # 慣用名の脂肪酸は名前で読め、クラスと組成式から FA に。組成式がクラスの形に合わない行は非脂質
+    assert res["classes"] == {"DG": ["dgx"], "FA": ["ole"], "PC": ["pc1", "pc2", "pcx"], "SM": ["sm"], "TG": ["tg1"]}
+    assert res["non_lipid"]["feature_ids"] == ["badpc"]
+    assert res["non_lipid"]["by_ontology"] == {"Phosphatidylcholines": 1}
+    relabel = res["lipid_class_relabel"]
+    assert relabel["n_features"] == 4 and relabel["n_rescued"] == 2
+    assert [(m["from"], m["to"], m["route"], m["n_features"], m["n_rescued"]) for m in relabel["moves"]] == [
+        ("1,2-diacylglycerols", "DG", "class_formula", 1, 1),
+        ("Long-chain fatty acids", "FA", "class_formula", 1, 0),
+        ("Phosphatidylcholines", "PC", "class_formula", 1, 1),
+        ("Sphingomyelins", "SM", "name", 1, 0)]
+    # PC の合計は pc1・pc2・pcx の和: クラスを手で移した行列（代謝物のアッセイ＝移さない）と同じ数字
+    moved = {**RESCUE_CLASSES, "pcx": "PC", "dgx": "DG", "sm": "SM", "ole": "FA"}
+    keep = [f for f in RESCUE_FEATS if f != "badpc"]
+    cols = [RESCUE_FEATS.index(f) for f in keep]
+    ref = composition(_prep(prep.log2[:, cols], 5, classes={f: moved[f] for f in keep}, feature_ids=keep),
+                      assay_kind="metabolite", factors=["group"], comparisons=BVA)
+    for table in ("absolute", "clr"):
+        got = {r["feature_id"]: r["log2fc"] for r in res[table]["rows"]}
+        want = {r["feature_id"]: r["log2fc"] for r in ref[table]["rows"]}
+        assert got == approx(want, abs=1e-12)
+    # 注釈そのものは変えない
+    assert prep.feature_classes["pcx"] == "Phosphatidylcholines"
+
+
+def test_metabolite_assay_does_not_move_classyfire_classes():
+    res = composition(_rescue(), assay_kind="metabolite", factors=["group"], comparisons=BVA)
+    assert res["lipid_class_relabel"] is None and res["non_lipid"] is None
+    assert res["classes"]["Phosphatidylcholines"] == ["pcx", "badpc"]
+    assert res["classes"]["PC"] == ["pc1", "pc2"]
 
 
 def test_composition_shift_detected_by_clr_not_by_absolute():
