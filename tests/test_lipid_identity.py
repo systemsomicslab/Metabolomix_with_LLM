@@ -267,16 +267,140 @@ def test_lipid_name_parses_is_none_without_pygoslin(monkeypatch):
         raise ImportError("no pygoslin")
 
     monkeypatch.setattr(li, "_parse_lipid", missing)
-    li.lipid_name_parses.cache_clear()
-    li._lipid_call.cache_clear()
+    for cached in (li.lipid_name_parses, li._lipid_call, li._parses):
+        cached.cache_clear()
     try:
         assert li.lipid_name_parses("Ginsenoside Rb1") is None
         # 判定できない（規則 1 の MS-DIAL の脂質クラスだけは GOSLIN なしで脂質）
         assert li.lipid_annotation_class("MassSpecGymID0000001", "Triacylglycerols", "C57H104O6").is_lipid is None
         assert li.lipid_annotation_class("PC 34:1", "PC").is_lipid is True
     finally:
-        li.lipid_name_parses.cache_clear()
-        li._lipid_call.cache_clear()
+        for cached in (li.lipid_name_parses, li._lipid_call, li._parses):
+            cached.cache_clear()
+
+
+# ---------- 判定の固定（MTBLS1887 の脂質 pos の mzTab の注釈から層ごとに選んだもの） ----------
+# 値は文法の前段の表（`_grammar_screen`）を入れる前の実装で求めたもの。速くしても判定は変わらない
+# （全注釈の突き合わせは `scripts/verify_lipid_judgement.py`）。(名前, Ontology, 組成式, (is_lipid, クラス, 経路, rescued))
+_SAPONIN = ('no MS2: [(2S,3R,4S,5S,6R)-3-[(2S,3R,4S,5R,6S)-5-[(2S,3R,4S,5R)-3,5-dihydroxy-4-[(2S,3R,4S,5R)-3,4,5-'
+            'trihydroxyoxan-2-yl]oxyoxan-2-yl]oxy-3,4-dihydroxy-6-methyloxan-2-yl]oxy-4,5-dihydroxy-6-[[(2R,3R,4R'
+            ',5R,6S)-3,4,5-trihydroxy-6-methyloxan-2-yl]oxymethyl]oxan-2-yl] (4aR,5R,6aS,6bR,10S,12aR,14bS)-10-[('
+            '2R,3R,4S,5S,6R)-6-[[(2S,3R,4S,5S)-4,5-dihydroxy-3-[(2S,3R,4S,5R)-3,4,5-trihydroxyoxan-2-yl]oxyoxan-2'
+            '-yl]oxymethyl]-3,4,5-trihydroxyoxan-2-yl]oxy-5-hydroxy-2,2,6a,6b,9,9,12a-heptamethyl-1,3,4,5,6,6a,7,'
+            '8,8a,10,11,12,13,14b-tetradecahydropicene-4a-carboxylate_major')
+PINNED_JUDGEMENTS = [
+    ("(9Z)-9-octadecenoic acid", "Long-chain fatty acids", "C18H34O2", (True, "FA", "class_formula", False)),
+    ("1-Stearoyl-2-linoleoyl-sn-glycero-3-phospho-L-serine", "Phosphatidylserines", "C42H78NO10P",
+     (True, "PS", "class_formula", True)),
+    ("1-Stearoyl-2-linoleoyl-sn-glycero-3-phosphoethanolamine", "Phosphatidylethanolamines", "C41H78NO8P",
+     (True, "PE", "class_formula", True)),
+    ("MAG", "1-monoacylglycerols", "C21H40O4", (True, "MG", "class_formula", True)),
+    ("MassSpecGymID0400370", "Phosphatidylcholines", "C36H72NO8P", (True, "PC", "class_formula", True)),
+    ("MassSpecGymID0408997", "1-(1Z-alkenyl),2-acylglycerophosphoethanolamines", "C45H82NO7P",
+     (True, "EtherPE", "class_formula", True)),
+    ("Oleic acid", "Long-chain fatty acids", "C18H34O2", (True, "FA", "class_formula", False)),
+    ("low score: MassSpecGymID0410057", "Phosphatidylcholines", "C48H78NO8P", (True, "PC", "class_formula", True)),
+    ("no MS2: 1,2-Dipalmitoyl-sn-glycero-3-phospho-rac-(1-glycerol) sodium salt", "Phosphatidylglycerols",
+     "C38H75O10P", (True, "PG", "class_formula", True)),
+    ("no MS2: Isopropyl (9Z,12Z)-9,12-octadecadienoate", "Lineolic acids and derivatives", "C21H38O2",
+     (True, "FA", "class_formula", False)),
+    ("no MS2: Tricaprin (C10:0)", "Triacylglycerols", "C33H62O6", (True, "TG", "class_formula", True)),
+    ("no MS2: pentacosanoic acid", "Very long-chain fatty acids", "C25H50O2", (True, "FA", "class_formula", False)),
+    ("CL 28:0_44:9", "CL", "C81H140O17P2", (True, "CL", "lbm_class", False)),
+    ("CoQ3", "CoQ", "C24H34O4", (True, "CoQ", "lbm_class", False)),
+    ("SM 13:2;O2/38:6", "SM", "C56H99N2O6P", (True, "SM", "lbm_class", False)),
+    ("TG 8:0_18:5_38:10", "TG", "C67H100O6", (True, "TG", "lbm_class", False)),
+    ("low score: ASG 29:2;O;Hex;FA 16:1", "AHexSTS", "C51H86O7", (True, "AHexSTS", "lbm_class", False)),
+    ("no MS2: LPE 18:1; PlaSMA ID-2600", "1-acyl-sn-glycero-3-phosphoethanolamines", "C23H46NO7P",
+     (True, "LPE", "name", False)),
+    ("no MS2: PC 18:0/18:1(9Z)", "Phosphatidylcholines", "C44H86NO8P", (True, "PC", "name", False)),
+    ("15-OxoEDE", "Long-chain fatty acids", "C20H34O3", (True, "Long-chain fatty acids", "name_grammar", False)),
+    ("Taurocholic acid", "Trihydroxy bile acids, alcohols and derivatives", "C26H45NO7S",
+     (True, "Trihydroxy bile acids, alcohols and derivatives", "name_grammar", False)),
+    ("no MS2: (2E,4E,6E,8E,10E,12E,14E,16E)-2,6,11,15-tetramethyl-17-(2,6,6-trimethyl-1-cyclohexen-1-yl)-"
+     "2,4,6,8,10,12,14,16-heptadecaoctaenal", "Triterpenoids", "C30H40O",
+     (True, "Triterpenoids", "name_grammar", False)),
+    ("no MS2: 14-Mercaptotetradecanoic acid", "Long-chain fatty acids", "C14H28O2S",
+     (True, "Long-chain fatty acids", "name_grammar", False)),
+    ("no MS2: 9,10,16-Trihydroxyhexadecanoic acid", "Long-chain fatty acids", "C16H32O5",
+     (True, "Long-chain fatty acids", "name_grammar", False)),
+    ("BV02", "null", "C20H15N3O5", (False, None, "unmatched", False)),
+    ("MassSpecGymID0397873", "N-acyl-alpha amino acids", "C18H35NO5", (False, None, "unmatched", False)),
+    ("low score: AGELASINE", "6-aminopurines", "C26H40N5", (False, None, "unmatched", False)),
+    ("no MS2: 4',5,7-Trihydroxy-6,8-diprenylisoflavone", "6-prenylated isoflavanones", "C25H26O5",
+     (False, None, "unmatched", False)),
+    ("no MS2: Linocinnamarin", "Phenolic glycosides", "C16H20O8", (False, None, "unmatched", False)),
+    ("no MS2: Manninotriose", "null", "C18H32O16", (False, None, "unmatched", False)),
+    ("no MS2: MassSpecGymID0397406", "Cyclic depsipeptides", "C45H82N6O11", (False, None, "unmatched", False)),
+    ("no MS2: NCGC00385023-01_C36H58O9_(1S,7S,9beta,23E)-9-Formyl-1,25-dihydroxy-10,14-dimethyl-4,9-cyclo-"
+     "9,10-secocholesta-5,23-dien-7-yl beta-D-glucopyranoside", "Cucurbitacins", "C36H58O9",
+     (False, None, "unmatched", False)),
+    ("no MS2: NP-024347", "null", "C43H70O20", (False, None, "unmatched", False)),
+    ("no MS2: Thuggacin A", "Thiazoles", "C35H53NO7S", (False, None, "unmatched", False)),
+    ("no MS2: WGPNDPRR/1", "null", "C43H64N16O12", (False, None, "unmatched", False)),
+    ("no MS2: Unknown (carbon number 10); PlaSMA ID-657", "Unknown", "C10H17NO3", (False, None, "unmatched", False)),
+    ("7.alpha.,24(S)-Dihydroxy-4-cholesten-3-one", "Phosphatidylcholines", "C27H44O3",
+     (False, None, "unmatched", False)),
+    (_SAPONIN, "Triterpene saponins", "C74H120O38", (False, None, "unmatched", False)),
+]
+
+
+def test_lipid_judgement_is_pinned_on_real_annotations():
+    got = [(n, o, f, tuple(li.lipid_annotation_class(n, o, f))) for n, o, f, _ in PINNED_JUDGEMENTS]
+    assert got == PINNED_JUDGEMENTS
+
+
+def test_screened_parser_gives_the_same_result_as_lipid_parser():
+    # 文法の前段の表で走らせない文法は、走らせても読めない（LipidParser と同じ文法・同じ結果）
+    from pygoslin.parser.Parser import LipidParser
+
+    plain = LipidParser()
+
+    def outcome(parse, text):
+        try:
+            return parse(text).get_lipid_string()
+        except Exception as exc:   # noqa: BLE001 — 読めない（例外の種類だけ比べる）
+            return type(exc).__name__
+
+    texts = {form for n, _, _, _ in PINNED_JUDGEMENTS for form in li._name_forms(n)}
+    texts |= {"PC 34:1", "PE O-16:0/18:1", "TG 16:0_18:1_18:2", "Cer 18:1;O2/16:0", "SM d18:1/18:1", "FA 18:1",
+               "LPC 16:0", "CAR 18:1", "ST 27:1;O", "Cholesterol", "oleic acid", "PC(16:0/18:1(9Z))",
+               "TAG(50:1)", "DG(14:0/0:0/14:0)", "Ceramide (d18:1/16:0)", "  PC 34:1  ", "", "PC", "X"}
+    for text in sorted(texts):
+        assert outcome(li._parse_lipid, text) == outcome(plain.parse, text), text
+
+
+def test_screen_skips_grammars_that_cannot_read_a_long_natural_product_name(monkeypatch):
+    import pytest
+
+    li._parse_lipid("PC 34:1")              # 共有パーサと表を作る
+    assert li._SCREENS is not None and len(li._SCREENS) == len(li._SHARED_PARSER.parser_list)
+    ran = []
+    for parser in li._SHARED_PARSER.parser_list:
+        original = parser.parse
+        monkeypatch.setattr(parser, "parse", lambda text, raise_error=True, _o=original, _p=parser:
+                            (ran.append(type(_p).__name__), _o(text, raise_error=raise_error))[1])
+    with pytest.raises(Exception):
+        li._parse_lipid(_SAPONIN.split(": ", 1)[1])
+    assert ran == []                        # どの文法も走らせずに読めないと分かる
+    assert li._parse_lipid("PC 34:1").get_lipid_string() == "PC 34:1" and ran == ["ShorthandParser"]
+
+
+
+def test_parser_falls_back_to_lipid_parser_when_the_screen_cannot_be_built(monkeypatch):
+    # pygoslin の内部の形が想定と違えば表を使わず、LipidParser.parse をそのまま呼ぶ（結果は同じ）
+    def broken(_parser):
+        raise AttributeError("no NTtoNT")
+
+    monkeypatch.setattr(li, "_SHARED_PARSER", None)
+    monkeypatch.setattr(li, "_SCREENS", None)
+    monkeypatch.setattr(li, "_grammar_screen", broken)
+    assert li._parse_lipid("PC 34:1").get_lipid_string() == "PC 34:1"
+    assert li._SCREENS is None
+    import pytest
+
+    with pytest.raises(Exception):
+        li._parse_lipid("Ginsenoside Rb1")
 
 
 if __name__ == "__main__":

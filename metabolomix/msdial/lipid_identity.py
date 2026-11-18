@@ -43,17 +43,92 @@ def _clean_msdial_name(name: str):
 #: （ハンドルの読み込みはワーカースレッドで走る。`curation/trend.py` と同じ流儀）。
 _SHARED_PARSER = None
 _PARSER_LOCK = threading.Lock()
+#: 文法ごとの「決して読めない文字列」を見分ける表（`_grammar_screen`。`_SHARED_PARSER.parser_list` と同じ順）。
+#: pygoslin の内部の形が想定と違えば None（表を使わず `LipidParser.parse` をそのまま呼ぶ）。
+_SCREENS = None
+
+
+def _grammar_screen(parser):
+    """文法 1 本が受け付けうる文字列の必要条件の表: `(小文字にするか, 文字の集合, 隣り合う 2 文字の集合,
+    先頭の文字の集合, 末尾の文字の集合)`。全文一致でない（EOF を使わない）文法は None（表で除かない）。
+
+    pygoslin は文法をチョムスキー標準形（`TtoNT`: 文字 → それを導く規則、`NTtoNT`: 規則の対 → それを導く規則）
+    にして CYK で読み、全文一致の文法は末尾に `EOF_SIGN` を足して読む。導ける文字列の隣り合う 2 文字は、どれも
+    ある規則の対（B, C）について「B が導く文字列の末尾の文字 × C が導く文字列の先頭の文字」に入る（2 文字を
+    両方含む最も低い節で分かれる）。各規則の先頭・末尾の文字の集合を不動点で求め、この集合を作る（実際に
+    現れる 2 文字の上位集合なので、ここに無い 2 文字を含む文字列はその文法では決して読めない）。
+    """
+    from pygoslin.parser.Parser import FattyAcidParser
+
+    if not getattr(parser, "used_eof", False):
+        return None
+    mask = (1 << 32) - 1
+    first: dict = {}
+    last: dict = {}
+    for ch, rules in parser.TtoNT.items():
+        for rule in rules:
+            first.setdefault(rule, set()).add(ch)
+            last.setdefault(rule, set()).add(ch)
+    pairs = [(key >> 32, key & mask, rules) for key, rules in parser.NTtoNT.items()]
+    changed = True
+    while changed:
+        changed = False
+        for left, right, rules in pairs:
+            head, tail = first.get(left), last.get(right)
+            for rule in rules:
+                if head and not head <= first.setdefault(rule, set()):
+                    first[rule] |= head
+                    changed = True
+                if tail and not tail <= last.setdefault(rule, set()):
+                    last[rule] |= tail
+                    changed = True
+    bigrams = {x + y for left, right, _ in pairs for x in last.get(left, ()) for y in first.get(right, ())}
+    start = parser.START_RULE
+    return (isinstance(parser, FattyAcidParser), frozenset(parser.TtoNT), frozenset(bigrams),
+            frozenset(first.get(start, ())), frozenset(last.get(start, ())))
+
+
+def _may_parse(screen, parser, text: str) -> bool:
+    """その文法が `text` を読みうるか（False なら決して読めない。`parser.parse` と同じ前処理の後で表と照らす）。"""
+    if screen is None:
+        return True
+    lower, alphabet, bigrams, heads, tails = screen
+    t = (text.lower() if lower else text).strip(" ") + parser.EOF_SIGN
+    if t[0] not in heads or t[-1] not in tails or not alphabet.issuperset(t):
+        return False
+    return all(t[k:k + 2] in bigrams for k in range(len(t) - 1))
 
 
 def _parse_lipid(clean: str):
-    """共有パーサで 1 つ解析する（pygoslin が無ければ ImportError、解析不能なら例外）。"""
-    global _SHARED_PARSER
+    """共有パーサで 1 つ解析する（pygoslin が無ければ ImportError、解析不能なら例外）。
+
+    `LipidParser.parse` と同じく文法を順に試し、最初に読めた文法の結果を返す。ただし、その文法では決して読めない
+    文字列（`_may_parse` が False）ではその文法を走らせない（結果は同じ。読めない名前は 6 本の文法をすべて CYK で
+    走らせるので、天然物・医薬品の名前が多いと遅い）。
+    """
+    global _SHARED_PARSER, _SCREENS
     from pygoslin.parser.Parser import LipidParser
 
     with _PARSER_LOCK:
         if _SHARED_PARSER is None:
             _SHARED_PARSER = LipidParser()
-        return _SHARED_PARSER.parse(clean)
+            try:
+                _SCREENS = [_grammar_screen(p) for p in _SHARED_PARSER.parser_list]
+            except Exception:   # pygoslin の内部の形が違う: 表を使わない
+                _SCREENS = None
+        if _SCREENS is None:
+            return _SHARED_PARSER.parse(clean)
+        from pygoslin.domain.LipidExceptions import LipidException
+
+        _SHARED_PARSER.parser_event_handler = None
+        for screen, parser in zip(_SCREENS, _SHARED_PARSER.parser_list):
+            if not _may_parse(screen, parser, clean):
+                continue
+            lipid = parser.parse(clean, raise_error=False)
+            if lipid is not None:
+                _SHARED_PARSER.parser_event_handler = parser.parser_event_handler
+                return lipid
+        raise LipidException("Lipid not found")
 
 
 def normalize_lipid_name(name: str) -> dict:
@@ -143,8 +218,10 @@ def has_annotation_name(name) -> bool:
     return clean.strip().casefold() not in _NO_NAME
 
 
+@lru_cache(maxsize=65536)
 def _parses(text: str) -> bool:
-    """共有パーサで読めるか（pygoslin が無ければ ImportError を通す）。"""
+    """共有パーサで読めるか（pygoslin が無ければ ImportError を通す。例外は覚えない）。名前の形は名前どうしで
+    重なる（限定子だけが違う名前など）ので、形ごとに覚える。"""
     try:
         _parse_lipid(text)
     except ImportError:
