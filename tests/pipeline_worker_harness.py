@@ -131,9 +131,10 @@ def _install_fake_console(scenario: str, counter: str | None, no_inchikey: bool)
     from metabolomix.console import runner as console_runner
 
     def build_msdial_cmd(exe, dataset_root, msdial_out_dir, method_file,
-                         save_project=False):
+                         save_project=False, *, input_csv=None):
+        source = input_csv if input_csv is not None else dataset_root
         command = [sys.executable, str(_FAKE_CONSOLE), "--scenario", scenario,
-                   "-i", str(dataset_root), "-o", str(msdial_out_dir),
+                   "-i", str(source), "-o", str(msdial_out_dir),
                    "-m", str(method_file)]
         if save_project:
             command.append("-p")

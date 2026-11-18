@@ -211,6 +211,9 @@ def write_supervision_inputs(run_dir: Path, inputs: dict) -> Path:
     ``method_sha256`` / ``exe_path`` / ``exe_sha256``
         起動時に固定する情報。省略時は`job.method_file`と`exe_path`から算出し、
         読めなければ`_unavailable_hash`の標識を置いて`inputs.unavailable`に残す。
+    ``console_input``
+        `-i` の形（`{"form": "csv", "path": <絶対パス>, ...}` なら試料の表 CSV を、それ以外は
+        `dataset_root` のフォルダを渡す。`console.input_csv`）。
 
     既存のサイドカーへ併合して書く。起動情報や復旧用スナップショットを
     後から消さないため、丸ごと置換はしない。
@@ -321,8 +324,11 @@ def _default_command(job: AnalysisJob, dataset_root: Path, msdial_out_dir: Path,
     from metabolomix.console.runner import build_msdial_cmd, get_exe_path
 
     exe = inputs.get("exe_path") or get_exe_path()
+    console_input = inputs.get("console_input") or {}
+    input_csv = (Path(console_input["path"])
+                 if console_input.get("form") == "csv" and console_input.get("path") else None)
     return build_msdial_cmd(exe, dataset_root, msdial_out_dir,
-                            Path(job.method_file), job.save_project)
+                            Path(job.method_file), job.save_project, input_csv=input_csv)
 
 
 def _write_receipt(run_dir: Path, receipt: dict) -> Path:

@@ -99,7 +99,8 @@ def _unit_method_params(unit) -> dict | None:
     from metabolomix.pipeline import store
 
     record_unit = store.run_units(unit.record).get(unit.polarity) or {}
-    return receipt_mod.unit_method_params(unit.unit_root, record_unit.get("inputs") or {})
+    return receipt_mod.unit_method_params(unit.unit_root, record_unit.get("inputs") or {},
+                                          record_unit.get("upstream"))
 
 
 def open_dataset(*, directory=None, mztab_path=None, job_path=None, pipeline_path=None,

@@ -40,6 +40,7 @@ import os
 import shutil
 from pathlib import Path
 
+from metabolomix.console import input_csv as console_input_csv
 from metabolomix.console import job_manager
 from metabolomix.console import method_file as method_file_mod
 from metabolomix.console import method_keys as method_keys_mod
@@ -879,8 +880,9 @@ def stage_inputs(plan: dict, pipeline_root: Path, *,
     # が両ルートを snapshot して収集するのと同じ前提をここでも採る——採らないと、
     # Console が一度でも走った run では `rerun_upstream` が必ずここで止まる。
     # 判定規則は `output_collector` の role 表が唯一の出所（二重定義にしない）。
+    # `upstream` が Console の `-i` に書いた試料の表（`console.input_csv`）も同じ扱い。
     unexpected = {name for name in (existing_names - expected_names)
-                  if not is_upstream_artifact(name)}
+                  if not is_upstream_artifact(name) and name != console_input_csv.CSV_FILENAME}
     if unexpected:
         raise DomainError(
             "STAGED_INPUT_MISMATCH",

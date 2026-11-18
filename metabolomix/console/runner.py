@@ -138,13 +138,18 @@ def build_msdial_cmd(
     msdial_out_dir: Path,
     method_file: Path,
     save_project: bool = False,
+    *,
+    input_csv: Path | None = None,
 ) -> list[str]:
     """Console のコマンドラインを組む。
 
     待って実行する経路・切り離して実行する経路・`execution.supervise` の
     いずれでも**同じ引数**でなければならないので、組み立てはここ 1 か所に置く。
+    `input_csv`（試料の表。`console.input_csv`）があれば `-i` にそれを、無ければ
+    `dataset_root` のフォルダを渡す。
     """
-    cmd = [exe, "lcms", "-i", str(dataset_root), "-o", str(msdial_out_dir),
+    source = input_csv if input_csv is not None else dataset_root
+    cmd = [exe, "lcms", "-i", str(source), "-o", str(msdial_out_dir),
            "-m", str(method_file)]
     if save_project:
         cmd.append("-p")

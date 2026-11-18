@@ -605,7 +605,8 @@ def test_restaging_tolerates_the_artifacts_msdial_writes_into_the_input_folder(
     `_tags.xml` を書く（`console/execution.py` が両ルートを snapshot するのは
     そのため）。pipeline では `-i` が staged input そのものなので、Console が
     一度でも走れば必ずこれらが入力フォルダに現れる。これを「想定外のファイル」
-    として拒むと、やり直しの唯一の正規手順が使えなくなる。
+    として拒むと、やり直しの唯一の正規手順が使えなくなる。`upstream` が `-i` に
+    書いた試料の表（`console-input.csv`）も同じ。
     """
     _allow_fake_exe(monkeypatch)
     src = make_source(tmp_path / "raw")
@@ -617,7 +618,7 @@ def test_restaging_tolerates_the_artifacts_msdial_writes_into_the_input_folder(
     input_dir = pipeline_root / "input"
     for name in ("AlignResult-20260917.arf", "AlignResult-20260917.arf2",
                  "S0_20260917.pai2", "S0_20260917.dcl", "S0_20260917_tags.xml",
-                 "AlignResult-20260917.EIC.aef"):
+                 "AlignResult-20260917.EIC.aef", "console-input.csv"):
         (input_dir / name).write_text("upstream artifact", encoding="ascii")
 
     stage_inputs(plan, pipeline_root)   # 例外を投げないこと

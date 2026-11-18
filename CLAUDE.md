@@ -154,6 +154,8 @@ metabolomix/console/   MS-DIAL Console 実行層（job_manager / runner / execut
                     機械全体で Console を 1 本にするロック（machine_slot.py。設定ファイルのフォルダの
                     `data/.msdial-console.lock`。待つ間 `pipeline_status` は `waiting`）、mzML の切れの検査（raw_integrity.py）、
                     失敗の見立て（failure_diagnosis.py。msdial.log から原因と疑わしいファイル）、
+                    `-i` に渡す試料の表（input_csv.py。実験情報シートの群・役割・注入順の CSV。フォルダを渡すと
+                    Console は各ファイルを別の群にする）、
                     Console が読むメソッドのキーと型の照合表（method_keys.py。pipeline の要求の `method_overrides` を
                     検査する。上流の ConfigParser.cs から写したもので、上流を上げたら照らし直す。現用の Console の
                     ビルドが読まないキーは `NOT_IN_CURRENT_BUILD` で断る。Console を作り直したら照らし直す）。
