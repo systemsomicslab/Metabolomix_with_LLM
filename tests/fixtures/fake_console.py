@@ -26,7 +26,8 @@
 ``missing_sample``
     raw 1 本分の assay を欠いた合成 mzTab を書いて 0 で終了。
 
-`-i` / `-o` / `-m` は実 Console と同じ意味。省略時は `--job` の analysis-job.json
+`-i` / `-o` / `-m` は実 Console と同じ意味（`-i` は試料の表 CSV も受け、その raw を行の順に読み、
+アラインメントは先頭の raw のフォルダへ書く）。省略時は `--job` の analysis-job.json
 から解決する。`--counter` に渡したファイルへは 1 回の起動につき 1 行だけ
 TSV（scenario / 自 pid / 孫 pid）を追記する。**起動回数はこの行数で数える**
 （「起動したつもり」ではなく実際の起動を数えるため）。
@@ -137,6 +138,24 @@ def _raw_sources(input_dir: Path) -> list[Path]:
     return [p.resolve() for p in list_raw_inputs(input_dir)]
 
 
+def _csv_sources(csv_path: Path) -> list[Path]:
+    """`-i` が試料の表（CSV）なら、実 Console（`ReadCsvContents`）と同じく ASCII で読み、`#` の行を
+    飛ばし、最初の行を見出しにして `,` で割り、`file_path` の列を行の順に返す。"""
+    lines = [line for line in csv_path.read_text(encoding="ascii").splitlines()
+             if not line.startswith("#")]
+    header = [h.strip().lower().replace(" ", "_") for h in lines[0].split(",")]
+    column = header.index("file_path")
+    return [Path(line.split(",")[column]).resolve() for line in lines[1:]]
+
+
+def _input_sources(input_path: Path) -> tuple[Path, list[Path]]:
+    """(-i 側＝アラインメントを書くフォルダ, raw)。CSV なら実 Console と同じく先頭の raw のフォルダ。"""
+    if input_path.is_file() and input_path.suffix.lower() == ".csv":
+        sources = _csv_sources(input_path)
+        return (sources[0].parent if sources else input_path.parent), sources
+    return input_path, _raw_sources(input_path)
+
+
 def _write_invalid_mztab(path: Path, sources: list[Path]) -> None:
     """parse は通るが構造検証に落ちる mzTab を書く（SMF データ行が 0 件）。
 
@@ -208,7 +227,7 @@ def main(argv: list[str]) -> int:
 
     _append_counter(args.counter, scenario, None)
 
-    sources = _raw_sources(input_dir)
+    input_dir, sources = _input_sources(input_dir)
     if scenario in ("success", "unmatched_arf"):
         write_mztab(output_dir / PRIMARY_MZTAB_NAME, sources,
                     with_inchikey=not args.no_inchikey)

@@ -38,8 +38,10 @@ from pathlib import Path
 from metabolomix.analysis.sample_manifest import parse_manifest
 from metabolomix.console import execution as console_execution
 from metabolomix.console import failure_diagnosis
+from metabolomix.console import input_csv as console_input_csv
 from metabolomix.console import job_manager
 from metabolomix.console import machine_slot
+from metabolomix.console import method_file as method_file_mod
 from metabolomix.core.atomic_io import DomainError, canonical_hash
 from metabolomix.core.process_control import launch_detached
 from metabolomix.handoff.schema import SCHEMA_VERSION, AnalysisJob
@@ -583,6 +585,47 @@ def _handle_upstream(context: dict) -> dict:
                           "details": {"unit": context["unit"]}}}
 
 
+#: シートがあるのにフォルダを `-i` に渡した理由（工程の警告 `CONSOLE_INPUT_FOLDER` の文面）。
+_CONSOLE_INPUT_FOLDER_REASONS = {
+    "manifest_unreadable": ("実験情報シートを Console の起動時に読めなかったので、`-i` にフォルダを渡した"
+                            "（各ファイルが別の群になり `N percent detected in one group` は効かない）。"),
+    "path_not_csv_safe": ("raw のパスに ASCII でない文字か `,` があり、Console の CSV で渡せないので、"
+                          "`-i` にフォルダを渡した（各ファイルが別の群になり `N percent detected in one group` は効かない）。"),
+}
+
+
+def _console_input(unit_request: dict, raw_root: str | None, dataset_root: Path,
+                   raw_paths: list[Path], method_path: Path) -> dict:
+    """Console の `-i` を決める: 実験情報シートがあれば試料の表（CSV）を解析フォルダに書き、無ければフォルダ。
+
+    フォルダを渡すと Console は各ファイルに別の群を振る（`console.input_csv`）。シートの場所は受付の
+    事前検査と同じく単位の raw のフォルダ（`raw_root`）から解き、行は受領（`receipt._samples`）と同じく
+    解析フォルダを基準に解す。CSV には全 raw を `raw_paths`（`list_raw_inputs`）の順に書く（`include` は
+    見ない）。戻り値は監視入力と run の記録の `upstream.console_input` に入る:
+    `{"form": "csv", "path", "sha256", "manifest_sha256", "n_files", "classes", "file_types",
+    "acquisition_type", "analytical_order_source", "batch_order"?}` か `{"form": "folder", "reason", ...}`。
+    """
+    source = (inputs_mod.manifest_source_record(Path(raw_root), unit_request) if raw_root
+              else {"path": None})
+    if not source.get("path"):
+        return {"form": "folder", "reason": "no_manifest"}
+    try:
+        rows = parse_manifest(Path(source["path"]), source_root=dataset_root,
+                              expected_sources=[p.name for p in raw_paths])
+    except (DomainError, OSError, ValueError) as exc:
+        return {"form": "folder", "reason": "manifest_unreadable",
+                "error_code": getattr(exc, "code", type(exc).__name__)}
+    unsafe = console_input_csv.unsafe_names(raw_paths)
+    if unsafe:
+        return {"form": "folder", "reason": "path_not_csv_safe", "files": unsafe[:5]}
+    acquisition = console_input_csv.acquisition_type(method_file_mod.read_method_keys(method_path))
+    csv_rows, summary = console_input_csv.build_rows(raw_paths, rows, acquisition=acquisition)
+    csv_path = dataset_root / console_input_csv.CSV_FILENAME
+    digest = console_input_csv.write_csv(csv_path, csv_rows)
+    return {"form": "csv", "path": str(csv_path), "sha256": digest,
+            "manifest_sha256": source.get("sha256"), **summary}
+
+
 def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | None) -> dict:
     """機械全体の Console の順番を取った後の `upstream` の本体（`_handle_upstream`）。"""
     pipeline_root = context["pipeline_root"]
@@ -598,6 +641,9 @@ def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | Non
         method_rel = inputs_snapshot["method"].get("effective_relative_path")
         method_abs = ((unit_root / method_rel) if method_rel
                       else Path(inputs_snapshot["method"]["source_path"]))
+        raw_paths = [p.resolve() for p in job_manager.list_raw_inputs(dataset_root)]
+        console_input = _console_input(request, inputs_snapshot.get("source_root"), dataset_root,
+                                       raw_paths, method_abs)
         now = _now_iso()
         job = AnalysisJob(
             schema=SCHEMA_VERSION, job_id=f"pipeline_{context['pipeline_id']}_{context['unit']}",
@@ -611,12 +657,12 @@ def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | Non
             timeout_s=request["timeout_s"],
         )
         job.save(job_path)
-        raw_inventory = [str(p.resolve()) for p in job_manager.list_raw_inputs(dataset_root)]
         console_execution.write_supervision_inputs(run_dir, {
-            "raw_inventory": raw_inventory,
+            "raw_inventory": [str(p) for p in raw_paths],
             "method_sha256": inputs_snapshot["method"].get("effective_sha256"),
             "exe_path": inputs_snapshot["exe"]["path"],
             "exe_sha256": inputs_snapshot["exe"].get("sha256"),
+            "console_input": console_input,
         })
 
     memory, commit_warning = machine_slot.check_commit_memory()
@@ -629,11 +675,22 @@ def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | Non
         "verification": {"status": job.status, "termination": supervised.get("termination"),
                          "exit_code": supervised.get("exit_code")},
     }
+    # この attempt の Console に渡した `-i` の形（監視入力に固定したもの）。これを書く前の run には無い。
+    console_input = (console_execution.read_supervision_state(run_dir).get("inputs") or {}).get(
+        "console_input")
+    if isinstance(console_input, dict):
+        upstream_update["console_input"] = (
+            {**console_input, "path": _pipeline_relative(Path(console_input["path"]), pipeline_root)}
+            if console_input.get("path") else dict(console_input))
     if memory is not None:
         upstream_update["memory_before"] = memory
     if waited_s is not None:
         upstream_update["console_slot_waited_s"] = round(waited_s, 1)
     warnings = [commit_warning] if commit_warning else []
+    if isinstance(console_input, dict) and console_input.get("reason") not in (None, "no_manifest"):
+        warnings.append({"code": "CONSOLE_INPUT_FOLDER",
+                         "message": _CONSOLE_INPUT_FOLDER_REASONS.get(
+                             console_input["reason"], console_input["reason"])})
     warnings += [{"code": "CONSOLE_WARNING", "message": w} for w in job.warnings[:5]]
 
     if job.status == "completed":

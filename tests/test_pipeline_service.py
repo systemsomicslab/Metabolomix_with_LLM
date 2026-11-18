@@ -371,9 +371,11 @@ def test_start_pipeline_handshake_timeout_does_not_relaunch(tmp_path, monkeypatc
 
 def _use_fake_console_script(monkeypatch, scenario: str = "success") -> None:
     """Console のコマンドライン組み立てだけを偽 Console（tests/fixtures/fake_console.py）へ。"""
-    def build_msdial_cmd(exe, dataset_root, msdial_out_dir, method_file, save_project=False):
+    def build_msdial_cmd(exe, dataset_root, msdial_out_dir, method_file, save_project=False,
+                         *, input_csv=None):
+        source = input_csv if input_csv is not None else dataset_root
         return [sys.executable, str(_FAKE_CONSOLE), "--scenario", scenario,
-                "-i", str(dataset_root), "-o", str(msdial_out_dir), "-m", str(method_file)]
+                "-i", str(source), "-o", str(msdial_out_dir), "-m", str(method_file)]
 
     monkeypatch.setattr("metabolomix.console.runner.build_msdial_cmd", build_msdial_cmd)
 

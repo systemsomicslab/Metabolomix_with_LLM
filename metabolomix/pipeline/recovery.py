@@ -177,7 +177,7 @@ def _receipt_summary(pipeline_root: Path, record: dict) -> dict | None:
     for polarity in validated:
         unit = run_units.get(polarity) or {}
         params = receipt_mod.unit_method_params(pipeline_root / (unit.get("unit_root") or polarity),
-                                                unit.get("inputs") or {})
+                                                unit.get("inputs") or {}, unit.get("upstream"))
         if params is not None:
             method_params[polarity] = params
     return {

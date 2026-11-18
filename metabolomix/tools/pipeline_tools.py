@@ -120,6 +120,9 @@ def pipeline_run(dataset_root: str, request: dict | None = None,
     出力は極性ごとの解析フォルダ（`<run>/<極性>/input/`。`.arf` 等）と受領（`results/receipt.json`）。続きは
     `load_dataset(pipeline_path=…, polarity=…)`。MS-DIAL の出力が既にあるフォルダは Console を回さず
     `load_dataset` で開ける。2 極性は要求の順に 1 極性ずつ回し、片方が失敗しても続ける（run は `partial`）。
+    実験情報シートがあれば Console の `-i` に試料の表（解析フォルダの `console-input.csv`。群・役割・注入順）を
+    渡し、`N percent detected in one group` を群ごとに効かせる。無ければフォルダ（各ファイルが別の群）。
+    どちらかは受領の `console.input` と `processing` / `method_params` の `console_input`。
 
     worker の identity の保存と起動 handshake を確かめて `pipeline_path` を返す。待ちには短い上限があり、
     達しても失敗扱い・再起動はせず `launch.handshake: "not_confirmed"`（`pipeline_status` で追う）。

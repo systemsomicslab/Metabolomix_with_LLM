@@ -145,7 +145,9 @@ Console(45a531c4d)は設定表から 1 件でも読めると `Msp file path` を
 
 アライメントの参照ファイル(要求の `alignment_reference`、既定 `"median_injection"`): 実効メソッドの
 `Alignment reference file ID` に、全試料(`include` を問わない)の注入順の中央の試料(偶数なら小さい方)の file ID(入力
-フォルダの主ファイルを `sorted()` した順の 0 始まりの添字)を書く。`_prepare_run` は実験情報シートを `inspect_inputs` より先に
+フォルダの主ファイルを `sorted()` した順の 0 始まりの添字。Console に試料の表(CSV)を渡す run では行の順がこの順。フォルダを
+渡す run の Console は NTFS の列挙順で振り、大文字にして比べるので `_` が英字より後になる(`ab` が `a_b` より先)。そうした
+名前では添字が別の試料を指しうる)を書く。`_prepare_run` は実験情報シートを `inspect_inputs` より先に
 解して行を渡す。`injection_order` が 1 件でも欠ける・シートが無いときはファイル名順の中央(receipt の `injection_order_source`
 が `"filename"`)。`"method"` は上書きせず、メソッドの宣言を `method_value` に残す。`overrides` は計画の指紋の外なので、要求の
 hash も完了済み run の再利用も変わらない。ただし古い要求を再送して新しい run を作ると、実効メソッドの参照ファイルが以前
@@ -165,7 +167,8 @@ hash も完了済み run の再利用も変わらない。ただし古い要求�
 7.       └─ metabolomix/pipeline/receipt.py  stage_error_summary()
 
 受領の要約の `method_params` は `metabolomix/pipeline/receipt.py` の `unit_method_params()` が単位の実効メソッドを読み直して
-作る(受領より前の run も同じに見える)。`load_dataset` の `processing` も同じもの。
+作る(受領より前の run も同じに見える)。`load_dataset` の `processing` も同じもの。Console の `-i` の形を記録した run なら
+`console_input`(`csv` / `folder`)も付く。
 
 `load_run` は読取専用で、このツールは `pipeline-run.json` を書き換えない。`status="running"` のときだけ `same_process` で
 worker identity の生存を確かめ、結果は `status` を変えずに `observed_health` で返す。単位ごとの状態(`units`)と、受領があれば
@@ -399,8 +402,14 @@ saved_path)が変わったか、この pass で通過した stage が外から `
 `_handle_upstream` は `execution.supervise` を直接呼ぶ(Console 用の worker を二重に起こさない)。`console_job_path` は
 `analysis-job.json` への pipeline_root 相対のパス(`run_dir = Path(job_path).parent`)で、単位の `upstream` に記録する。run_dir は
 **単位と attempt ごとに分ける**(`<pipeline_root>/<極性>/console/attempt-NNNN/`。再実行は前回の終了証跡・ログ・実行前
-スナップショットを上書きしない)。Console の `-i` は `<pipeline_root>/<極性>/input/`(配置した raw)で、MS-DIAL はここへ `.arf`
-などを書く。このフォルダが解析フォルダになる。
+スナップショットを上書きしない)。解析フォルダは `<pipeline_root>/<極性>/input/`(配置した raw)で、MS-DIAL はここへ `.arf`
+などを書く。Console の `-i` は、実験情報シートがあれば `_console_input` がこのフォルダに書く試料の表
+`console-input.csv`(`metabolomix/console/input_csv.py`。群 → `class_id`、役割 → `file_type`、全行に注入順があれば
+`analytical_order`、バッチ → `batch_order`、メソッドの `Acquisition type`。全 raw を `list_raw_inputs` の順に書き、`include` は
+見ない)、無ければこのフォルダ。フォルダを渡すと Console は各ファイルに別の群を振るので `N percent detected in one group` が効かず、
+QC / Blank の種類も渡らない。CSV に書けない(ASCII でない・`,` を含む)raw のパスや、起動時に読めないシートはフォルダに戻し、
+警告 `CONSOLE_INPUT_FOLDER` を残す。どちらにしたかは単位の `upstream.console_input`(`form` が `csv` / `folder`。CSV なら
+`path`・`sha256`・`manifest_sha256`・`classes`・`file_types` など、フォルダなら `reason`)と監視入力に残す。
 
 **機械全体で Console は 1 本**: run の中では単位を 1 つずつ回すが、極性ごとに別の run を起こすと Console が並ぶ(脂質の run は
 1 本で 20 GB 以上の commit を確保し、並ぶと Windows のエラー 1450 で落ちうる)。`_handle_upstream` は Console を起こす前に
@@ -437,6 +446,8 @@ validated が 1 つ以上で欠けがある → `partial`。validated が 0 → 
 
 受領(`results/receipt.json`、`lipidmix.pipeline-receipt.v1`)は単位ごとの解析フォルダ・照合した `.arf`・メソッドとライブラリ
 (研究室の資産はファイル名と sha256 だけ)・試料の対応表・検証の結果・次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)
-を載せる。Console の実行体はファイル名と sha256 で示す(版の欄は無い)。解析フォルダが
+を載せる。Console の実行体はファイル名と sha256 で示す(版の欄は無い)。`console.input` は `upstream.console_input` の写し
+(それを記録する前の run は `null`＝フォルダ入力)。CSV を作ったシートと今のシートの sha256 が違えば警告
+`CONSOLE_INPUT_MANIFEST_CHANGED`(Console の絞り込みは前の群で効いた。`rerun_upstream=true` で回し直す)。解析フォルダが
 照合できなかった単位(`alignment: null`)の次の呼び出しには `source="mztab"` を付ける(既定の解析フォルダでは
 `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まる)。

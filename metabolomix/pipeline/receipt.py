@@ -311,13 +311,15 @@ def _samples(pipeline_root: Path, record: dict, request: dict | None, polarity: 
     return out
 
 
-def unit_method_params(unit_root: Path, inputs: dict) -> dict | None:
+def unit_method_params(unit_root: Path, inputs: dict, upstream: dict | None = None) -> dict | None:
     """単位が Console に渡した実効メソッドの、結果を大きく変えるキーの値。
 
     `key_params` は実効メソッドの値（`method_file.KEY_PARAM_KEYS`）、`undeclared` は宣言の無い
     （Console の既定で走る）キー、`overrides` は要求の `method_overrides` が変えたキー
     （`{"from": 原本の値か null, "to": 値}`）。実効メソッドをまだ書いていない・読めない単位は None。
     受領を書く前の run（古い run を含む）でも、実効メソッドのファイルから読み直せる。
+    `upstream`（run の記録の単位の `upstream`）が `-i` の形を持てば `console_input`（`"csv"`＝試料の表で
+    群を渡した / `"folder"`＝各ファイルが別の群）。それを記録する前の run には無い。
     """
     method = (inputs or {}).get("method") or {}
     rel = method.get("effective_relative_path")
@@ -333,7 +335,22 @@ def unit_method_params(unit_root: Path, inputs: dict) -> dict | None:
            "undeclared": method_file_mod.undeclared_key_params(keys)}
     if method.get("user_overrides"):
         out["overrides"] = method["user_overrides"]
+    form = ((upstream or {}).get("console_input") or {}).get("form")
+    if form:
+        out["console_input"] = form
     return out
+
+
+def _console_input_warning(polarity: str, console_input: dict | None, samples: dict) -> dict | None:
+    """Console に渡した試料の表が、今の実験情報シートと違う版から作られたなら警告する。"""
+    if not console_input or console_input.get("form") != "csv":
+        return None
+    current = (samples.get("manifest") or {}).get("sha256")
+    if current == console_input.get("manifest_sha256"):
+        return None
+    return {"code": "CONSOLE_INPUT_MANIFEST_CHANGED", "unit": polarity,
+            "message": ("Console に渡した群・種類（試料の表）は、今と違う実験情報シートから作った。"
+                        "Console の絞り込みに今の群を使うには rerun_upstream=true で回し直す。")}
 
 
 def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
@@ -361,6 +378,12 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
         if error is None and stage.get("status") in ("failed", "cancelled") and stage.get("error"):
             error = {**stage_error_summary(stage["error"]), "stage_id": sid}
 
+    samples = _samples(pipeline_root, record, request, polarity, unit_root, warnings)
+    console_input = upstream.get("console_input")
+    stale = _console_input_warning(polarity, console_input, samples)
+    if stale is not None:
+        warnings.append(stale)
+
     return {
         "status": {"validated": "validated", "failed": "failed"}.get(status, "not_run"),
         "raw_dir": unit.get("raw_dir") or ".",
@@ -371,13 +394,15 @@ def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,
         "method": {"file": _file_name(method.get("source_path")),
                    "sha256": method.get("sha256"),
                    "effective_sha256": method.get("effective_sha256"),
-                   **(unit_method_params(unit_root, inputs) or {})},
+                   **(unit_method_params(unit_root, inputs, upstream) or {})},
         "library": _library(inputs),
         # Console の版は欄に置かない: ジョブ（analysis-job.json）は版を記録しないので、
         # 置けばいつも null になる。実行体は名前と sha256 で特定する。
-        "console": {"exe_file": _file_name(exe.get("path")), "exe_sha256": exe.get("sha256")},
+        # `input` は `-i` の形（run の記録の `upstream.console_input`。それを記録する前の run は null）。
+        "console": {"exe_file": _file_name(exe.get("path")), "exe_sha256": exe.get("sha256"),
+                    "input": console_input},
         "alignment_reference": inputs.get("alignment_reference"),
-        "samples": _samples(pipeline_root, record, request, polarity, unit_root, warnings),
+        "samples": samples,
         "validation": {"job_status": verification.get("status"),
                        "termination": verification.get("termination"),
                        "exit_code": verification.get("exit_code"),
