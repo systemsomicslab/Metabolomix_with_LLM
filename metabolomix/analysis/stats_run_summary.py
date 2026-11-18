@@ -22,6 +22,8 @@ _VERDICTS = ("changed", "unchanged", "inconclusive")
 
 #: plsda の要約に載せる VIP の上位の数（全量は output_path の JSON）。
 VIP_TOP = 10
+#: composition の要約に載せる非脂質（`non_lipid`）の元のクラスの上位の数（全量は output_path の JSON）。
+NON_LIPID_TOP = 10
 
 
 def tables_of(entry: dict) -> dict[str, list[dict]]:
@@ -146,6 +148,10 @@ def analysis_summary(entry: dict, q_threshold: float) -> dict:
         out["tables"] = {name: _counts(rows, q_threshold) for name, rows in tables.items()}
         out["class_label_kind"] = res["class_label_kind"]
         out["n_classes"] = len(res["classes"])
+        non_lipid = res.get("non_lipid")
+        if non_lipid is not None:   # 脂質アッセイだけ: 脂質名の文法に乗らない注釈の特徴（クラスから外した）
+            out["non_lipid"] = {"label": non_lipid["label"], "n_features": non_lipid["n_features"],
+                                "by_ontology": dict(list(non_lipid["by_ontology"].items())[:NON_LIPID_TOP])}
         inner = {name: sub for name in ("absolute", "clr") if (sub := res.get(name)) is not None}
         confounding = confounding_summary(inner.values())
         if confounding is not None:

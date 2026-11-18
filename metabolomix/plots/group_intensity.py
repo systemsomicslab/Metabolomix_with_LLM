@@ -11,6 +11,7 @@ import re
 import statistics
 
 from metabolomix.msdial import sample_factors
+from metabolomix.msdial.lipid_identity import has_annotation_name, is_lipid_annotation
 
 GROUP_INTENSITY_SCHEMA = "lipidmix.group_intensity.v1"
 MAX_ITEMS = 30
@@ -21,17 +22,21 @@ STANDARD_ONLY_FOLD = 10.0
 #: 合計のうち gap-fill の値がこの割合を超える点は形を変える。
 GAPFILL_MAJORITY = 0.5
 _PREFIX = re.compile(r"^\s*(?:low score|no MS2|w/o MS2|unsettled)\s*:\s*", re.IGNORECASE)
-_EXCLUDED_KEYS = ("internal_standard", "manual", "curation", "auto_likely_wrong", "standard_only")
+_EXCLUDED_KEYS = ("internal_standard", "manual", "curation", "auto_likely_wrong", "standard_only", "non_lipid")
 
 
 def _candidate_names(name: str) -> set[str]:
     return {_PREFIX.sub("", part).strip().casefold() for part in (name or "").split("|") if part.strip()}
 
 
-def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), manual=frozenset()):
+def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), manual=frozenset(),
+                  assay_kind: str | None = None):
     """項目（クラス・名前、`+` で合算）をスポット集合に解決する。spec §3.1 / §5。
 
     manual: `dataset_exclude` で手動除外したスポット ID。クラスにも名前指定にも効く。
+    assay_kind: `"lipid"` なら、クラスとして当たったスポットのうち注釈が脂質名の文法に乗らないもの
+    （天然物・医薬品の名前など。`lipid_identity.is_lipid_annotation`）をクラスの合計に入れない（excluded の
+    `non_lipid`。組成 `composition` の `non_lipid` と同じ規則）。名前指定には効かない。
     """
     items = [str(item) for item in (items or [])]
     if not 1 <= len(items) <= MAX_ITEMS:
@@ -70,6 +75,10 @@ def resolve_items(items, catalog, *, curation=None, standard_only=frozenset(), m
             return False
         if as_class and spot["spot_id"] in standard_only:
             excluded["standard_only"].add(label)
+            return False
+        if (as_class and assay_kind == "lipid" and has_annotation_name(spot["name"])
+                and is_lipid_annotation(spot["name"], spot["ontology"]) is False):
+            excluded["non_lipid"].add(label)
             return False
         return True
 

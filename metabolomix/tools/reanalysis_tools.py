@@ -431,7 +431,8 @@ _DETAIL_LIST_KEYS = ("samples", "sample_ids", "unit_ids", "feature_ids", "candid
 def _assay_kind(holder) -> str:
     """そのハンドル（データセット）の脂質／代謝物の別（無ければ unknown）。
 
-    組成のクラスはいつも MS-DIAL の ontology で切るので、変わるのはラベル `class_label_kind` だけ（数字は同じ）。"""
+    組成のクラスはいつも MS-DIAL の ontology で切る。種別が変えるのはラベル `class_label_kind` と、`lipid` で
+    脂質名の文法に乗らない注釈の特徴を脂質クラスから外して `non_lipid` にまとめることだけ（`composition`）。"""
     return getattr(holder, "assay_kind", "unknown") or "unknown"
 
 

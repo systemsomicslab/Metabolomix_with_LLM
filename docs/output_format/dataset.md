@@ -632,7 +632,7 @@ gap-filled の印は `detected_mask`、群と役割は試料の対応表、MS/MS
 | `items[].detected` | どこかの試料で値が 0 より大きいか |
 | `items[].groups[].samples[]` | `sample` / `value`（PeakHeight 合計）/ `gap_filled_fraction`（合計のうち gap-fill の値の割合。値 0 なら null）/ `low_reliability` |
 | `items[].groups[].log10_mean` / `log10_sd` / `n_in_stats` | log10 空間の平均・SD と、その計算に使った試料数（値 > 0 かつ低信頼でない試料）。n = 1 なら SD は null、0 なら平均も null |
-| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに 5 種類（`manual` / `internal_standard` / `curation` / `auto_likely_wrong` / `standard_only`。下記） |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに 6 種類（`manual` / `internal_standard` / `curation` / `auto_likely_wrong` / `standard_only` / `non_lipid`。下記） |
 | `caveats` | 試料が複数の群に当たった（群の組ごとに 1 件。重なった試料数と最大 3 試料名）・同じ群を重複指定した・孤立した判断記録がある・レビューが無く自動判定を除けなかった、等 |
 
 **N.D. は 2 種類**。(a) 項目に当たるスポットが無い（`n_spots` = 0。名前が当たらなければ `parts[].kind` は `none`、クラスに当たっても
@@ -642,7 +642,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 **点の読み方**: 縦軸は log10(PeakHeight) で**全パネル共通**（パネルごとに拡大するとノイズが信号に見える）。値 0 の点は軸の底に ▽。
 `gap_filled_fraction` が **0.5 を超える点は ◆**（合計の過半が gap-fill の値で、検出の証拠として弱い）。
 
-**`excluded` の 5 種類**:
+**`excluded` の 6 種類**:
 
 | キー | 除くもの |
 |------|----------|
@@ -651,6 +651,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 | `curation` | `apply_curation=True`（既定）のとき、人の判断が `wrong` / `redundant` のスポット（`clear` 済みは無効）。`assign` は記録した名前・クラスで扱う。`suspect` は描く。名前指定の部分にも効く |
 | `auto_likely_wrong` | `exclude_auto_likely_wrong=True` のとき、このアラインメント（`.arf2` の sha256 一致）の最新 `curation_review` で `likely_wrong` のスポット。名前指定の部分にも効く。レビューが無ければ除かず `caveats` に出す |
 | `standard_only` | `standard_samples` を指定したとき、その試料での最大高さが描く群の試料での最大高さの 10 倍以上のスポット（クラスとして当たった分だけ。標準液の奇数鎖標準物質がクラス合計に混ざるのを防ぐ）。判定には `dataset_exclude` 済みの試料の行も使う |
+| `non_lipid` | ハンドルの `assay_kind` が `lipid` のとき、注釈が脂質名の文法に乗らないスポット（クラスが MS-DIAL の脂質クラスでなく、名前も GOSLIN で読めない。研究室 MSP の天然物・医薬品の名前など。組成の `non_lipid` と同じ規則。`reanalysis.md` §2.1）。**クラスとして当たった分だけ**除く（名前・特徴 ID で指定した部分は描く）。ほかの種別では空 |
 
 図を報告に載せるときは `excluded` の件数と理由を併記する。
 
@@ -658,7 +659,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 
 選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで群ごとの試料別の値（割合 % または PeakHeight）を
 並べる。解析フォルダのデータセットが対象（`.arf` と兄弟 `.arf2` が要る）。`group_intensity`（クラス合計）と違い**スポットごと**に描く
-（同じ名前でも付加イオンが違えば別パネル）。画像の 1 行のキャプションはパネル数・群の試料数・除外の 6 種類の件数・分母が 0 で
+（同じ名前でも付加イオンが違えば別パネル）。画像の 1 行のキャプションはパネル数・群の試料数・除外の 7 種類の件数・分母が 0 で
 描かなかった試料・`caveats`。ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で同名の
 `.svg` と一緒に書く）。入力の誤り・パネルが 40 枚を超える・判断の記録ファイルが読めないときは `DATASET_BAD_REQUEST` の封筒。失敗した
 呼び出しはセッションの図を変えない（§11.5）。**検定はしない**。
@@ -675,7 +676,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 | `spots[]` | パネルごとに `spot_id` / `name` / `label`（表示名）/ `ontology` / `item`（展開元の項目）/ `adduct` / `mz` / `rt` / `msms`（MS/MS の裏付けの有無）と `groups[]` |
 | `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
 | `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
-| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only`（§11.5 と同じ）と、`require_msms=True` で MS/MS の裏付けがなく除いた `no_msms` |
+| `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only` / `non_lipid`（§11.5 と同じ）と、`require_msms=True` で MS/MS の裏付けがなく除いた `no_msms` |
 | `caveats` | `group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まない（割合が 100 % を超えうる）・`items` に当たらなかった（またはすべて除外された）部品がある・`value="height"` なのに `share_basis` を渡した（無視される） |
 
 **割合の読み方**: `share` は**分母にしたスポットの高さの合計に対する %** で、試料の総量に対する割合ではない。分母は `share_basis`
@@ -797,7 +798,9 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 クラスの合計に入り、見せかけの `unchanged` が出るので、`omitted` と鎖を進める `next`）。mzTab-M など解析フォルダ以外から開いた
 データは定量の鎖が使えないので、`dataset_analysis_run` の `kind="composition"` を案内する。2 群は `class n_species log2fc_total ci_low
 ci_high verdict_total clr_log2fc verdict_clr` の TSV（`changed` と `unchanged` を最大 5 つずつ）、多群は moderated F の q
-（`class n_species f_q_total`）。
+（`class n_species f_q_total`）。`assay_kind` が `lipid` なら、注釈が脂質名の文法に乗らない特徴（組成の `non_lipid`。
+`reanalysis.md` §2.1）はクラスにも `n_species` にも入らず、1 つ以上あれば段の最後の事実にその数と元のクラスの上位
+（データに `n_features`・`by_ontology`・`examples`）を出す。脂質クラスが 1 つも残らなければ段を省き、`omitted` にその数を書く。
 
 **分子種（S）** — `changed`（上昇・下降の内訳つき）/ `unchanged` / `inconclusive` の数。**`inconclusive` は「変わっていない」では
 ない**（同等性の幅に収まった `unchanged` だけが変わっていない）。出方（検出の有無）だけに差があり強度の判定は `inconclusive` の特徴の

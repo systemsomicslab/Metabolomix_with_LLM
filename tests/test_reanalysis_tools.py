@@ -1272,6 +1272,40 @@ def test_analysis_run_v2_composition_summary_carries_the_inner_confounding(tmp_p
     assert "batch_group_complete_confounding" in {w["code"] for w in cmp_["warnings"]}
 
 
+def _lipid_mixed_state(tmp_path, assay_kind):
+    """脂質の名前の特徴と、研究室 MSP の天然物の名前の特徴（f6・f7）が混ざったデータセット。"""
+    state = _v2_state(tmp_path)
+    names = {"f0": "PC 34:1", "f1": "PC 36:2", "f2": "PC 38:4", "f3": "PE 36:2", "f4": "PE 38:4",
+             "f5": "PE 40:6", "f6": "Ginsenoside Rb1", "f7": "no MS2: Saikosaponin A", "f8": "TG 52:2",
+             "f9": "TG 54:3"}
+    for fid, name in names.items():
+        onto = "Triterpene saponins" if fid in ("f6", "f7") else name.split()[0]
+        state.feature_metadata[fid].update(name=name, ontology=onto)
+    state.assay_kind = assay_kind
+    return state
+
+
+def test_analysis_run_v2_lipid_composition_keeps_non_lipid_names_out_of_the_classes(tmp_path):
+    spec = _v2_spec(analyses=[{"analysis_id": "comp", "kind": "composition"}])
+    _lipid_mixed_state(tmp_path, "lipid")
+    path = tmp_path / "lipid.json"
+    out = json.loads(R.dataset_analysis_run(spec, output_path=str(path)))
+    assert out["status"] == "success" and out["assay_kind"] == "lipid"
+    comp = out["analyses"][0]
+    assert comp["class_label_kind"] == "lipid_class" and comp["n_classes"] == 3
+    assert comp["non_lipid"] == {"label": "non-lipid", "n_features": 2,
+                                 "by_ontology": {"Triterpene saponins": 2}}
+    inner = _strict_loads(path.read_text(encoding="utf-8"))["analyses"][0]["result"]
+    assert set(inner["classes"]) == {"PC", "PE", "TG"}
+    assert inner["non_lipid"]["feature_ids"] == ["f6", "f7"]
+    assert {r["feature_id"] for r in inner["absolute"]["rows"]} == {"PC", "PE", "TG"}
+    # 一般代謝物はこれまでどおり: クラスはどの ontology も数え、non_lipid は無い
+    _lipid_mixed_state(tmp_path, "metabolite")
+    out_m = json.loads(R.dataset_analysis_run(spec))
+    comp_m = out_m["analyses"][0]
+    assert out_m["assay_kind"] == "metabolite" and comp_m["n_classes"] == 4 and "non_lipid" not in comp_m
+
+
 def test_analysis_run_v2_inline_row_limit(tmp_path):
     import numpy as np
     state = _v2_state(tmp_path)

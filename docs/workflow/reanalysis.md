@@ -101,6 +101,8 @@
 
 `confounding_summary()` が compare / composition の要約の `confounding`（composition は内側の比較のもの）を、
 `composition_warnings()` が composition の `warnings` に内側の比較の注意を重ねずに足す（§2.1）。
+脂質アッセイの composition は、注釈が `msdial/lipid_identity.py` の `is_lipid_annotation()` で脂質と言えない特徴を
+クラスから外して `non_lipid` にまとめ、`analysis_summary()` がその件数と元のクラスの上位を要約に載せる（§2.1）。
 
 ## library_msms_qualify
 

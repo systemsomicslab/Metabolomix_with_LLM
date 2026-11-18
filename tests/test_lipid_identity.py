@@ -171,5 +171,53 @@ def test_goslin_parser_is_built_once_and_output_is_unchanged(monkeypatch):
     li.lipid_species_of.cache_clear()
 
 
+
+# ---------- 脂質名の文法で読めるか（脂質アッセイのクラスの集計から外す判定） ----------
+
+def test_lipid_name_parses_accepts_msdial_lipid_names_and_rejects_natural_products():
+    lipids = ["PC 34:1", "TG 16:0_18:1_18:2", "Cer 18:1;O2/16:0", "SM d34:1", "CAR 18:1", "ST 27:1;O",
+              "w/o MS2: PC 34:1", "low score: TG 52:2", "PC 34:1|PC 16:0_18:1", "PE 36:2;O (oxPE)",
+              "LPC 16:0; ExampleDB ID-0000", "PC 34:1 [M+H]+", "Cer[NS] d30:1", "Phosphatidylcholine 16:0-18:1",
+              "PC 15:0-18:1(d7)", "Oleic acid", "Cholesterol"]
+    non_lipids = ["Ginsenoside Rb1", "Soyasaponin I", "Enniatin B", "Valinomycin", "Beauvericin",
+                  "w/o MS2: Saikosaponin A", "Triton X-100", "Xanthine"]
+    assert [n for n in lipids if li.lipid_name_parses(n) is not True] == []
+    assert [n for n in non_lipids if li.lipid_name_parses(n) is not False] == []
+
+
+def test_lipid_annotation_accepts_msdial_lipid_classes_even_when_goslin_cannot_read_the_name():
+    # MS-DIAL の略記はクラストークン＝Ontology。GOSLIN が読めない形も脂質の注釈
+    for name, ontology in [("Cer 12:0;O3/8:0(2OH)", "Cer_AP"), ("AHexCer (O-14:1)12:1;O2/12:1", "AHexCer"),
+                           ("SM 24:1;O2(FA 12:0)", "ASM"), ("NAGly 17:0", "NAGly"), ("SE 28:4/16:1", "DEGSE")]:
+        assert li.lipid_name_parses(name) is False, name
+        assert li.is_lipid_annotation(name, ontology) is True, name
+    # MS-DIAL の脂質クラスでなければ名前で決める（ClassyFire 系のクラス・Unknown）
+    assert li.is_lipid_annotation("Oleic acid", "Long-chain fatty acids") is True
+    assert li.is_lipid_annotation("Saikosaponin A", "Triterpene saponins") is False
+    assert li.is_lipid_annotation("1,2-Dioleoyl-sn-glycerol", "1,2-diacylglycerols") is False
+    assert li.is_lipid_annotation("no MS2: Unknown (carbon number 10); PlaSMA ID-657", "Unknown") is False
+    assert li.is_lipid_annotation("Enniatin B", None) is False
+
+
+def test_annotation_name_presence():
+    assert all(li.has_annotation_name(n) for n in ("PC 34:1", "Ginsenoside Rb1", "no MS2: FA 5:0"))
+    assert not any(li.has_annotation_name(n) for n in (None, "", "  ", "Unknown", "unknown", "null",
+                                                        "low score: Unknown", 3))
+    # 名前の無いものは読めない（呼び出し側が先に分ける）
+    assert li.lipid_name_parses("Unknown") is False and li.lipid_name_parses(None) is False
+
+
+def test_lipid_name_parses_is_none_without_pygoslin(monkeypatch):
+    def missing(_text):
+        raise ImportError("no pygoslin")
+
+    monkeypatch.setattr(li, "_parse_lipid", missing)
+    li.lipid_name_parses.cache_clear()
+    try:
+        assert li.lipid_name_parses("Ginsenoside Rb1") is None
+    finally:
+        li.lipid_name_parses.cache_clear()
+
+
 if __name__ == "__main__":
     unittest.main()

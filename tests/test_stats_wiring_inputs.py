@@ -317,6 +317,25 @@ def test_merge_feature_columns_takes_max_and_or_detected():
     assert D.merge_feature_columns(st, []).feature_ids == st.feature_ids
 
 
+def test_merge_feature_columns_moves_the_name_with_the_class():
+    rows = [(f"a{i}", "sample", "C", None, None, None) for i in range(2)]
+    st = _study(np.ones((2, 4)), rows)
+    st.feature_classes = {"f1": "Triterpene saponins", "f2": "PC", "f3": "TG"}
+    st.feature_names = {"f0": "x", "f1": "Ginsenoside Rb1", "f2": "PC 34:1", "f3": "TG 52:2"}
+    out = D.merge_feature_columns(st, [["f0", "f1"], ["f2", "f3"]])
+    # 先頭にクラスが無ければ、クラスを譲った特徴の名前も譲る。先頭にクラスがあれば先頭の名前のまま
+    assert out.feature_classes == {"f0": "Triterpene saponins", "f2": "PC"}
+    assert out.feature_names == {"f0": "Ginsenoside Rb1", "f2": "PC 34:1"}
+
+
+def test_preprocess_carries_annotation_names_of_kept_features():
+    ds = _ds()
+    ds.feature_metadata = {f"f{k}": {"ontology": "PC", "name": f"PC 3{k}:1"} for k in range(len(ds.feature_ids))}
+    pre = _pre(D.from_dataset(ds, exclude_features=["f1"]))
+    assert pre.feature_names == {f: ds.feature_metadata[f]["name"] for f in pre.feature_ids}
+    assert "f1" not in pre.feature_names
+
+
 # --- 修正ラウンド 1 -------------------------------------------------------------
 
 def test_merge_and_exclude_give_different_matrix_ids():

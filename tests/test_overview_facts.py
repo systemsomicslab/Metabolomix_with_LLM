@@ -152,6 +152,46 @@ def test_class_facts_lists_changed_and_unchanged():
     assert "脂質クラス" in sec["facts"][0]["text"] and "group_intensity" in sec["next"]
 
 
+def _composition(ds, assay_kind="lipid"):
+    plan = _plan(ds)
+    comps, _ = overview.group_comparisons(plan)
+    _, prepared = _record(ds, comps)
+    comp = composition(prepared, assay_kind=assay_kind, factors=["group"], comparisons=comps,
+                       test="moderated_t", effect_size="log2_mean_difference", bh_population="matrix",
+                       q_threshold=0.05, equivalence_fc=1.2)
+    return comp, plan
+
+
+def test_class_facts_report_non_lipid_annotations_separately():
+    ds = _classed(_ds(per_group=6))
+    for fid, name in (("f6", "Ginsenoside Rb1"), ("f7", "no MS2: Saikosaponin A"), ("f8", "Enniatin B")):
+        ds.feature_metadata[fid].update(name=name, ontology="Triterpene saponins" if fid != "f8"
+                                        else "Cyclic depsipeptides")
+    comp, plan = _composition(ds)
+    sec = overview.class_facts(composition_result=comp, gate=None, gate_next="", plan=plan, quality_note=None)
+    classes = [line.split("	")[0] for line in sec["table"].splitlines()[1:]]
+    assert set(classes) <= {"PC", "PE", "TG"}
+    last = sec["facts"][-1]
+    assert "非脂質" in last["text"] and "3 個" in last["text"]
+    assert last["data"]["n_features"] == 3
+    assert last["data"]["by_ontology"] == {"Triterpene saponins": 2, "Cyclic depsipeptides": 1}
+    # 一般代謝物では非脂質の事実を出さず、どのクラスも数える
+    comp_m, plan_m = _composition(ds, assay_kind="metabolite")
+    sec_m = overview.class_facts(composition_result=comp_m, gate=None, gate_next="", plan=plan_m,
+                                 quality_note=None)
+    assert not any("非脂質" in f["text"] for f in sec_m["facts"])
+    assert set(comp_m["classes"]) == {"PC", "PE", "TG", "Triterpene saponins", "Cyclic depsipeptides"}
+
+
+def test_class_facts_omitted_names_the_non_lipid_count_when_no_lipid_class_is_left():
+    ds = _ds(per_group=6)
+    for fid in ds.feature_ids:
+        ds.feature_metadata[fid].update(name="Ginsenoside Rb1", ontology="Triterpene saponins")
+    comp, plan = _composition(ds)
+    sec = overview.class_facts(composition_result=comp, gate=None, gate_next="n", plan=plan, quality_note=None)
+    assert sec["facts"] == [] and "非脂質" in sec["omitted"] and str(len(ds.feature_ids)) in sec["omitted"]
+
+
 def test_global_facts_eta_squared():
     ds = _ds()
     for j, name in enumerate(ds.sample_names):          # 全特徴が群で大きく分かれる

@@ -218,7 +218,8 @@ def resolve_selection(ds, items, *, apply_curation: bool = True, exclude_auto_li
     catalog = _catalog(ds, index)
     try:
         resolved, excluded = gi.resolve_items(
-            items, catalog, curation=curation, standard_only=standard_only, manual=manual)
+            items, catalog, curation=curation, standard_only=standard_only, manual=manual,
+            assay_kind=getattr(ds, "assay_kind", None))
     except ValueError as exc:
         raise _bad(str(exc)) from exc
     _attach_feature_ids(resolved, excluded, catalog, curation, manual, index, ds)

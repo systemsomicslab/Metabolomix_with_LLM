@@ -73,6 +73,16 @@ def test_from_dataset_features_and_hash_fallback():
     assert D.from_dataset(_ds(detected_mask=None)).detected is None
 
 
+def test_from_dataset_keeps_annotation_names_for_the_lipid_class_split():
+    ds = _ds(feature_metadata={"f1": {"ontology": "PC", "name": "PC 34:1"},
+                               "f2": {"ontology": "Triterpene saponins", "name": "Ginsenoside Rb1"}})
+    sd = D.from_dataset(ds)
+    assert sd.feature_names == {"f1": "PC 34:1", "f2": "Ginsenoside Rb1"}
+    assert D.from_dataset(ds, exclude_features=["f2"]).feature_names == {"f1": "PC 34:1"}
+    no_name = _ds(feature_metadata={"f1": {"ontology": "PC", "name": None}, "f2": {"name": "  "}})
+    assert D.from_dataset(no_name).feature_names == {}
+
+
 def test_from_dataset_does_not_mutate_dataset():
     ds = _ds()
     fm, dm = ds.feature_matrix.copy(), ds.detected_mask.copy()

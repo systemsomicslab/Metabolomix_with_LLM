@@ -848,6 +848,21 @@ def test_select_items_expands_classes_and_passes_ids_through(loaded):
                                      require_msms=True) == ["0"]
 
 
+def test_class_expansion_leaves_out_non_lipid_names_only_in_a_lipid_assay(loaded):
+    ds = loaded["ds"]
+    # 研究室 MSP の天然物の名前が、ClassyFire 系のクラスで 2 つのスポットに付いた
+    for fid in ("6", "7"):
+        ds.feature_metadata[fid].update(name="Saikosaponin A", ontology="Triterpene saponins")
+    args = dict(apply_curation=True, exclude_auto_likely_wrong=False, require_msms=False)
+    assert dataset_rows.select_items(ds, ["Triterpene saponins"], **args) == ["6", "7"]   # unknown
+    ds.assay_kind = "lipid"
+    assert dataset_rows.select_items(ds, ["Triterpene saponins"], **args) == []
+    assert dataset_rows.select_items(ds, ["PG"], **args) == ["0", "1", "4"]
+    resolved = dataset_rows.resolve_selection(ds, ["Triterpene saponins", "Saikosaponin A"])
+    assert resolved.excluded["non_lipid"] == ["#6 Saikosaponin A", "#7 Saikosaponin A"]
+    assert [s["spot_id"] for s in resolved.items[1]["spots"]] == [6, 7]          # 名前で指定すれば描く
+
+
 def test_rows_by_spot_shape_values_and_exclusions(loaded):
     ds = loaded["ds"]
     ds.excluded_samples = {NAME["ctrl_3"]: "x"}

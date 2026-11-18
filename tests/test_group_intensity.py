@@ -102,6 +102,26 @@ def test_standard_only_is_dropped_from_class_only():
     assert excluded["standard_only"] == ["#0 PG 34:1|PG 16:0_18:1"]
 
 
+MIXED_CATALOG = CATALOG + [
+    {"MasterAlignmentID": 8, "Name": "Ginsenoside Rb1", "Ontology": "Triterpene saponins"},
+    {"MasterAlignmentID": 9, "Name": "w/o MS2: Saikosaponin A", "Ontology": "Triterpene saponins"},
+    {"MasterAlignmentID": 10, "Name": "Cer 12:0;O3/8:0(2OH)", "Ontology": "Cer_AP"},
+]
+
+
+def test_lipid_assay_drops_non_lipid_names_from_class_sums_only():
+    items, excluded = gi.resolve_items(["Triterpene saponins", "Cer_AP", "PG", "Ginsenoside Rb1"], MIXED_CATALOG,
+                                       assay_kind="lipid")
+    assert _ids(items[0]) == [] and items[0]["parts"][0]["kind"] == "class"
+    assert _ids(items[1]) == [10] and _ids(items[2]) == [0, 1, 5]
+    assert _ids(items[3]) == [8]                                    # 名前で指定すれば描く
+    assert excluded["non_lipid"] == ["#8 Ginsenoside Rb1", "#9 w/o MS2: Saikosaponin A"]
+    # 脂質アッセイでなければ除かない
+    for kind in (None, "metabolite", "unknown"):
+        items, excluded = gi.resolve_items(["Triterpene saponins"], MIXED_CATALOG, assay_kind=kind)
+        assert _ids(items[0]) == [8, 9] and excluded["non_lipid"] == []
+
+
 def test_item_count_limits():
     with pytest.raises(ValueError):
         gi.resolve_items([], CATALOG)
