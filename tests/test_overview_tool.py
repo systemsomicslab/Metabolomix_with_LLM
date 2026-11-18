@@ -793,3 +793,73 @@ def test_overview_cap_note_call_reproduces_the_overview_f_ranking_after_a_prepro
     other, other_q = ftests(groups=groups)
     assert other["matrix_source"] == "latest_preprocess" and other["matrix_id"] == pre["matrix_id"]
     assert other_q != got
+
+
+def _block_ds(*, replicate=True, subject=False, seed=0):
+    """2 群 × 9 注入。replicate なら 3 匹 × 3 注入（同じ個体の注入が続く）、でなければ 9 匹。試料名に反復の印は無い。"""
+    import numpy as np
+
+    from metabolomix.analysis.sample_manifest import apply_metadata
+    from metabolomix.mztab.dataset_state import DatasetState
+    from tests.test_stats_results import _row
+
+    rng = np.random.default_rng(seed)
+    nf = 200
+    mu = rng.normal(18, 2, nf)
+    names, rows, cols = [], [], []
+    for g in ("C", "T"):
+        animals = rng.normal(0, 0.4, (3, nf))
+        for j in range(9):
+            profile = animals[j // 3] if replicate else rng.normal(0, 0.4, nf)
+            cols.append(mu + profile + rng.normal(0, 0.12, nf))
+            name = f"{g}{j + 1:02d}"
+            names.append(name)
+            rows.append(_row(f"id_{name}", role="sample", group=g, subject=f"{g}{j // 3}" if subject else None,
+                             order=len(names)))
+    ds = DatasetState()
+    ds.feature_matrix = np.exp2(np.array(cols).T)
+    ds.detected_mask = np.ones_like(ds.feature_matrix, dtype=bool)
+    ds.sample_names = names
+    ds.sample_assay_ids = [f"assay[{i + 1}]" for i in range(len(names))]
+    ds.feature_ids = [f"f{k}" for k in range(nf)]
+    ds.feature_metadata = {f"f{k}": {"name": f"F{k}"} for k in range(nf)}
+    apply_metadata(ds, rows)
+    return ds
+
+
+def _block_fact(out) -> str | None:
+    return next((x for x in out["quality"]["facts"] if "技術反復らしいまとまり" in x), None)
+
+
+def test_overview_flags_replicate_blocks_found_in_the_data(tmp_path):
+    """試料名に印が無く subject_id も無いが、データの上で 3 本ずつのまとまりに分かれる: 候補を事実に挙げ、next に
+    subject_id の入れ方を足す。subject_id は入れない（試料の表は変わらない）。"""
+    ds = _install(_block_ds(), tmp_path)
+    out = _ov()
+    fact = _block_fact(out)
+    assert fact is not None, out["quality"]["facts"]
+    assert "3 本ずつ" in fact
+    assert "C（注入順で連続）[id_C01, id_C02, id_C03] [id_C04, id_C05, id_C06] [id_C07, id_C08, id_C09]" in fact
+    assert "T（注入順で連続）[id_T01, id_T02, id_T03]" in fact
+    assert "possible_replicate_blocks" in out["quality"]["facts"][0]
+    assert "dataset_set_sample_metadata" in out["quality"]["next"] and "subject_id" in out["quality"]["next"]
+    assert all(row.get("subject_id") is None for row in ds.sample_metadata_rows)
+    assert not any((m or {}).get("subject_id") for m in (ds.sample_meta or {}).values())
+    record = ds.results[out["overview_id"]]["facts"]["quality"]
+    data = next(x["data"]["replicate_blocks"] for x in record if "replicate_blocks" in x["data"])
+    assert data["k"] == 3 and [g["group"] for g in data["groups"]] == ["C", "T"]
+
+
+def test_overview_does_not_flag_independent_samples(tmp_path):
+    _install(_block_ds(replicate=False), tmp_path)
+    out = _ov()
+    assert _block_fact(out) is None
+    assert "possible_replicate_blocks" not in out["quality"]["facts"][0]
+    assert "dataset_set_sample_metadata" not in out["quality"]["next"]
+
+
+def test_overview_does_not_flag_blocks_when_subject_id_is_set(tmp_path):
+    _install(_block_ds(subject=True), tmp_path)
+    out = _ov()
+    assert _block_fact(out) is None
+    assert "possible_replicate_blocks" not in out["quality"]["facts"][0]

@@ -197,21 +197,22 @@ def _error_text(exc: DomainError) -> str:
     return f"{exc.code}: {exc.message}" + (f" {details[:400]}" if details else "")
 
 
-def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, detection, n_blank,
+def _quality_only(holder, ds, study, exc: DomainError, *, rsd, failed, drift, detection, blocks, n_blank,
                   assay_kind, top_n, embedded) -> dict:
     """既定の前処理が失敗した（特徴が残らない など）ときの概観: 品質の段だけを出し、他の 3 段は理由つきで省く。
 
     品質が悪いデータほど前処理で行が落ちるので、ここで品質の段まで失うと「差を語れる状態か」が言えない（§4.1）。
-    交絡は前処理の個体が無いので評価しない（`not_computed`）。
+    交絡は前処理の個体が無いので評価しない（`not_computed`）。技術反復らしいまとまり（`blocks`）は前処理の前の
+    試料から見るので出す（名前からの反復の注意は前処理が出すので無い）。
     """
     reason = _error_text(exc)
     conf = {"batch_status": "not_computed", "injection_order": {"status": "not_computed"}}
     verdict, reasons = quality.quality_verdict(rsd=rsd, failed=failed, drift=drift, confounding=conf,
-                                               replicate_warnings=[])
+                                               replicate_warnings=[], replicate_blocks=blocks)
     n_qc = sum(1 for s in study.samples if s.include and s.role == "qc")
     q_sec = overview.quality_facts(rsd=rsd, failed=failed, detection=detection, drift=drift, confounding=conf,
                                    replicate_warnings=[], verdict=verdict, reasons=reasons, n_qc=n_qc,
-                                   n_blank=n_blank, drift_note=None, pca_id=None)
+                                   n_blank=n_blank, drift_note=None, pca_id=None, replicate_blocks=blocks)
     skipped = {"facts": [], "omitted": f"既定の前処理の行列が作れない（{reason}）",
                "next": "dataset_preprocess() で足切りの段ごとの理由を見る（filters を緩める・"
                        "dataset_exclude で外れた試料を外す）→ dataset_overview()"}
@@ -265,6 +266,8 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
     failed = quality.failed_qc(study)
     drift = quality.drift_signs(study)
     detection = quality.detection_summary(study)
+    # subject_id が無いときの、データからの技術反復らしいまとまり（候補を挙げるだけで subject_id は入れない）
+    blocks = quality.replicate_blocks(study)
     n_blank = sum(1 for s in study.samples if s.include and s.role == "blank")
 
     # 1. 既定の前処理（drift=auto が補正を止めたら、補正なしで計算したことを事実に書く。§7）
@@ -274,7 +277,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
         entry, _record = register_default(holder, ds, study, prepared, config, inputs)
     except DomainError as exc:
         return _quality_only(holder, ds, study, exc, rsd=rsd, failed=failed, drift=drift,
-                             detection=detection, n_blank=n_blank, assay_kind=assay_kind,
+                             detection=detection, blocks=blocks, n_blank=n_blank, assay_kind=assay_kind,
                              top_n=top_n, embedded=embedded)
 
     # 2. 品質
@@ -282,7 +285,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
     conf = confounding_report(prepared.units, plan["levels"])
     replicates = [w for w in prepared.warnings if w.get("code") == "possible_technical_replicates"]
     verdict, reasons = quality.quality_verdict(rsd=rsd, failed=failed, drift=drift, confounding=conf,
-                                               replicate_warnings=replicates)
+                                               replicate_warnings=replicates, replicate_blocks=blocks)
 
     # 3. 全体（PCA は直近にしない）
     pca_rec, pca_result = None, None
@@ -313,7 +316,7 @@ def build_overview_payload(holder, *, top_n: int = 5, embedded: bool = False, to
                                    drift=drift, confounding=conf, replicate_warnings=replicates,
                                    verdict=verdict, reasons=reasons, n_qc=len(prepared.qc_ids),
                                    n_blank=n_blank, drift_note=drift_note, drift_rerunnable=drift_rerunnable,
-                                   pca_id=pca_rec["result_id"] if pca_rec else None)
+                                   pca_id=pca_rec["result_id"] if pca_rec else None, replicate_blocks=blocks)
     g_sec = overview.global_facts(pca_result=pca_result, labels=labels, record=record, plan=plan,
                                   omitted=omitted, quality_note=q_note, exploratory=exploratory)
 
@@ -400,6 +403,8 @@ def dataset_overview(top_n: int = 5, dataset_handle: str | None = None) -> str:
     - 品質の判定（`ok` / `caution` / `poor` / `not_evaluable`）を先に置く。`poor` でも差の段は「参考」と添えて出すが、群とバッチが
       完全交絡なら比較を回さない。群が 1 つでも比較しない。注入順がファイルの順かもしれなければ注入順を使う事実に但し書きを添え、
       next に実際の測定順の入れ方を足す。探索専用のデータセットは比較を回し、全体・クラス・分子種の段の先頭に探索専用の印の事実を置く。
+      subject_id が無く、群の中の注入がデータの上で k 本ずつの技術反復らしいまとまりに分かれれば、群ごとの候補を事実に挙げ、next に
+      subject_id の入れ方を足す（候補を示すだけで subject_id は入れない）。
     - クラスの段は付加体の選別（`dataset_select_features`）の後だけ出す（それまでは理由と次の一手）。
     - 事実には段ごとの ID（`Q1` `G1` `C1` `S1`）が付き、外からは `<overview_id>#Q1` で引く。サーバは考察を書かない。
     - 比較と PCA は `result_ids` で掘れる（volcano・特徴検索・書き出し）が、直近の結果にはしない。`reports/stats/` に概観の記録を

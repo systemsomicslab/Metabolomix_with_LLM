@@ -245,3 +245,39 @@ def test_chain_state_provisional_until_select():
     ds.quant_state = {"normalized": True, "steps": ["normalize", "select"]}
     st = overview.chain_state(ds, curation_judgments=3)
     assert st["provisional"] is False and st["curation"] == 3 and st["pending"] == []
+
+
+def _found_blocks():
+    return {"status": "found", "k": 3, "thresholds": {}, "skipped": [{"group": "U", "n": 8,
+                                                                     "reason": "block_size_does_not_divide"}],
+            "groups": [{"group": g, "n": 9, "order": "injection_order", "cells": "detected", "n_features": 200,
+                        "layout": layout, "margin": 0.8, "purity": 1.0, "median_icc": 0.7, "adjacent_excess": 0.0,
+                        "blocks": [[f"{g}{3 * b + j + 1:02d}" for j in range(3)] for b in range(3)]}
+                       for g, layout in (("C", "consecutive"), ("T", "data"))]}
+
+
+def test_quality_facts_lists_replicate_blocks_and_suggests_subject_id_once():
+    """データからの技術反復らしいまとまりは、群ごとの候補を挙げた事実になり、next に subject_id の入れ方を 1 つ足す
+    （名前からの反復の注意と両方出ても 1 つ）。データにはまとまりの戻り値そのもの。"""
+    found = _found_blocks()
+    base = dict(rsd={"status": "ok", "median": 0.1, "frac_le_030": 0.9, "n_computable": 10, "n_qc": 4},
+                failed={"checked": 4, "failed": []}, detection={"status": "not_evaluable", "reason": "x"},
+                drift=[], confounding={"batch_status": "single_batch", "injection_order": {"status": "ok"}},
+                verdict="caution", reasons=["possible_replicate_blocks"], n_qc=4, n_blank=0, drift_note=None,
+                pca_id=None)
+    q = overview.quality_facts(replicate_warnings=[], replicate_blocks=found, **base)
+    fact = next(x for x in q["facts"] if "技術反復らしいまとまり" in x["text"])
+    assert "3 本ずつ" in fact["text"] and "2 群" in fact["text"]
+    assert "C（注入順で連続）[C01, C02, C03] [C04, C05, C06] [C07, C08, C09]" in fact["text"]
+    assert "T（相関から束ねた）[T01, T02, T03]" in fact["text"]
+    assert "見ていない群" in fact["text"] and "U" in fact["text"]
+    assert "自動では入れていない" in fact["text"]
+    assert fact["data"]["replicate_blocks"] == found
+    assert q["next"].count("dataset_set_sample_metadata") == 1 and "subject_id" in q["next"]
+    both = overview.quality_facts(replicate_warnings=[{"stem": "S1", "samples": ["S1_1", "S1_2"]}],
+                                  replicate_blocks=found, **base)
+    assert both["next"].count("dataset_set_sample_metadata") == 1
+    for quiet in (None, {"status": "not_found"}, {"status": "subject_id_set"}):
+        q = overview.quality_facts(replicate_warnings=[], replicate_blocks=quiet, **base)
+        assert not any("技術反復らしいまとまり" in x["text"] for x in q["facts"])
+        assert "dataset_set_sample_metadata" not in q["next"]
