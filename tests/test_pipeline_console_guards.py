@@ -77,6 +77,69 @@ def test_intake_names_a_truncated_mzml(tmp_path, monkeypatch):
     assert caught.value.details["n_files"] == 1
 
 
+_HEADER_EMPTY = ('<?xml version=\'1.0\' encoding=\'UTF-8\'?>\n<indexedmzML>\n<mzML>\n'
+                 '<referenceableParamGroupList count="1">\n'
+                 '<referenceableParamGroup id="CommonInstrumentParams"/>\n'
+                 '</referenceableParamGroupList>\n'
+                 '<instrumentConfigurationList count="1"><instrumentConfiguration id="IC1">'
+                 '<referenceableParamGroupRef ref="CommonInstrumentParams"/></instrumentConfiguration>'
+                 '</instrumentConfigurationList>\n<run id="r">\n')
+
+
+def _write_header_mzml(path: Path, header: str, *, encoding: str = "utf-8") -> Path:
+    path.write_bytes((header + _PAD + "</run>\n</mzML>\n</indexedmzML>\n").encode(encoding))
+    return path
+
+
+def test_intake_names_an_mzml_with_an_empty_self_closing_param_group(tmp_path, monkeypatch):
+    # 登録の前に書き直された mzML（ST004581）: 閉じタグは正しいが、Console はピーク 0 で終わる
+    source = _mzml_source(tmp_path / "raw")
+    _write_header_mzml(source["root"] / "S1.mzML", _HEADER_EMPTY)
+    with pytest.raises(DomainError) as caught:
+        _plan(source, monkeypatch)
+    assert caught.value.code == "PIPELINE_INPUT_INVALID"
+    assert "S1.mzML" in caught.value.message and "referenceableParamGroup" in caught.value.message
+    assert caught.value.details["files"] == [
+        {"name": "S1.mzML", "size": (source["root"] / "S1.mzML").stat().st_size,
+         "reason": "empty_header_element", "element": "referenceableParamGroup"}]
+
+
+def test_intake_accepts_the_open_close_param_group_and_the_self_closing_ref(tmp_path, monkeypatch):
+    source = _mzml_source(tmp_path / "raw")
+    fixed = _HEADER_EMPTY.replace('<referenceableParamGroup id="CommonInstrumentParams"/>',
+                                  '<referenceableParamGroup id="CommonInstrumentParams"></referenceableParamGroup>')
+    _write_header_mzml(source["root"] / "S1.mzML", fixed)
+    assert _plan(source, monkeypatch)["selected_format"] == "mzml"
+
+
+def test_header_check_reads_utf16_and_ignores_the_spectra(tmp_path):
+    from metabolomix.console import raw_integrity
+    utf16 = _write_header_mzml(tmp_path / "U.mzML", _HEADER_EMPTY, encoding="utf-16-le")
+    assert raw_integrity.open_format_problem(utf16)["reason"] == "empty_header_element"
+    # 見出しの後（スペクトルの中）の自己終了の要素は見ない
+    late = tmp_path / "L.mzML"
+    late.write_text('<?xml version="1.0"?>\n<indexedmzML>\n<mzML>\n<run id="r">\n'
+                    '<referenceableParamGroup id="X"/>\n' + _PAD + "</run>\n</mzML>\n</indexedmzML>\n",
+                    encoding="utf-8")
+    assert raw_integrity.open_format_problem(late) is None
+
+
+@pytest.mark.parametrize("element,dangerous", [
+    ('<sampleList count="0"/>', "sampleList"),
+    ('<fileContent/>', "fileContent"),
+    ('<referenceableParamGroupList count="0"/>', "referenceableParamGroupList"),
+    ('<softwareList count="0"/>', None),            # 読み込みが閉じタグを待たない要素は害が無い
+    ('<sourceFileList count="0"/>', None),
+])
+def test_header_check_names_only_the_elements_msdial_reads_to_the_end_tag(tmp_path, element, dangerous):
+    from metabolomix.console import raw_integrity
+    path = tmp_path / "H.mzML"
+    path.write_text('<?xml version="1.0"?>\n<indexedmzML>\n<mzML>\n' + element + '\n<run id="r">\n' + _PAD
+                    + "</run>\n</mzML>\n</indexedmzML>\n", encoding="utf-8")
+    problem = raw_integrity.open_format_problem(path)
+    assert (problem or {}).get("element") == dangerous
+
+
 def test_intake_accepts_closed_mzml(tmp_path, monkeypatch):
     plan = _plan(_mzml_source(tmp_path / "raw"), monkeypatch)
     assert plan["selected_format"] == "mzml"

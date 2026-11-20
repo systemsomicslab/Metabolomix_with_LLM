@@ -101,8 +101,10 @@ def pipeline_plan(dataset_root: str, request: dict | None = None,
     種類ごとの `source`）。
 
     既知の不正入力（不正な sample_manifest など）は起動せずに `needs_input` を保存する。開いた形式（mzML・imzML・
-    mzXML）の計測ファイルが閉じタグで終わらない・32 KiB 未満（imzML は閉じタグだけ。スペクトルは隣の .ibd）なら、
-    run を作る前に `PIPELINE_INPUT_INVALID`（`details.files` に `{"name", "size", "reason"}`）。
+    mzXML）の計測ファイルが閉じタグで終わらない・32 KiB 未満（imzML は閉じタグだけ。スペクトルは隣の .ibd）・
+    mzML の見出しに中身の無い自己終了の `referenceableParamGroup` など（MS-DIAL がスペクトルを 1 本も読まず、Console は
+    exit 0 のままピーク 0 で終わる）なら、run を作る前に `PIPELINE_INPUT_INVALID`（`details.files` に
+    `{"name", "size", "reason"}`。見出しの問題は `reason: "empty_header_element"` と `element`）。
     """
     from metabolomix.pipeline.service import plan_pipeline
     try:

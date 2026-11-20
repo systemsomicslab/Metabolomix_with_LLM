@@ -175,24 +175,34 @@ _MAX_REPORTED_BROKEN = 20
 
 
 def _assert_open_format_inputs(paths) -> None:
-    """開いた形式の主ファイルが途中で切れている・小さすぎるなら名指しして断る。
+    """開いた形式の主ファイルが途中で切れている・小さすぎる・見出しが読めない形なら名指しして断る。
 
-    MS-DIAL Console は切れた mzML を読むところで落ち、どのファイルかをログに残さない。
+    MS-DIAL Console は切れた mzML を読むところで落ち、どのファイルかをログに残さない。見出しに中身の無い
+    自己終了の `<referenceableParamGroup .../>` がある mzML は、落ちずにピーク 0 で終わる（2026-11-20）。
     """
     broken = raw_integrity.broken_open_format_files(paths)
     if not broken:
         return
     names = [entry["name"] for entry in broken]
     shown = ", ".join(names[:5]) + (f" ほか {len(names) - 5} 件" if len(names) > 5 else "")
+    header = [entry for entry in broken if entry["reason"] == "empty_header_element"]
+    message = f"MS-DIAL Console が読めない計測ファイルがあります（{len(names)} 件）: {shown}。"
+    if len(header) < len(broken):
+        message += ("途中で切れた・小さすぎる・読めないファイルは、Console が読むところで落ちます。取り直す（変換し直す）か、"
+                    "フォルダの外へ移してください。")
+    if header:
+        message += (f"見出しに中身の無い自己終了の <{header[0]['element']} .../> がある mzML（{len(header)} 件）は、"
+                    "Console が exit 0 のままスペクトルを 1 本も読まずにピーク 0 で終わります。その要素を開きタグと"
+                    "閉じタグの形に直し（中身は足さない）、索引（各 offset・indexListOffset・fileChecksum）を作り直した"
+                    "写しを使ってください。")
+    message += "直してから pipeline_run を呼び直してください。"
     raise DomainError(
-        "PIPELINE_INPUT_INVALID",
-        f"計測ファイルが途中で切れているか、小さすぎます（{len(names)} 件）: {shown}。"
-        "MS-DIAL Console はこれを読むところで落ちます。取り直す（変換し直す）か、"
-        "フォルダの外へ移してから pipeline_run を呼び直してください。",
+        "PIPELINE_INPUT_INVALID", message,
         {"files": broken[:_MAX_REPORTED_BROKEN], "n_files": len(broken),
          "min_bytes": raw_integrity.MIN_OPEN_FORMAT_BYTES,
          "reasons": {"truncated": "末尾が閉じタグで終わらない",
                      "too_small": f"{raw_integrity.MIN_OPEN_FORMAT_BYTES} バイト未満",
+                     "empty_header_element": "mzML の見出しに中身の無い自己終了の要素（`element`）がある",
                      "unreadable": "読めない"}})
 
 
