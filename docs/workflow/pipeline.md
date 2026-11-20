@@ -34,9 +34,13 @@ MCP 層は `metabolomix/tools/pipeline_tools.py` と `metabolomix/tools/console_
 
 手順 6-7: 開いた形式(mzML・imzML・mzXML)の主ファイルが根の閉じタグ(`</indexedmzML>` / `</mzML>` / `</mzXML>`)で
 終わるかと、サイズが下限(`raw_integrity.MIN_OPEN_FORMAT_BYTES`、32 KiB)以上かを確かめる(imzML は閉じタグだけ。`.ibd` は
-見ない)。読むのは末尾の数 KB だけで、XML 全体の検証もベンダーの形式の検査もしない。切れた・小さすぎるファイルは名指しして
-run を作る前に `PIPELINE_INPUT_INVALID`(`details.files` に `{"name", "size", "reason"}`、`reason` は `truncated` /
-`too_small` / `unreadable`)で断る。
+見ない)。mzML は見出し(`<run` の前まで)も読み、中身の無い自己終了の `referenceableParamGroupList` /
+`referenceableParamGroup` / `fileDescription` / `fileContent` / `sampleList` を断る(登録の前に装置の情報を抜いて書き直された
+mzML で、MS-DIAL は exit 0 のままスペクトルを読まずピーク 0 になる。RawDataHandler 1.3.9725.140 の読み込みがこれらの要素で
+閉じタグまで読み進み、自己終了を見ないため。2026-11-20)。読むのは
+末尾の数 KB と見出しだけで、XML 全体の検証もベンダーの形式の検査もしない。問題のあるファイルは名指しして run を作る前に
+`PIPELINE_INPUT_INVALID`(`details.files` に `{"name", "size", "reason"}`、`reason` は `truncated` / `too_small` /
+`empty_header_element`(`element` に要素名) / `unreadable`)で断る。
 
 事前検査(手順 8-9)が既知の不正入力(壊れた実験情報シートなど)を見つけたら、`find_or_create_run` で run は作るが
 worker は起動しない(手順 11 で `needs_input` として保存し、手順 12 を飛ばして手順 13 の発送 receipt を返す)。
