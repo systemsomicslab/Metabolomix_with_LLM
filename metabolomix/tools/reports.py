@@ -38,6 +38,16 @@ def write_report(
     """解析・解釈レポートを reports/<analysis_id>.md に上書き保存する。
 
     body: frontmatter を除く Markdown 本文（見出しは自由）。所見が増えたら本文を作り直して呼び直す。
+        数字の出どころ: 報告の数字は道具の戻り値か出力のファイルから写し、表の行には特徴 ID と、統計の記録の ID
+        （`dataset_preprocess`・`dataset_compare`・`dataset_pca`・`dataset_analysis_run` の戻り値の `record`。
+        `reports/stats/` に残る）か出力のファイルの名前を添える。読み手はそれで数字を辿り、計算し直す。群の分け直し・
+        試料の除外・層別・順位検定・個体ごとの比は `dataset_analysis_run` の spec で回せば記録が残る。試料ごとの値
+        （`dataset_sample_peaks` など）から自分で計算した数字は、そう書く。
+        「検出されない」は「無い」ではない: 参照のスペクトルが無い、異性体が決まらない、質量や RT の窓の外、処理の
+        絞り込み（メソッドの `N percent detected in one group`・`Peak count filter`、`dataset_preprocess` の検出率）で
+        落ちた、がありうる。不在を結論にするなら、絞り込みを緩めて確かめる（`pipeline_run` の
+        `request.method_overrides` で処理し直す）か、制約として書く。
+        道具に無かった操作や、道具が断った・誤った場面とその補い方も書く（道具を直す材料になる）。
     上書きの前の版は reports/.history/<slug>.<旧版の mtime の UTC>.md へ移す（中身が同じなら書かない）。
     置き場所: lipidmix.local.toml の [paths] reports_dir を優先し、書けなければ解析フォルダ配下 reports/。
     未設定なら解析フォルダ配下 reports/ だけ（リポジトリへは退避しない）。解析フォルダは直近のデータセット

@@ -140,16 +140,22 @@ def dataset_preprocess(
     blank_min_ratio: 生体試料の平均がブランク平均のこの倍数未満の特徴を除く（既定 3.0）。
     detection_min_rate: 検出率（gap-fill を除く）の下限（既定 0.5）。detection_by: "group"（群ごと）/ "all"（全体）。
     max_qc_rsd: QC の RSD がこれを超える特徴を除く（既定 0.30）。max_d_ratio: D-ratio の上限（既定 0.5）。
-        上の 4 つの足切りは None でその足切りを行わない。
+        上の 4 つの足切りは None でその足切りを行わない。QC の RSD の足切りは QC が 2 本未満なら飛ばす。検出率の足切りは gap-fill を
+        数えないので、少数の試料にだけある特徴（服薬など）は群ごとでも全体でも落ちうる。
     normalize: "auto"（既定。換算済みか QC が無ければ何もしない。それ以外は PQN）/ "none" / "tic" / "median" / "pqn"。QC が無い
         データで "pqn" を明示すると、参照は生体試料（全群）の特徴ごとの中央値（warnings の `pqn_reference_is_samples`）。
+        auto の PQN は QC が 1 本でもあれば当て、参照はその QC の中央値（QC が少ないと参照が揺れる）。TIC・中央値・PQN の係数は
+        試料の全特徴から求めるので、一部の試料だけに強い信号（薬剤など）があると、その試料のほかの特徴が見かけ上下がる
+        （`normalization_exclude_features` でその信号を係数から外せる）。
+        ドリフト補正は、バッチごとに QC が 4 本以上あり、QC が試料の注入の両端を挟むときだけ当たる。
     normalization_features: 正規化の係数をこの特徴 ID だけから計算する（足切りで落ちた特徴も使える。内部標準など）。
     normalization_exclude_features: 係数の計算から外す特徴 ID。
         どちらも係数の計算だけで、外した特徴も行列には残り、係数で割られる。正規化しないとき（"none" と、"none" に決まった "auto"）は
         使わず、warnings の `normalization_features_ignored` に書く（matrix_id は渡さないときと同じ）。空のリストは渡さないのと同じ
         （`normalization_features_empty`）。統合したデータセットのある極性だけ係数の特徴が残らなければ断らず、その極性は残った特徴
         すべてから求めて注意（`normalization_features_not_in_polarity` / `normalization_exclude_features_cover_polarity`）を返す。
-    collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。
+    collapse_replicates: 同じ個体（subject_id）の反復注入を 1 個体にまとめる（既定 True）。subject_id が無ければ注入が単位で、
+        同じ個体の反復注入は独立な試料として検定に入る（`dataset_overview` が反復らしいまとまりを示す）。
     injection_columns: 個体のまとめの鍵から外す試料の表の列（取得日・注入番号など注入ごとに違う属性）。
     group_levels / group_factors: 試料名（と試料の表の群）の因子トークンで群を解く（group_factors は因子軸のリストで優先）。解いた群は
         行列の設定に記録される。無ければ試料の表の群。
@@ -691,7 +697,11 @@ def dataset_compare(
         エラーにも details.matrix_id / matrix_source）。古い・無い ID は missing_state。ID と一緒に渡した group_levels /
         group_factors は、試料を行列と同じ群に分けるなら notes に書いてそのまま比べ、違えば needs_input（patch の封筒。群の引数を
         外すか matrix_id を外すか）。
-    method: "moderated_t"（既定）など（エンジンの検定）。effect_size: "log2_mean_difference"（既定）/ "arithmetic_mean_ratio"。
+    method: "moderated_t"（既定）など（エンジンの検定）。welch / student / mannwhitney は 1 因子・共変量なし・ブロックなしだけで、
+        2 因子の主効果・交互作用の F は moderated_t のときだけ出る。effect_size: "log2_mean_difference"（既定）/
+        "arithmetic_mean_ratio"。log2fc は test − reference（正なら test が高い）。
+        割れたアライメントスポット（`dataset_alignment_qc`）はまとめずに比べるので、q はまとめる前の全スポットの母集団の値。
+        まとめた行列で比べるなら `dataset_analysis_run`（`features.merge_split` 既定 true）。
     bh_population: 補正の母集団 "matrix"（既定）/ "annotated" / "reported"（reported_feature_ids の特徴だけ。ID が無ければ
         DATASET_BAD_REQUEST。reported 以外で渡した ID は使わず notes に書く）。
     p_adjust: 多重比較の補正 "bh"（既定。FDR）/ "bonferroni" / "holm"（FWER）/ "none"。q 列はこの方法の値で、戻り値と記録に

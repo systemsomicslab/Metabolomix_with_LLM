@@ -33,6 +33,9 @@ def dataset_exclude(
 ) -> str:
     """試料・特徴を解析から外す（可逆）。`dataset_preprocess` が行列から外して適用する。
 
+    外した試料も MS-DIAL のアライメント（スポットの決め方・gap-fill）には入ったままで、Console をやり直す必要はない。
+    `dataset_analysis_run` はこの除外を読まない（spec の `input.exclude_samples` に書く）。
+
     samples: 試料名（`dataset_status(view="samples")` の name）か実験情報シートの sample_id。
     features: 特徴 ID（`dataset_feature_search` の feature_id。int でも str でもよく、`str()` に直す）。
     mode: `"add"`（既定。除外に足す。`reason` が要る。除外済みは理由を置き換える）/ `"remove"`（除外から戻す）/
