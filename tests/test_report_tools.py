@@ -82,6 +82,22 @@ class ReportToolTests(unittest.TestCase):
         for heading in ("## 目的", "## 実施した解析", "## 主要な所見", "## 結論"):
             self.assertNotIn(heading, doc)
 
+    def test_record_guidance_names_only_registered_tools(self):
+        """数字の出どころを辿らせる説明（write_report・dataset_analysis_run・dataset_sample_peaks）が挙げる道具は実在する。"""
+        import asyncio
+        import re
+
+        from tests.test_instructions_text import NON_TOOL_IDENTIFIERS
+
+        registered = {tool.name for tool in asyncio.run(mcp_core.mcp.list_tools())}
+        # 引数名・欄の名前と、dataset_analysis_run の注意の名前は道具ではない。
+        not_tools = NON_TOOL_IDENTIFIERS | {"dataset_exclusions_not_in_spec"}
+        for name in ("write_report", "dataset_analysis_run", "dataset_sample_peaks"):
+            doc = getattr(server, name).__doc__
+            cited = set(re.findall(r"`((?:dataset|pipeline)_[a-z_]+)`", doc)) - not_tools
+            self.assertTrue(cited, name)
+            self.assertLessEqual(cited, registered, f"{name}: {sorted(cited - registered)}")
+
     def test_write_report_creates_file_with_frontmatter_and_body(self):
         msg = server.write_report("a-1", "NEG / DS", "## 目的\nグループ比較")
         path = self.tmp / "reports_fallback" / "a-1.md"

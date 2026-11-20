@@ -370,7 +370,8 @@ def dataset_feature_search(
     強度・ppm・RT の近さでは選ばない。データセットの極性はジョブの宣言 → mzTab-M の付加体の多数決の順に決める
     （`rule.polarity_source`）。戻り値は `targets`・`candidates`（TSV。目標ごとに `max_results` 件まで）・`rule`（正規化した規則と
     `rule_hash`。`rule.targets` から hash を計算し直せないので、照合は `rule_hash` の値どうしで行う）・`rt_offset`（系統的な
-    RT のずれの見積もり。照合には当てない）。付加体の層の既定は、陽イオン `[M+H]+ [M]+` ／ `[M+Na]+ [M+NH4]+ [M+H-H2O]+
+    RT のずれの見積もり。照合には当てない。その呼び出しの目標の一意の一致だけから見積もるので、目標の組を替えると値が変わる）。
+    `rt_min` は同じ LC 条件の RT のときだけ照合の手がかりになる（別のカラム・グラジエントの RT は使わない）。付加体の層の既定は、陽イオン `[M+H]+ [M]+` ／ `[M+Na]+ [M+NH4]+ [M+H-H2O]+
     [M+H-NH3]+ [2M+H]+ [M+2H]2+ [M+CH3OH+H]+ [M+H-2H2O]+`、陰イオン `[M-H]-` ／ `[M-H2O-H]- [M+Cl]- [M+FA-H]- [M+CH3COO]-
     [2M-H]- [M+Na-2H]-`。
 

@@ -157,7 +157,11 @@ def _dataset_or_error(holder, needed: bool):
           structured_output=False)
 def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
-    """論文の方法を写した spec で行列を作って検定する。状態は変えず（ハンドルは読むだけ）、呼ぶたびに記録を 1 件書く。
+    """spec で行列を作って検定する。状態は変えず（ハンドルは読むだけ）、呼ぶたびに記録を 1 件書く。
+
+    spec は論文の方法を写したものでも、自分で決めた群の分け直し（`group_overrides`・試料の表の列の `design.factors`）・
+    試料の除外（`exclude_samples`）・層別・順位検定（`mannwhitney`）・共変量・個体ごとの比（v1 の `aggregate` の ratio）
+    でもよい。記録が残るので、報告の数字を後から辿れる（試料ごとの値から自分で検定するより、こちらを使う）。
 
     記録は `reports/stats/<record_id>.json`（step `analysis_run`: 渡した spec と正規化した spec・`rule_hash`・ハンドルの身元・
     戻り値・時刻）。戻り値の `record` がその場所（書けなければ `written: false` と理由。解析は成功）。
@@ -166,7 +170,8 @@ def dataset_analysis_run(spec: dict, dataset_handle: str | None = None,
     `docs_read(topic="reanalysis", section="統計の spec")`（v2 は 2.1）、v1 の `matrix` は `section="行列の recipe"`。
     v1 の欄: `input`（データセットか外部の行列: TSV・MetaboLights の MAF・mwTab・xlsx）・`groups`・`comparison`
     （比較名は `<test>_vs_<ref>`）・`analyses`（名前つきの解析。感度解析は 1 つの spec に並べる）・`covariates`・
-    `aggregate`・`features`・`correlate`。
+    `aggregate`・`features`・`correlate`。v1 の `test.transform="log2"`（既定）は 0 以下の値を黙って欠測にするので、公開された
+    処理済みの値の埋め値（群の中で一定の値）を見るなら `transform="none"` で回し、行の `constant_in_group` を見る。
 
     - 返すのは数字・向き（`direction`）・閾値を機械的に当てた `meets_thresholds` で、再現したかの判定は返さない。
       正規化した spec・`rule_hash`・`input_fingerprint` が入り、同じ spec・同じ入力なら同じ JSON。
@@ -533,7 +538,8 @@ def library_msms_qualify(rules: dict, spot_id: int | None = None,
     `lipid_species`（同位体の標識のある内部標準の名前は `MSMS_RULES_INVALID`）。既定の規則でも断片の一致を 1 本求め
     （`min_fragments_excl_precursor` 既定 1）、測定の基準ピークに対して `min_fragment_relative_intensity`（既定 0.01）以上の窓だけを
     数える。`checks` に設定した検査を並べ、`verdict` は `qualified` / `not_qualified` / `not_evaluable`（MS/MS が無ければ
-    `not_evaluable`。「断片が合わなかった」ではない）。「明らかに別物か」は判断しない。`rule_hash` は正規化した規則から作る。
+    `not_evaluable`。「断片が合わなかった」ではない）。「明らかに別物か」は判断しない。断片と前駆体の組成が両立するか（断片の
+    組成が前駆体の組成に含まれるか）は見ない。`rule_hash` は正規化した規則から作る。
     `target_rank` と `top1_is_target`（1 位が目標か）を返し、`spot_id` のスポットに MS-DIAL の注釈があれば `msdial_name`・
     `msdial_rank`・`top_differs_from_msdial` も返す。
 
@@ -747,6 +753,7 @@ def dataset_feature_relations(feature_id: str | int, rt_window: float = 0.05, mz
 
     `as_ion_of`（この特徴が相手のイオン）と `ions_of_this`（相手がこの特徴のイオン）を TSV で返す。付加体の決め方・同位体の
     期待比・`strong` / `ambiguous` / `informational` の条件は `docs_read(topic="reanalysis", section="特徴どうしの関係")`。
+    既定の `mz_tol` では Cl の M+2（37Cl）と 13C2 の M+2 が同じ窓に入り、`ambiguous` になる。
     """
     from metabolomix.analysis import claim_evidence, feature_search
 
@@ -804,7 +811,7 @@ def _peak_cell(value) -> str | None:
 def dataset_sample_peaks(feature_ids: list[str | int], dataset_handle: str | None = None,
                          output_path: str | None = None) -> str:
     """特徴 × 試料ごとのピークの `rt`・`mz`・`height`・`detected` を返す。割れた 2 スポットが 1 つの物質か、RT のドリフトを
-    試料ごとに見るための読み取り。
+    試料ごとに見るための読み取り。統計の記録は書かない。この値で群を比べるなら、`dataset_analysis_run`（記録が残る）で回す。
 
     feature_ids: 特徴 ID（int でも str でもよい。`str()` に直す。重複は 1 つ）。知らない ID は `DATASET_BAD_REQUEST`
         （details の `unknown`）。
@@ -925,7 +932,8 @@ def dataset_claim_evidence(spec: dict, dataset_handle: str | None = None,
         代わりに `lipid_species`。同位体の標識のある内部標準の名前は `FEATURE_TARGET_INVALID`）・`scan`（`ppm` と `rt_tol_min` の
         水準のリスト、任意で `adduct_tiers`。全組で走査する）・`msms`（`{top_n, rules, mz_tol_ppm}`。`rules` は msms-rules.v1 で
         target は書かない。`mz_tol_ppm` は任意で、前駆体の窓に重ねる ppm の絞り込み）・`relations`（`rt_window` / `mz_tol` /
-        `min_r`）・`max_candidates`（既定 50）・`merge_split`（既定 true。割れたスポットの組を 1 つの候補と数える）・`ppm_offset` /
+        `min_r`）・`max_candidates`（既定 50）・`merge_split`（既定 true。割れたスポットの組を 1 つの候補と数え、MS/MS の合否は
+        どちらかのスポットが `qualified` なら合格と数える）・`ppm_offset` /
         `rt_offset_min`（任意。質量・RT の窓の中心のずれ。`dataset_feature_search` と同じ意味で、既定の特徴と走査の全変種に効き、
         幅は変えない）。各欄の規則と `rule_hash` への入り方は `docs_read(topic="reanalysis", section="証拠の束")`。
     output_path: JSON をここへ書き、要約だけを返す。省略時は束を返し、候補が 10 を超えれば断らず先頭の 10 件だけを載せる
@@ -1020,7 +1028,9 @@ def dataset_mass_accuracy(band_edges: list[float] | None = None, rank: int = 1,
     `recommended_tolerance`（`n` `mz_tol_ppm` `median_ppm` `mad_ppm` `basis`）。勧める幅は `ceil(|中央値| + 3 × MAD)` で、
     同定が 10 件未満なら null（`reason: too_few`）。目標照合（`dataset_feature_search` / `dataset_claim_evidence`）の `ppm` や
     `library_match_feature` の `mz_tol_ppm` にそのまま渡すか、中央値を `ppm_offset` に・`3 × MAD` を幅に分けて渡すかは
-    再解析の規則で決める。理論 m/z の出所 `theoretical_mz_source`（`mztab` / `formula_adduct` / `mixed`）と、試料ごとの誤差と
+    再解析の規則で決める（そのまま渡すと、系統的なずれの分だけ窓が両側に広がり、ずれと逆の側の偶然の一致も増える。分けて渡せば
+    幅は `3 × MAD` のまま）。`subset` の既定 `rank1` は、特徴の MS/MS が参照スペクトルに照合されていない同定も含む（絞るなら
+    `msms_matched`）。理論 m/z の出所 `theoretical_mz_source`（`mztab` / `formula_adduct` / `mixed`）と、試料ごとの誤差と
     注入順の関係 `injection_trend`（`per_injection`・`spearman_rho`・`rho_unavailable_reason`・`n_samples`・
     `injection_order_source`・`warnings`。試料ごとの実測 m/z が無ければ `{"status": "unavailable"}`）の意味は
     `docs_read(topic="reanalysis", section="質量精度")`。

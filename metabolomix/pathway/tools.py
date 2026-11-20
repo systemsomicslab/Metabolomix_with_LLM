@@ -345,14 +345,14 @@ def pathway_project(group_a: str | list[str] | None = None,
       無い鎖は、そのスコープが行にならないだけで run は返す（missing_chains と notes.acyl_chains）。
     - aggregation: sum | mean | median（サブクラス内の分子種の集計）。
     - method: スコープの比較の検定。dataset_compare の method と同じ値（moderated_t 既定 / welch / student /
-      mannwhitney）。
+      mannwhitney）。前に回した dataset_compare の検定は引き継がないので、そろえるなら同じ値を渡す。
     - wait_seconds: 待つ秒数（既定 20。0〜30 秒）。超えたら仕事を続けたまま `status: "running"` と `job_id` を返す
       （結果は `job_status(job_id=...)`）。
 
     assay_kind を問わず動く（lipid でなければ notes.assay_kind に前提を書く）。[mslipidmapper] mslipidmapper_api_url
     の研究室サーバを先に使い、使えなければローカルの R（[mslipidmapper] rscript）で動かす（どちらかは戻り値の
     backend）。ノード表の列（log2fc・q・call など）、値の意味（クラスの総量ではない）、単位と行列の選び方は
-    `docs_read(topic="pathway")`。
+    `docs_read(topic="pathway")`。図のノードのつながりは描画のためのテンプレートで、反応の根拠ではない。
     """
     from metabolomix.tools._holder import resolve_holder
 

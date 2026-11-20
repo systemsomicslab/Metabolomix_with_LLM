@@ -106,7 +106,7 @@ ASSAY KIND — the format does not say lipid or metabolite. AFTER `load_dataset`
 
 FIRST LOOK — `dataset_overview` returns facts with IDs, quality (`poor`) before differences; its group direction is provisional until `dataset_compare(reference_group=..., test_group=...)`.
 
-RECORDS — `record_objective`, `write_report`, `save_figure` and `pathway_*` write under `[paths] reports_dir` if set, else `reports/` in the loaded dataset's analysis folder; with no dataset they return `missing_state`.
+RECORDS — `record_objective`, `write_report`, `save_figure` and `pathway_*` write under `[paths] reports_dir` if set, else `reports/` in the loaded dataset's analysis folder; with no dataset they return `missing_state`. Statistics tools log each call under `reports/stats/` (`record`); cite it in `write_report`.
 
 MS/MS EVIDENCE — `has_msms` only says an MS/MS acquisition exists; spectra are in `.dcl` (`dcl_*`). Score them with `library_match_feature` / `library_msms_qualify`; `dataset_claim_evidence` bundles a claim's numbers with a `rule_hash`. MSI level 2 needs a matched spectrum. `not_found` from `dcl_find_msms` means no MS/MS was acquired, not that fragments are absent.
 
