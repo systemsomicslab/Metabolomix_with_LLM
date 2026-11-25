@@ -475,7 +475,8 @@ preprocess: {steps, warnings, subject_source}, primary, analyses: [{analysis_id,
   q2_definition: "1 - PRESS/TSS"}, permutation: {n, n_finite, p, statistic: "q2", scheme, min_attainable_p,
   q2_null_mean, q2_null_q95}, vip: [{feature_id, vip}]（降順）, scores: {unit_ids, values}, warnings}`。成分数・交差検証の
   Q2・並べ替え検定の p を必ず返す（R2Y やスコアの分離だけでは過学習と区別できない）。
-  - Q2 は層化グループ k 分割で、分割ごとに学習の個体だけで中心と尺度を決めて予測した `1 − PRESS/TSS`（`q2_cum` は成分
+  - Q2 は層化グループ k 分割で、分割ごとに学習の個体だけで欠測補完（half_min の最小値または KNN の近傍）・
+    特徴の選択・中心・尺度を決めて予測した `1 − PRESS/TSS`（`q2_cum` は成分
     1〜A それぞれ、`q2` は A 成分）。並べ替え検定はクラスの札を入れ替えて同じ分割で Q2 を出し直した帰無分布で
     `p = (1 + #{Q2_perm ≥ Q2}) / (1 + n)`。
   - **分割と並べ替えは独立な単位（グループ）で行う**: `design.block` があればその値、無ければ `subject_id`、それも無い単位は

@@ -189,7 +189,8 @@ def _half_min(values, missing):
     return out
 
 
-def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.ndarray:
+def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float,
+               reference_columns: np.ndarray | None = None) -> np.ndarray:
     """R `impute::impute.knn`（maxp = 行数）と同じ規則の補完。`data` は（特徴 × 試料）、欠測は NaN。
 
     R の `knnimp` に倣い、行を 2 つに分ける:
@@ -201,6 +202,8 @@ def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.
       選ぶ（同距離は行の順）。欠測の列を、近傍のうちその列を観測しているものの平均で埋める。
       全員が欠測なら**軽い行の**列の平均。
     - 欠測の割合が `colmax` を超える列（試料）があれば RECIPE_PRECONDITION。
+    - 交差検証では reference_columns が指す学習試料だけで重い行と近傍を決める。
+      補完値は各試料自身の観測済みの特徴から取る。
     """
     data = np.asarray(data, dtype=float)
     observed = np.isfinite(data)
@@ -212,7 +215,8 @@ def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.
                           f"欠測の割合が colmax={colmax} を超える試料がある（列 {over}）。"
                           "impute.knn と同じく補完しない。", {"columns": over})
     out = data.copy()
-    row_missing = 1.0 - observed.mean(axis=1) if n_cols else np.zeros(n_rows)
+    reference = slice(None) if reference_columns is None else reference_columns
+    row_missing = 1.0 - observed[:, reference].mean(axis=1) if n_cols else np.zeros(n_rows)
     heavy_rows = np.nonzero(row_missing > rowmax)[0]
     light_rows = np.nonzero(row_missing <= rowmax)[0]
 
@@ -234,8 +238,8 @@ def knn_impute(data: np.ndarray, *, k: int, rowmax: float, colmax: float) -> np.
 
     light = data[light_rows]
     light_observed = observed[light_rows]
-    zeroed = np.where(light_observed, light, 0.0)
-    mask = light_observed.astype(float)
+    zeroed = np.where(light_observed[:, reference], light[:, reference], 0.0)
+    mask = light_observed[:, reference].astype(float)
     sq = zeroed ** 2
     targets = np.nonzero(~light_observed.all(axis=1))[0]
     block = 256

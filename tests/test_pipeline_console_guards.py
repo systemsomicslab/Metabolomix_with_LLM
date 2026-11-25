@@ -140,6 +140,21 @@ def test_header_check_names_only_the_elements_msdial_reads_to_the_end_tag(tmp_pa
     assert (problem or {}).get("element") == dangerous
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be"])
+def test_header_ignores_comments_cdata_and_quoted_delimiters(tmp_path, encoding):
+    from metabolomix.console.raw_integrity import open_format_problem
+
+    # コメントは読み込みの境界をまたぎ、中に終了の目印と自己終了タグの両方がある。
+    comment = "<!--" + " " * 66000 + "<run><sampleList/> -->"
+    prefix = ("<indexedmzML><mzML>" + comment + "<note><![CDATA[<sampleList/>]]></note>"
+              + '<sampleList description="text /> end"></sampleList>')
+    path = tmp_path / "header.mzML"
+    _write_header_mzml(path, prefix + "<run>", encoding=encoding)
+    assert open_format_problem(path) is None
+    _write_header_mzml(path, prefix + '<fileContent attr="漢字 a > b"/><run>', encoding=encoding)
+    assert open_format_problem(path)["element"] == "fileContent"
+
+
 def test_intake_accepts_closed_mzml(tmp_path, monkeypatch):
     plan = _plan(_mzml_source(tmp_path / "raw"), monkeypatch)
     assert plan["selected_format"] == "mzml"

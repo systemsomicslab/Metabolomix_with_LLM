@@ -11,7 +11,7 @@ import math
 import numpy as np
 import pytest
 
-from metabolomix.core.serialization import json_payload, json_safe, round_floats, truncate_lists
+from metabolomix.core.serialization import json_payload, json_safe, round_floats, round_significant, truncate_lists
 
 
 def _raise(name):
@@ -89,3 +89,13 @@ def test_truncate_lists_adds_to_existing_n_more_and_custom_keys():
 
 def test_round_floats_unchanged():
     assert round_floats({"a": [1.23456789]}, 3) == {"a": [1.235]}
+
+
+def test_round_significant_keeps_small_and_large_quantities():
+    # 正規化した量（0.0x）と生のピーク高さ（1e7）を同じ規則で丸める。小さい量を 0 に潰さない。
+    assert round_significant(0.0212345678) == 0.0212346
+    assert round_significant(12345678.9) == 12345700.0
+    assert round_significant(-0.000123456789, 3) == -0.000123
+    assert round_significant(1e-12) > 0
+    assert round_significant(0.0) == 0.0
+    assert math.isnan(round_significant(math.nan)) and round_significant(math.inf) == math.inf

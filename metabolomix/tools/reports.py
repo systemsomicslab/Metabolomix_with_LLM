@@ -391,9 +391,8 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder,
     kind = record["kind"]
     figures_dir = _figures_dir(holder)
     out_path = figures_dir / f"{notes.make_slug(analysis_id)}_{kind}.png"
-    written = _write_keeping_history(
-        out_path, figures_dir.parent / notes.HISTORY_DIR,
-        lambda: write_figure_files(ds, record, out_path, title=title))
+    written = write_figure_files(ds, record, out_path, title=title,
+                                 history_dir=figures_dir.parent / notes.HISTORY_DIR)
     both = "（同名の .svg も保存）" if len(written) > 1 else ""
     label = _LABELS[kind]
     origin = f" result_id={record['result_id']}" if record.get("result_id") else ""
@@ -402,28 +401,6 @@ def _save_record(ds, record: dict, analysis_id: str, title: str | None, holder,
     if notes_out:
         text += "\nnotes: " + " ".join(notes_out)
     return text
-
-
-def _write_keeping_history(out_path, history_dir, write):
-    """`write()` で図を書く前に、旧版（PNG と同名の .svg）を `history_dir` へ移す。
-
-    書けなかったら旧版を戻す。書いた図が旧版と同じバイト列なら旧版を戻す（mtime も元のまま）。
-    """
-    import os
-
-    olds = [(path, notes.keep_history(path, history_dir))
-            for path in (out_path, out_path.with_suffix(".svg"))]
-    try:
-        written = write()
-    except BaseException:
-        for path, old in olds:
-            if old is not None and not path.exists():
-                os.replace(old, path)
-        raise
-    for path, old in olds:
-        if old is not None and path.is_file() and path.read_bytes() == old.read_bytes():
-            os.replace(old, path)
-    return written
 
 
 def _figures_dir(holder):

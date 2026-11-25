@@ -624,9 +624,10 @@ gap-filled の印は `detected_mask`、群と役割は試料の対応表、MS/MS
 | フィールド | 意味 |
 |------------|------|
 | `plot_schema` | `lipidmix.group_intensity.v1` |
-| `value` | 点の値の定義: `sum of PeakHeight (log10 on the plot)`。1 点 = その試料で項目に当たったスポットの **PeakHeight の合計**（`.arf` の試料別行。gap-fill の値も含める） |
+| `value` | `sum of <unit> (log10 on the plot)`。各点は、その試料で項目に当たったスポットの定量値の合計。gap-fill の値も含む |
 | `detection_limit` | 検出下限（図の破線）。無ければ null |
-| `detection_limit_source` | `argument`（`detection_limit` 引数）/ `param_file`（`.arf2` と同じフォルダの param ファイルの `Minimum peak height`）/ null（下限なし）。引数が優先 |
+| `unit` | 点の単位。生のピーク高さは `PeakHeight`、内部標準で正規化した量は `quant_state.unit` |
+| `detection_limit_source` | `argument`（図と同じ単位で指定した下限）/ `param_file`（生のピーク高さだけに使う `Minimum peak height`）/ null（下限なし）。引数が優先 |
 | `groups[]` | `label`（指定した群の文字列）と `samples`（解決した試料名）。指定順。`dataset_exclude` した試料は含まない |
 | `low_reliability_samples` | 白抜きで描き、平均 ± SD から外した試料（抽出量が少なかった等）。解決後の試料名 |
 | `items[].item` | 指定した項目の文字列（指定順。1〜30 件） |
@@ -635,7 +636,7 @@ gap-filled の印は `detected_mask`、群と役割は試料の対応表、MS/MS
 | `items[].n_spots` | 当たったスポット数（付加体違い・重複スポットも合計に入る） |
 | `items[].n_spots_msms` | 当たったスポットのうち MS/MS の裏付けがある数。**スポットが 1 つ以上あって 0 のパネルだけ灰色で「MS1-only (unconfirmed)」**（MS1 の一致だけの同定。スポットが 0 の N.D. パネルは灰色にしない） |
 | `items[].detected` | どこかの試料で値が 0 より大きいか |
-| `items[].groups[].samples[]` | `sample` / `value`（PeakHeight 合計）/ `gap_filled_fraction`（合計のうち gap-fill の値の割合。値 0 なら null）/ `low_reliability` |
+| `items[].groups[].samples[]` | `sample` / `value`（`unit` で表した定量値の合計）/ `gap_filled_fraction`（合計のうち gap-fill の値の割合。値 0 なら null）/ `low_reliability` |
 | `items[].groups[].log10_mean` / `log10_sd` / `n_in_stats` | log10 空間の平均・SD と、その計算に使った試料数（値 > 0 かつ低信頼でない試料）。n = 1 なら SD は null、0 なら平均も null |
 | `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに 6 種類（`manual` / `internal_standard` / `curation` / `auto_likely_wrong` / `standard_only` / `non_lipid`。下記） |
 | `caveats` | 試料が複数の群に当たった（群の組ごとに 1 件。重なった試料数と最大 3 試料名）・同じ群を重複指定した・孤立した判断記録がある・レビューが無く自動判定を除けなかった、等 |
@@ -644,7 +645,7 @@ gap-filled の印は `detected_mask`、群と役割は試料の対応表、MS/MS
 除外で全スポットが消えたら `class` のまま 0）。(b) スポットは当たったが、描いた試料のどれでも値が 0（`n_spots` > 0 で `detected` が
 false）。どちらも N.D. パネルとして残し、エラーにしない。(b) は「存在しない」ではなく**この群の試料では検出されなかった**。
 
-**点の読み方**: 縦軸は log10(PeakHeight) で**全パネル共通**（パネルごとに拡大するとノイズが信号に見える）。値 0 の点は軸の底に ▽。
+**点の読み方**: 縦軸は表示単位の値の log10 で全パネル共通。`value` は有効数字 6 桁に丸めて返し、検出判定と群統計には丸める前の値を使う。値 0 の点は軸の底に ▽。
 `gap_filled_fraction` が **0.5 を超える点は ◆**（合計の過半が gap-fill の値で、検出の証拠として弱い）。
 
 **`excluded` の 6 種類**:
@@ -662,7 +663,7 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 
 #### 11.6 `dataset_plot(kind="species")` の返り値（`lipidmix.species_intensity.v1`）
 
-選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで群ごとの試料別の値（割合 % または PeakHeight）を
+選んだクラスを**分子種（アラインメントスポット）に展開**し、1 分子種 1 パネルで群ごとの試料別の値（割合 % またはデータセットの定量値）を
 並べる。解析フォルダのデータセットが対象（`.arf` と兄弟 `.arf2` が要る）。`group_intensity`（クラス合計）と違い**スポットごと**に描く
 （同じ名前でも付加イオンが違えば別パネル）。画像の 1 行のキャプションはパネル数・群の試料数・除外の 7 種類の件数・分母が 0 で
 描かなかった試料・`caveats`。ファイルは `save_figure(kind="species")`（`reports/figures/<analysis_id>_species.png` を dpi 300 で同名の
@@ -672,14 +673,15 @@ false）。どちらも N.D. パネルとして残し、エラーにしない。
 | フィールド | 意味 |
 |------------|------|
 | `plot_schema` | `lipidmix.species_intensity.v1` |
-| `value` | `share`（試料ごとに 高さ ÷ 分母の合計 × 100）または `height`（PeakHeight） |
-| `stat` | 平均と SD の定義: `mean ± SD of share (%)` / `mean ± SD of log10(peak height)`。`groups[].mean` / `sd` はこれに従う |
+| `value` | `share`（試料ごとに定量値 ÷ 分母の合計 × 100）または `height`（データセットの定量値） |
+| `unit` | `height` の単位。生のピーク高さは `PeakHeight`、正規化済みの値には正規化時の単位を使う |
+| `stat` | `share` は割合（%）、`height` は定量値の log10 を使って平均と SD を計算する。`groups[].mean` / `sd` はこれに従う |
 | `share_basis` | `value="share"` のときだけ。`items`（指定した分母の項目。省略時は null で、描く項目が分母）と `spot_ids`（分母にしたスポット）。`height` では null |
 | `groups[]` | `label` と `samples`（解決した試料名。指定順。`dataset_exclude` した試料は含まない） |
 | `low_reliability_samples` | 白抜きで描き、平均・SD から外した試料 |
 | `zero_denominator_samples` | 分母（分母スポットの高さの合計）が 0 で割合を計算できなかった試料。その試料の `share` は null で描かない |
 | `spots[]` | パネルごとに `spot_id` / `name` / `label`（表示名）/ `ontology` / `item`（展開元の項目）/ `adduct` / `mz` / `rt` / `msms`（MS/MS の裏付けの有無）と `groups[]` |
-| `spots[].groups[].samples[]` | `sample` / `height`（PeakHeight。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability` |
+| `spots[].groups[].samples[]` | `sample` / `height`（`unit` で表した定量値。行が無ければ 0）/ `share`（分母に対する %。`height` 指定時と分母 0 の試料は null）/ `gap_filled` / `low_reliability`。`height` と `share` は有効数字 6 桁に丸めて返す（平均・SD は丸める前の値で計算する） |
 | `spots[].groups[].mean` / `sd` / `n_in_stats` | `stat` の定義での平均・SD と、その計算に使った試料数（低信頼でなく、`share` なら計算できた試料、`height` なら高さ > 0 の試料）。n = 1 なら SD は null、0 なら平均も null |
 | `excluded` | 除いたスポットの `#<spot_id> <name>`。理由ごとに `internal_standard` / `manual` / `curation` / `auto_likely_wrong` / `standard_only` / `non_lipid`（§11.5 と同じ）と、`require_msms=True` で MS/MS の裏付けがなく除いた `no_msms` |
 | `caveats` | `group_intensity` と同じ種類に加え、`share_basis` が描く分子種を含まない（割合が 100 % を超えうる）・`items` に当たらなかった（またはすべて除外された）部品がある・`value="height"` なのに `share_basis` を渡した（無視される） |

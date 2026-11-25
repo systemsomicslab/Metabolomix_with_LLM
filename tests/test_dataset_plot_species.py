@@ -292,6 +292,27 @@ def test_invalid_detection_limit_is_an_error(loaded, limit):
     assert err["code"] == "DATASET_BAD_REQUEST" and "detection_limit" in err["message"]
 
 
+def test_normalized_amounts_keep_precision_units_and_their_own_detection_limit(loaded):
+    ds = loaded["ds"]
+    unit = "pmol / 10^6 cells"
+    ds.quant_state = {"normalized": True, "unit": unit}
+    ds.feature_matrix[0, :] = 0.02
+    (loaded["folder"] / "Dataset_x_param_202610061200.txt").write_text(
+        "Minimum peak height: 1000\n", encoding="utf-8")
+    payload = _gi(items=["0"])
+    item = payload["items"][0]
+    assert item["detected"] and payload["unit"] == unit and unit in payload["value"]
+    assert payload["detection_limit"] is None
+    assert _gi(items=["0"], detection_limit=0.01)["detection_limit"] == 0.01
+    group = item["groups"][0]
+    assert group["n_in_stats"] == 3 and group["samples"][0]["value"] == 0.02
+    assert group["log10_mean"] == pytest.approx(np.log10(0.02), abs=0.0001)
+    species = _species(items=["0"], value="intensity")
+    assert species["unit"] == unit and unit in species["stat"]
+    group = species["spots"][0]["groups"][0]
+    assert group["n_in_stats"] == 3 and group["samples"][0]["height"] == 0.02
+
+
 def test_gap_filled_cells_marked_in_group_intensity(loaded):
     """ctrl_2 の PG 34:1（spot 0）は gap-filled。検出マスクの False が印になる。"""
     ds = loaded["ds"]
@@ -905,3 +926,26 @@ def test_failed_group_intensity_call_keeps_the_previous_figure(loaded):
     err = _error(plot_tools.dataset_plot(kind="group_intensity", items=["PG"], groups=["nonexistent"]))
     assert err["code"] == "DATASET_BAD_REQUEST"
     assert loaded["ds"].figures["group_intensity"] is before
+
+
+def test_payload_values_are_rounded_to_significant_digits_but_stats_use_raw_values():
+    from metabolomix.plots.group_intensity import build_group_intensity_payload
+    from metabolomix.plots.species import build_species_payload
+
+    raw = [0.0212345678901, 0.0312345678901]
+    rows = {7: [{"file_name": f"s{i}", "height": h, "is_gap_filled": False} for i, h in enumerate(raw)]}
+    groups = [{"label": "g", "samples": ["s0", "s1"]}]
+    gi = build_group_intensity_payload(
+        [{"item": "x", "parts": ["x"], "spots": [{"spot_id": 7}]}], groups, rows, unit="nmol/mg")
+    group = gi["items"][0]["groups"][0]
+    assert [s["value"] for s in group["samples"]] == [0.0212346, 0.0312346]
+    assert group["log10_mean"] == round(float(np.mean(np.log10(raw))), 4)
+    sp = build_species_payload([{"spot_id": 7}], groups, rows, value="share",
+                               basis_spots=[{"spot_id": 7}, {"spot_id": 8}],
+                               unit="nmol/mg")
+    samples = sp["spots"][0]["groups"][0]["samples"]
+    assert [s["height"] for s in samples] == [0.0212346, 0.0312346]
+    assert [s["share"] for s in samples] == [100.0, 100.0]
+    heights = build_species_payload([{"spot_id": 7}], groups, rows, value="height", unit="nmol/mg")
+    group = heights["spots"][0]["groups"][0]
+    assert group["mean"] == round(float(np.mean(np.log10(raw))), 4)

@@ -201,7 +201,8 @@ def pipeline_resume(pipeline_path: str, updates: dict | None = None,
         対象 run の `pipeline_path`（`pipeline-run.json` かその親フォルダ）。
     updates:
         `sample_manifest`（1 極性の run）か `units: {<極性>: {"sample_manifest": …}}` だけ。変えると受領だけを
-        書き直す。知らない項目は `PIPELINE_REQUEST_INVALID`（消えた下流の項目 `target` / `preprocess` /
+        書き直す。成功済みの極性の群別絞り込みも訂正後のシートで再計算する場合は、訂正後のシートを指定し
+        request_id を省いて pipeline_run を呼ぶ。知らない項目は `PIPELINE_REQUEST_INVALID`（消えた下流の項目 `target` / `preprocess` /
         `comparisons` なら `details.replacements`）、上流の条件（メソッド・ライブラリ・極性…）は
         `NEW_PIPELINE_REQUIRED`。旧形式（pipeline-run.v1）の run は `PIPELINE_RUN_LEGACY`（読むなら
         `load_dataset(pipeline_path=…)`、Console をやり直すなら新しい `pipeline_run`）。

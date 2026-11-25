@@ -22,6 +22,15 @@ def test_two_groups_contrast_is_test_minus_reference():
     assert d.contrast_info["RA_vs_HC"]["test_cells"] == ["RA"]
 
 
+def test_group_and_covariate_can_have_the_same_display_name():
+    units = [u(g, dose=v, dose_value=v) for g in ("control", "dose") for v in (1, 2, 3)]
+    comp = [{"id": "diff", "factor": "group", "reference": "control", "test": "dose"}]
+    for field in ("dose", "dose_value"):
+        design = build_design(units, factors=["group"], comparisons=comp,
+                              covariates=[{"name": field, "type": "numeric"}])
+        assert list(design.contrasts["diff"]) == [-1, 1, 0]
+
+
 def _two_by_two():
     units = []
     for a in ("a1", "a2"):

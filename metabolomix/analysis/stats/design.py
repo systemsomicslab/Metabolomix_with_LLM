@@ -128,7 +128,8 @@ def build_design(units, *, factors: list[str], comparisons: list[dict],
         raise DomainError("DESIGN_RANK_DEFICIENT",
                           "計画行列が階数不足（個体が群に入れ子など）", {"columns": columns})
 
-    index = {c: i for i, c in enumerate(columns)}
+    # 対比に指定できるのは先頭の cell 列。共変量と cell の表示名が同じでも混同しない。
+    index = {c: i for i, c in enumerate(cells)}
 
     def cell_of(assign: dict, cid: str) -> str:
         for f in factors:

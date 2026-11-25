@@ -45,6 +45,17 @@ def round_floats(obj, digits: int = DEFAULT_FLOAT_DIGITS):
     return obj
 
 
+def round_significant(value: float, digits: int = DEFAULT_FLOAT_DIGITS) -> float:
+    """有効数字 `digits` 桁に丸める。0 と非有限はそのまま。
+
+    桁の大きく違う量（生のピーク高さ 1e7 と、正規化した量 0.02 など）を同じ規則で丸めるため。
+    小数点以下の桁数で丸めると小さい量が 0 に潰れる。正の値は丸めても正のまま。
+    """
+    if not value or not math.isfinite(value):
+        return value
+    return round(value, digits - 1 - math.floor(math.log10(abs(value))))
+
+
 def _safe_float(value: float):
     if math.isnan(value):
         return None

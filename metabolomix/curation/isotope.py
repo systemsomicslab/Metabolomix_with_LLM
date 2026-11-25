@@ -13,7 +13,7 @@ deps: msdial.adducts / msdial.peak_verification。
 from __future__ import annotations
 
 from metabolomix.msdial.adducts import ion_counts
-from metabolomix.msdial.peak_verification import parse_formula
+from metabolomix.msdial.peak_verification import parse_formula, strip_charge
 
 #: 元素ごとの天然存在比（整数質量のずれ k → 存在比）。IUPAC 代表値。
 ABUNDANCES: dict[str, dict[int, float]] = {
@@ -124,7 +124,7 @@ def theoretical_envelope(formula, adduct, n: int = N_PEAKS) -> dict | None:
     if not formula or str(formula).strip() in ("", "Unknown"):
         return None
     try:
-        counts = parse_formula(str(formula))
+        counts = parse_formula(strip_charge(str(formula)))
     except ValueError:
         return None
     basis = "formula"

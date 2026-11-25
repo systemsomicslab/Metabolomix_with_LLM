@@ -40,14 +40,27 @@ def parse_formula(formula: str) -> dict[str, int]:
     """
     if not formula or not formula.strip():
         raise ValueError("empty formula")
+    text = formula.strip()
     counts: dict[str, int] = {}
-    for element, digits in _FORMULA_TOKEN_RE.findall(formula.strip()):
-        if not element:
-            continue
+    pos = 0
+    while pos < len(text):
+        token = _FORMULA_TOKEN_RE.match(text, pos)
+        if token is None:
+            raise ValueError(f"unparseable formula: {formula!r}")
+        element, digits = token.groups()
         counts[element] = counts.get(element, 0) + (int(digits) if digits else 1)
-    if not counts:
-        raise ValueError(f"unparseable formula: {formula!r}")
+        pos = token.end()
     return counts
+
+
+#: MS-DIAL がイオンの組成式に付ける末尾の電荷（`C5H14NO+` `C24H40N7O17P3S-4`）。
+_CHARGE_SUFFIX_RE = re.compile(r"[+-]\d*$")
+
+
+def strip_charge(formula: str | None) -> str:
+    """組成式の末尾の電荷を外す（電荷は原子数に入らない）。`parse_formula` は電荷を読まないので、
+    イオンの組成式を数えるときはこれを通してから渡す。"""
+    return _CHARGE_SUFFIX_RE.sub("", (formula or "").strip())
 
 
 def monoisotopic_mass(counts: dict[str, int]) -> float:
@@ -125,7 +138,7 @@ def mass_error_ppm(
     if not adduct or adduct == "Unknown":
         return unknown
     try:
-        neutral = monoisotopic_mass(parse_formula(formula))
+        neutral = monoisotopic_mass(parse_formula(strip_charge(formula)))
     except (ValueError, KeyError):
         return unknown
     theoretical = adduct_mz(neutral, adduct)

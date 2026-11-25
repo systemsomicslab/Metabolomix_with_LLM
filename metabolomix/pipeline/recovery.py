@@ -446,9 +446,8 @@ def _manifest_content_changed(pipeline_root: Path, record: dict, request: dict) 
 
     要求の`sample_manifest`はパス文字列でしかないため、同じシートを書き直して
     `pipeline_resume`しても、要求の比較では「変更なし」に見える。比較の基準は受領が
-    記録した `samples.manifest.sha256`（そのとき読んだシートの内容hash）。受領が無い・
-    シートが無かった単位は比較材料が無いので数えない（「判定できない」を「変わった」と
-    読み替えない）。
+    記録した `samples.manifest.sha256`（そのとき読んだシートの内容hash）。
+    以前シートが無かった単位でも、シートが追加されれば受領を更新する。
     """
     data = receipt_mod.read_receipt(pipeline_root, record)
     if data is None:
@@ -458,8 +457,6 @@ def _manifest_content_changed(pipeline_root: Path, record: dict, request: dict) 
         recorded = (((data.get("units") or {}).get(unit.get("polarity")) or {})
                     .get("samples") or {}).get("manifest") or {}
         previous = recorded.get("sha256")
-        if not previous:
-            continue
         current = inputs_mod.manifest_source_record(
             request_mod.unit_source_root(dataset_root, unit),
             request_mod.unit_request(request, index, dataset_root))

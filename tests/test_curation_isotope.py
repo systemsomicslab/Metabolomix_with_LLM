@@ -15,6 +15,12 @@ def test_adduct_composition_counts_the_added_and_removed_atoms():
     assert adduct_composition("") is None
 
 
+def test_charged_formula_gives_the_same_envelope_as_the_uncharged_one():
+    charged = isotope.theoretical_envelope("C5H14NO+", "[M]+")
+    assert charged is not None
+    assert charged == isotope.theoretical_envelope("C5H14NO", "[M]+")
+
+
 def test_pc_34_1_protonated_has_the_textbook_isotope_ratios():
     # C42H83NO8P+: M+1 ≈ 47 %（炭素 42 個 × 1.07 % が主）、M+2 ≈ 12 %。
     env = isotope.theoretical_envelope("C42H82NO8P", "[M+H]+")

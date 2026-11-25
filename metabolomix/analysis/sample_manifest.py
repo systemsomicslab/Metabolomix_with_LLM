@@ -179,7 +179,7 @@ def _read_declarations(lines: list[str], path: Path) -> tuple[dict[str, str], in
 
 
 def parse_manifest(path: Path, *, source_root: Path,
-                    expected_sources: list[str]) -> list[dict]:
+                   expected_sources: list[str], content: bytes | None = None) -> list[dict]:
     """sample-manifest を厳密に読み、列+provenance+conflictsの行リストを返す。
 
     版は**先頭のschema行**で決まる（v1=8列、v2=9列）。列見出しから版を推測しない
@@ -200,7 +200,8 @@ def parse_manifest(path: Path, *, source_root: Path,
     """
     path = Path(path)
     source_root = Path(source_root).resolve()
-    text = path.read_text(encoding="utf-8")
+    # Console は CSV と記録する hash を同じ読み取りから作る。
+    text = path.read_text(encoding="utf-8") if content is None else content.decode("utf-8")
     lines = text.splitlines()
 
     schema_line = lines[0].rstrip("\n") if lines else ""
