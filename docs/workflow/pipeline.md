@@ -452,6 +452,7 @@ validated が 1 つ以上で欠けがある → `partial`。validated が 0 → 
 (研究室の資産はファイル名と sha256 だけ)・試料の対応表・検証の結果・次の呼び出し(`load_dataset(pipeline_path=…, polarity=…)`)
 を載せる。Console の実行体はファイル名と sha256 で示す(版の欄は無い)。`console.input` は `upstream.console_input` の写し
 (それを記録する前の run は `null`＝フォルダ入力)。CSV を作ったシートと今のシートの sha256 が違えば警告
-`CONSOLE_INPUT_MANIFEST_CHANGED`(Console の絞り込みは前の群で効いた。`rerun_upstream=true` で回し直す)。解析フォルダが
+`CONSOLE_INPUT_MANIFEST_CHANGED`。訂正後のシートで Console の絞り込みをやり直すときは、同じ生データに対し訂正後のシートを
+指定し、`request_id` を省いて `pipeline_run` を呼ぶ。受付はシートの内容の hash も比較し、新しい run を作る。解析フォルダが
 照合できなかった単位(`alignment: null`)の次の呼び出しには `source="mztab"` を付ける(既定の解析フォルダでは
 `ALIGNMENT_NOT_FOUND` / `ALIGNMENT_AMBIGUOUS` で止まる)。

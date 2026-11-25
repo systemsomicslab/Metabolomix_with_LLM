@@ -716,15 +716,50 @@ def test_save_figure_moves_the_overwritten_version_to_history(tmp_path, monkeypa
     reports.save_figure("loadings", "hist")
     assert len(list(history.glob("hist_loadings.*.png"))) == 1 and png.stat().st_mtime == mtime
     # 書けなかったら旧版をその場に戻す
-    before = png.read_bytes()
+    before = (png.read_bytes(), svg.read_bytes())
 
-    def fail(*_args, **_kwargs):
+    def fail(_ds, _record, staged, title=None):
+        staged.write_bytes(b"new png")
+        staged.with_suffix(".svg").write_bytes(b"incomplete")
         raise OSError("disk full")
 
-    monkeypatch.setattr(plot_tools, "write_figure_files", fail)
+    monkeypatch.setattr(plot_tools, "_render_figure_files", fail)
     with pytest.raises(OSError):
         reports.save_figure("loadings", "hist")
-    assert png.read_bytes() == before and len(list(history.glob("hist_loadings.*.png"))) == 1
+    assert (png.read_bytes(), svg.read_bytes()) == before
+    assert len(list(history.glob("hist_loadings.*.png"))) == 1
+
+
+@pytest.mark.parametrize("previous", [True, False])
+@pytest.mark.parametrize("history", [True, False])
+def test_figure_publication_rolls_back_if_second_replace_fails(tmp_path, monkeypatch, previous, history):
+    import os
+
+    png, svg = tmp_path / "plot.png", tmp_path / "plot.svg"
+    if previous:
+        png.write_bytes(b"old png")
+        svg.write_bytes(b"old svg")
+
+    def render(ds, record, staged, title=None):
+        staged.write_bytes(b"new png")
+        staged.with_suffix(".svg").write_bytes(b"new svg")
+        return [staged, staged.with_suffix(".svg")]
+
+    replace = os.replace
+
+    def fail_svg(src, dst):
+        if dst == svg and src.name == "plot.svg":
+            raise OSError("publication failed")
+        replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_svg)
+    monkeypatch.setattr(plot_tools, "_render_figure_files", render)
+    with pytest.raises(OSError, match="publication failed"):
+        plot_tools.write_figure_files(None, {}, png, history_dir=tmp_path / ".history" if history else None)
+    if previous:
+        assert png.read_bytes() == b"old png" and svg.read_bytes() == b"old svg"
+    else:
+        assert not png.exists() and not svg.exists()
 
 
 # ---------- feature_id の型（整数でも文字列でも同じ特徴に当たる） ----------

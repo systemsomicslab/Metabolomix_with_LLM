@@ -21,6 +21,27 @@ class FormulaMassTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pv.parse_formula("")
 
+    def test_unsupported_formula_is_not_used_for_mass_error(self):
+        for formula in ("[13C]6H12O6", "(CH2)6O6", "C6H12O6?", "C6.H12O6"):
+            with self.subTest(formula=formula):
+                with self.assertRaises(ValueError):
+                    pv.parse_formula(formula)
+                error = pv.mass_error_ppm(121.0707, formula, "[M+H]+")
+                self.assertIsNone(error["theoretical_mz"])
+                self.assertEqual(error["band"], "UNKNOWN")
+
+    def test_charged_formula_is_read_without_its_charge(self):
+        # MS-DIAL はイオンの組成式に末尾の電荷を付ける（コリンなど第四級アンモニウム）。
+        self.assertEqual(pv.strip_charge(" C5H14NO+ "), "C5H14NO")
+        self.assertEqual(pv.strip_charge("C24H40N7O17P3S-4"), "C24H40N7O17P3S")
+        self.assertEqual(pv.strip_charge(None), "")
+        with self.assertRaises(ValueError):
+            pv.parse_formula("C5H14NO+")
+        charged = pv.mass_error_ppm(104.1070, "C5H14NO+", "[M]+")
+        neutral = pv.mass_error_ppm(104.1070, "C5H14NO", "[M]+")
+        self.assertIsNotNone(charged["theoretical_mz"])
+        self.assertEqual(charged, neutral)
+
     def test_monoisotopic_mass_pc_34_1(self):
         mass = pv.monoisotopic_mass(pv.parse_formula("C42H82NO8P"))
         self.assertAlmostEqual(mass, 759.5778, places=2)

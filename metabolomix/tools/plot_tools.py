@@ -434,7 +434,60 @@ def build_figure(ds, kind: str, **args) -> dict:
 SVG_KINDS = ("loadings", "group_intensity", "species", "species_pca")
 
 
-def write_figure_files(ds, record: dict, out_path, title: str | None = None) -> list:
+def write_figure_files(ds, record: dict, out_path, title: str | None = None, *, history_dir=None) -> list:
+    """全形式の描画後に置換する。失敗時は元の組を戻し、報告書の場合は変更前の版も残す。"""
+    import filecmp
+    import os
+    import shutil
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from metabolomix.tools import notes
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=out_path.parent) as tmp:
+        staged = _render_figure_files(ds, record, Path(tmp) / out_path.name, title=title)
+        files = {out_path.parent / p.name: p for p in staged}
+        destinations = list(files)
+        if history_dir is not None and out_path.with_suffix(".svg") not in files:
+            destinations.append(out_path.with_suffix(".svg"))
+        with notes._directory_lock(out_path.parent):
+            backup_dir = Path(tmp) / "previous"
+            changes = {}
+            backups = {}
+            for path in destinations:
+                new = files.get(path)
+                if path.is_file():
+                    if new is not None and filecmp.cmp(path, new, shallow=False):
+                        continue
+                    backup_dir.mkdir(exist_ok=True)
+                    backups[path] = shutil.copy2(path, backup_dir / path.name)
+                elif new is None:
+                    continue
+                changes[path] = new
+            published = []
+            try:
+                for path, new in changes.items():
+                    if new is None:
+                        path.unlink()
+                    else:
+                        os.replace(new, path)
+                    published.append(path)
+                if history_dir is not None:
+                    for path, backup in backups.items():
+                        backups[path] = notes.keep_history(backup, history_dir)
+            except BaseException:
+                for path in reversed(published):
+                    if path in backups:
+                        os.replace(backups[path], path)
+                    else:
+                        path.unlink(missing_ok=True)
+                raise
+    return list(files)
+
+
+def _render_figure_files(ds, record: dict, out_path, title: str | None = None) -> list:
     """図の記録をファイルに書き、書いたパス（PNG が先）を返す。
 
     pca / volcano は `save_result_figure`（dpi 120。探索専用・未調整の交絡の但し書きを図に入れる。一時ファイルから
@@ -584,7 +637,7 @@ def dataset_plot(
         完全一致〕・特徴 ID。`"PE+EtherPE"` のように `+` で合算。当たらない項目は N.D.、1〜30 件）ごとに、群（`groups` = 試料名・
         Class ID・因子のトークン。1 群以上。QC・ブランクは `qc` / `blank` を書いたときだけ入る）の試料別の強度合計を 1 パネルに並べる。
         縦軸は log10 で全パネル共通、群は log10 の平均 ± SD。検定はしない（`dataset_compare`）。`detection_limit` は検出下限の破線
-        （省略時は param ファイルの Minimum peak height）。
+        （図と同じ単位。省略時に param ファイルの Minimum peak height を使うのは生のピーク高さだけ）。
       - `species`: `items` を分子種（特徴）に展開し、1 分子種 1 パネル（1 回 40 まで）。`value="share"`（既定。試料ごとの 値 ÷ 分母の
         合計 × 100。棒 = 群平均、ひげ = SD）/ `"intensity"`（log10 の平均 ± SD。payload の `value` は `"height"`）。`share_basis` は
         割合の分母にする項目（省略時は `items`。当たらない部品があれば描かずにエラー）。`require_msms=True` で MS/MS の裏付けの無い

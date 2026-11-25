@@ -52,6 +52,14 @@ def _excluded_summary(excluded: dict, keys=None) -> str:
                      if keys is None or key in keys)
 
 
+def _intensity_unit(ds) -> str:
+    quant = getattr(ds, "quant_state", None) or {}
+    if quant.get("normalized"):
+        return quant.get("unit") or "normalized abundance"
+    measure = getattr(ds, "quantification_measure", None)
+    return "PeakHeight" if measure == "peak_height" else measure or "intensity"
+
+
 def _common(ds, req):
     """3 つの kind に共通の解決: 項目・群・低信頼・標準液。`(selection, resolved, rows_caveats)`。"""
     items = list(req.items or [])
@@ -63,9 +71,9 @@ def _common(ds, req):
     plotted = {n for g in samples.groups for n in g["samples"]}
     standard_only = rows_mod.standard_only_spots(ds, samples.standard, plotted)
     caveats = list(samples.caveats)
-    measure = getattr(ds, "quantification_measure", None)
-    if measure and measure != "peak_height":
-        caveats.append(f"値は定量値（{measure}）で、ピークの高さ（PeakHeight）ではありません。")
+    unit = _intensity_unit(ds)
+    if unit != "PeakHeight":
+        caveats.append(f"値は定量値（{unit}）です。")
     resolved = rows_mod.resolve_selection(
         ds, items, apply_curation=True if req.apply_curation is None else req.apply_curation,
         exclude_auto_likely_wrong=bool(req.exclude_auto_likely_wrong),
@@ -101,6 +109,8 @@ def _detection_limit(ds, requested):
                 or not math.isfinite(requested) or requested <= 0):
             raise _bad(f"detection_limit は 0 より大きい有限の数で指定してください（受け取った値: {requested!r}）。")
         return float(requested), "argument"
+    if (getattr(ds, "quant_state", None) or {}).get("normalized") or ds.quantification_measure != "peak_height":
+        return None, None
     arf2 = artifact_path(ds, "arf2")
     param = analysis_params.find_param_file(arf2) if arf2 else None
     value = analysis_params.read_analysis_params(param)["min_peak_height"] if param else None
@@ -115,7 +125,7 @@ def group_intensity(ds, req) -> dict:
     payload = gi.build_group_intensity_payload(
         resolved.items, samples.groups, rows, msms=resolved.msms, low_reliability=samples.low_reliability,
         excluded=resolved.excluded, detection_limit=limit, detection_limit_source=source,
-        caveats=resolved.caveats)
+        caveats=resolved.caveats, unit=_intensity_unit(ds))
     return _helpers()._record("group_intensity", payload, title=req.title,
                               caption=_group_intensity_caption(payload), metadata_revision=_revision(ds))
 
@@ -141,7 +151,7 @@ def _group_intensity_caption(payload: dict) -> str:
 
 def _species_caption(payload: dict) -> str:
     groups = "、".join(f"{g['label']} n={len(g['samples'])}" for g in payload["groups"])
-    kind = "割合 %" if payload["value"] == "share" else "PeakHeight"
+    kind = "割合 %" if payload["value"] == "share" else payload["unit"]
     caption = (f"分子種ごとの{kind}: {len(payload['spots'])} パネル（{groups}）。"
                f"除外 — {_excluded_summary(payload['excluded'])}。")
     if payload["zero_denominator_samples"]:
@@ -189,7 +199,7 @@ def species(ds, req) -> dict:
     payload = species_plot.build_species_payload(
         spots, samples.groups, rows, value=value, basis_spots=basis_spots,
         basis_items=req.share_basis if value == "share" else None, low_reliability=samples.low_reliability,
-        excluded={**resolved.excluded, "no_msms": no_msms}, caveats=caveats)
+        excluded={**resolved.excluded, "no_msms": no_msms}, caveats=caveats, unit=_intensity_unit(ds))
     return _helpers()._record("species", payload, title=req.title, caption=_species_caption(payload),
                               metadata_revision=_revision(ds))
 

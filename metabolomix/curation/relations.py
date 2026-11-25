@@ -53,7 +53,6 @@ deps: msdial.adducts、msdial.peak_verification（組成式）、curation.isotop
 from __future__ import annotations
 
 import math
-import re
 from bisect import bisect_left, bisect_right
 from functools import lru_cache
 from statistics import median
@@ -61,7 +60,7 @@ from statistics import median
 from metabolomix.curation.isotope import ISOTOPE_SHIFTS, isotopologues
 from metabolomix.msdial.adducts import (SAME_MZ_TOL, ion_counts, mz_from_neutral, neutral_from_mz, parse_adduct,
                                         same_adduct)
-from metabolomix.msdial.peak_verification import parse_formula
+from metabolomix.msdial.peak_verification import parse_formula, strip_charge
 
 ISOTOPE_RATIO_FACTOR = 1.5
 SUPPORT_LINKS = frozenset({"correl_similar", "chrom_similar", "found_in_upper_msms"})
@@ -98,9 +97,6 @@ Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho 
 Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc
 Lv Ts Og D
 """.split())
-#: 組成式は元素記号と個数の並びだけ（`Unknown` や `None` のような語は組成式でない）。末尾の電荷（`C5H14NO+`）は
-#: 読み飛ばす（`parse_formula` と同じ）。
-_FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+(?:\d*[+-]|[+-]\d*)?")
 #: 質量は各中性損失の組成式から monoisotopic_mass で計算した値（Task 5 で照合済み）。想定は spec §6 の表。
 INSOURCE_LOSSES = [
     ("insource:-H2O", 18.010565),          # H2O。脱水（Cer・DG など）
@@ -117,9 +113,11 @@ INSOURCE_LOSSES = [
 
 @lru_cache(maxsize=4096)
 def _ion_composition(formula: str | None, adduct: str | None) -> tuple | None:
-    if not formula or not _FORMULA_RE.fullmatch(formula.strip()):
+    try:
+        # 組成式は元素記号と個数の並びだけ（`Unknown` のような語は ValueError）。末尾の電荷は原子数に入れない。
+        counts = parse_formula(strip_charge(formula))
+    except ValueError:
         return None
-    counts = parse_formula(formula)
     if any(element not in _ELEMENTS for element in counts):
         return None
     ion = ion_counts(counts, adduct)

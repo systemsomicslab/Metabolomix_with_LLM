@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from metabolomix.analysis.sample_manifest import parse_manifest
 from metabolomix.console import input_csv
 from metabolomix.console.execution import _default_command
@@ -247,7 +249,7 @@ def _use_fake_console_script(monkeypatch) -> list:
     return seen
 
 
-def _run(tmp_path, monkeypatch, *, manifest: bool):
+def _run(tmp_path, monkeypatch, *, manifest: bool, before_worker=None):
     from metabolomix.pipeline import worker
 
     source = make_source(tmp_path / "source")
@@ -261,6 +263,8 @@ def _run(tmp_path, monkeypatch, *, manifest: bool):
     plan = service.plan_pipeline(source["root"], {"save_project": False})
     pipeline_path = Path(plan["pipeline_path"])
     seen = _use_fake_console_script(monkeypatch)
+    if before_worker:
+        before_worker(source["root"])
     result = worker.run_worker(pipeline_path)
     assert result["status"] == "completed", result.get("warnings")
     return source, pipeline_path, seen
@@ -305,16 +309,49 @@ def test_worker_without_a_manifest_keeps_the_folder_and_says_so(tmp_path, monkey
     assert receipt["units"]["negative"]["method"]["console_input"] == "folder"
 
 
-def test_receipt_warns_when_the_manifest_changed_after_console_used_it(tmp_path, monkeypatch):
-    source, pipeline_path, _seen = _run(tmp_path, monkeypatch, manifest=True)
+@pytest.mark.parametrize("had_manifest", [True, False])
+def test_receipt_warns_when_the_manifest_changed_after_console_used_it(tmp_path, monkeypatch, had_manifest):
+    source, pipeline_path, _seen = _run(tmp_path, monkeypatch, manifest=had_manifest)
     record = load_run(pipeline_path)
     assert receipt_mod.build_receipt(record, pipeline_path)["warnings"] == []
 
     write_sample_manifest(source["root"] / "sample-manifest.tsv",
                           source_names=[f"S{i}.wiff" for i in range(8)])   # 群を書き直した
 
-    codes = [w["code"] for w in receipt_mod.build_receipt(record, pipeline_path)["warnings"]]
-    assert codes == ["CONSOLE_INPUT_MANIFEST_CHANGED"]
+    warnings = receipt_mod.build_receipt(record, pipeline_path)["warnings"]
+    assert [w["code"] for w in warnings] == ["CONSOLE_INPUT_MANIFEST_CHANGED"]
+    assert "pipeline_run" in warnings[0]["message"]
+
+    # 訂正前の Console 成果物を使い回さず、案内どおりの受付で新たに実行できる。
+    from metabolomix.pipeline import worker
+    args = (source["root"], {"save_project": False})
+    corrected = Path(service.plan_pipeline(*args)["pipeline_path"])
+    assert corrected != pipeline_path
+    assert worker.run_worker(corrected)["status"] == "completed"
+    old = record["units"]["negative"]["upstream"]["console_input"]
+    new = load_run(corrected)["units"]["negative"]["upstream"]["console_input"]
+    assert new["form"] == "csv" and new["manifest_sha256"] != old.get("manifest_sha256")
+    assert new["classes"] != old.get("classes")
+    assert Path(service.plan_pipeline(*args)["pipeline_path"]) == corrected
+
+
+def test_completed_run_uses_the_sheet_read_by_console_for_reuse(tmp_path, monkeypatch):
+    original = None
+
+    def change_sheet(raw_root):
+        nonlocal original
+        path = raw_root / "sample-manifest.tsv"
+        original = path.read_bytes()
+        write_sample_manifest(path, source_names=[f"S{i}.wiff" for i in range(8)])
+
+    source, pipeline_path, _ = _run(tmp_path, monkeypatch, manifest=True, before_worker=change_sheet)
+    sheet = source["root"] / "sample-manifest.tsv"
+    used = load_run(pipeline_path)["units"]["negative"]["upstream"]["console_input"]
+    assert used["manifest_sha256"] == hashlib.sha256(sheet.read_bytes()).hexdigest()
+    sheet.write_bytes(original)
+    assert used["manifest_sha256"] != hashlib.sha256(original).hexdigest()
+    planned = service.plan_pipeline(source["root"], {"save_project": False})
+    assert Path(planned["pipeline_path"]) != pipeline_path
 
 
 def test_runs_recorded_before_the_csv_input_have_no_console_input(tmp_path):

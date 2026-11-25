@@ -343,14 +343,17 @@ def unit_method_params(unit_root: Path, inputs: dict, upstream: dict | None = No
 
 def _console_input_warning(polarity: str, console_input: dict | None, samples: dict) -> dict | None:
     """Console に渡した試料の表が、今の実験情報シートと違う版から作られたなら警告する。"""
-    if not console_input or console_input.get("form") != "csv":
+    if not console_input:
+        return None
+    if console_input.get("form") != "csv" and console_input.get("reason") != "no_manifest":
         return None
     current = (samples.get("manifest") or {}).get("sha256")
     if current == console_input.get("manifest_sha256"):
         return None
     return {"code": "CONSOLE_INPUT_MANIFEST_CHANGED", "unit": polarity,
-            "message": ("Console に渡した群・種類（試料の表）は、今と違う実験情報シートから作った。"
-                        "Console の絞り込みに今の群を使うには rerun_upstream=true で回し直す。")}
+            "message": ("実行時の Console 入力と現在の実験情報シートが異なる。訂正後の群・種類で"
+                        "絞り込みを再計算するには、訂正後のシートを指定し、request_id を省いて"
+                        " pipeline_run を呼ぶ。成功済みの極性は pipeline_resume で再計算されない。")}
 
 
 def _unit_receipt(pipeline_root: Path, record: dict, request: dict | None,

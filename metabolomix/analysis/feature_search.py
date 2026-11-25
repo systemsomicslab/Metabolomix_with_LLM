@@ -97,20 +97,12 @@ _POLARITY_OF_SIGN = {sign: polarity for polarity, sign in _SIGN_OF.items()}
 _INCHIKEY_BLOCK_RE = re.compile(r"[A-Z]{14}")
 
 
-# parse_formula は読めない部分を黙って捨てるので（"Ca(OH)2" が Ca+O+H2 になる等）、
-# 文字列全体が「元素記号+個数」の連なりであることを先に確かめる。
-_FORMULA_RE = re.compile(r"(?:[A-Z][a-z]?\d*)+")
-
-
 def _formula_mass(formula) -> float | None:
     """分子式の中性モノアイソトピック質量。全体が読めない・未知元素なら None。"""
     if not isinstance(formula, str):
         return None
-    text = formula.strip()
-    if not _FORMULA_RE.fullmatch(text):
-        return None
     try:
-        return monoisotopic_mass(parse_formula(text))
+        return monoisotopic_mass(parse_formula(formula))
     except (ValueError, KeyError):
         return None
 

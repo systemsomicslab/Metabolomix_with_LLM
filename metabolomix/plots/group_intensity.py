@@ -10,6 +10,7 @@ import math
 import re
 import statistics
 
+from metabolomix.core.serialization import round_significant
 from metabolomix.msdial import sample_factors
 from metabolomix.msdial.lipid_identity import has_annotation_name, lipid_annotation_class, may_move_lipid_class
 
@@ -191,7 +192,8 @@ def resolve_sample_specs(specs, facets):
 
 def build_group_intensity_payload(resolved_items, groups, rows_by_spot, *, msms=None,
                                   low_reliability=frozenset(), excluded=None,
-                                  detection_limit=None, detection_limit_source=None, caveats=None):
+                                  detection_limit=None, detection_limit_source=None, caveats=None,
+                                  unit="PeakHeight"):
     """項目 × 群 × 試料のクラス合計強度を組み立てる（描画しない）。spec §4 / §7。"""
     index = {sid: {r.get("file_name"): r for r in rows} for sid, rows in rows_by_spot.items()}
     out_items = []
@@ -210,10 +212,12 @@ def build_group_intensity_payload(resolved_items, groups, rows_by_spot, *, msms=
                     total += h
                     if row.get("is_gap_filled"):
                         gap += h
-                samples.append({"sample": name, "value": round(total, 1),
+                samples.append({"sample": name, "value": total,
                                 "gap_filled_fraction": round(gap / total, 3) if total > 0 else None,
                                 "low_reliability": name in low_reliability})
             logs = [math.log10(s["value"]) for s in samples if s["value"] > 0 and not s["low_reliability"]]
+            for s in samples:   # 群統計は丸める前の値で計算した。戻り値には有効数字で丸めて載せる
+                s["value"] = round_significant(s["value"])
             out_groups.append({
                 "label": group["label"], "samples": samples,
                 "log10_mean": round(statistics.mean(logs), 4) if logs else None,
@@ -229,7 +233,7 @@ def build_group_intensity_payload(resolved_items, groups, rows_by_spot, *, msms=
         })
     return {
         "plot_schema": GROUP_INTENSITY_SCHEMA,
-        "value": "sum of PeakHeight (log10 on the plot)",
+        "value": f"sum of {unit} (log10 on the plot)", "unit": unit,
         "detection_limit": detection_limit, "detection_limit_source": detection_limit_source,
         "groups": [{"label": g["label"], "samples": list(g["samples"])} for g in groups],
         "low_reliability_samples": sorted(low_reliability),
@@ -259,11 +263,11 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
     nrows = math.ceil(len(items) / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.7 * nrows), squeeze=False)
     positive = [s["value"] for it in items for g in it["groups"] for s in g["samples"] if s["value"] > 0]
-    floor = 0.0
-    top = math.ceil(math.log10(max(positive)) + 0.2) if positive else 1.0
     limit = payload.get("detection_limit")
     if limit and limit > 0:
-        top = max(top, math.ceil(math.log10(limit) + 0.2))    # 破線が軸の外に出ないように
+        positive.append(limit)
+    floor = min(0, math.floor(math.log10(min(positive)) - 0.1)) if positive else 0
+    top = math.ceil(math.log10(max(positive)) + 0.2) if positive else 1
     for ax, item in zip(axes.flat, items):
         ms1_only = item["n_spots"] > 0 and item.get("n_spots_msms") == 0
         msms_note = "" if item.get("n_spots_msms") is None else f", MS/MS {item['n_spots_msms']}"
@@ -274,7 +278,7 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
         ax.set_xlim(-0.6, len(labels) - 0.4)
         ax.set_ylim(floor - 0.3, top)
         ax.tick_params(axis="y", labelsize=7)
-        ax.set_ylabel("log10(Intensity)", fontsize=7)
+        ax.set_ylabel(f"log10({payload.get('unit', 'Intensity')})", fontsize=7)
         if limit and limit > 0:
             ax.axhline(math.log10(limit), color="#888888", linestyle="--", linewidth=0.8, zorder=1)
         if ms1_only:
@@ -316,7 +320,7 @@ def render_group_intensity_plot(payload, *, title=None, ncols=None):
     ]
     if limit and limit > 0:
         legend.append(Line2D([], [], color="#888888", ls="--", lw=0.8,
-                             label=f"detection limit ({limit:,.0f})"))
+                             label=f"detection limit ({limit:,g})"))
     fig.legend(handles=legend, loc="lower center", ncol=3, fontsize=7, frameon=False)
     fig.suptitle(title or "Intensity by sample group", fontsize=11)
     fig.tight_layout(rect=(0, 0.08, 1, 0.96))

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from xml.parsers import expat
 
 __all__ = [
     "MIN_OPEN_FORMAT_BYTES",
@@ -61,10 +62,8 @@ _TAIL_BYTES = 4096
 _HEADER_CHECKED = frozenset({"mzml"})
 _EMPTY_HEADER_ELEMENTS: tuple[str, ...] = (
     "referenceableParamGroupList", "referenceableParamGroup", "fileDescription", "fileContent", "sampleList")
-_EMPTY_HEADER_PATTERN = re.compile(
-    rb"<(" + b"|".join(name.encode("ascii") for name in _EMPTY_HEADER_ELEMENTS) + rb")\b[^<>]*/>")
-#: 見出しの終わりの印（ここから先はスペクトル）。
-_HEADER_END = re.compile(rb"<(run|spectrumList|chromatogramList)\b")
+# Expat が認識した開始タグだけを調べる。属性値の中の > や /> はタグの終端ではない。
+_SELF_CLOSING = re.compile(r"""<(?:[^"'<>]|"[^"]*"|'[^']*')*/>""")
 #: 見出しを読む上限と 1 回に読む量（ふつうの見出しは数十 KB 以下）。
 _HEADER_MAX_BYTES = 1024 * 1024
 _HEADER_CHUNK = 64 * 1024
@@ -77,20 +76,46 @@ def _extension(path: Path) -> str:
 def _empty_header_element(fh) -> str | None:
     """mzML の見出し（`<run` の前まで）にある、中身の無い自己終了の要素の名前（無ければ None）。"""
     fh.seek(0)
-    header = b""
-    while len(header) < _HEADER_MAX_BYTES:
-        chunk = fh.read(_HEADER_CHUNK)
-        if not chunk:
-            break
-        header += chunk
-        # UTF-16 で書かれていても ASCII のタグは NUL を抜けば同じバイト列になる。
-        end = _HEADER_END.search(header.replace(b"\x00", b""))
-        if end is not None:
-            break
-    text = header.replace(b"\x00", b"")
-    end = _HEADER_END.search(text)
-    found = _EMPTY_HEADER_PATTERN.search(text[:end.start()] if end else text)
-    return found.group(1).decode("ascii") if found else None
+    first = fh.read(_HEADER_CHUNK)
+    encoding = None
+    if first.startswith((b"\xff\xfe", b"<\x00")):
+        encoding = "UTF-16LE"
+    elif first.startswith((b"\xfe\xff", b"\x00<")):
+        encoding = "UTF-16BE"
+    parser = expat.ParserCreate(encoding)
+    found = None
+
+    class HeaderDone(Exception):
+        pass
+
+    def start(name, attrs):
+        nonlocal found
+        local = name.rsplit(":", 1)[-1]
+        if local in ("run", "spectrumList", "chromatogramList"):
+            raise HeaderDone
+        if local in _EMPTY_HEADER_ELEMENTS:
+            # UTF-16 の漢字にも引用符と同じバイトが現れる。開始タグは完全だが、
+            # 続く読み取り範囲の末尾は文字の途中で切れることがある。
+            tag = parser.GetInputContext().decode(encoding or "latin-1", errors="ignore")
+            if _SELF_CLOSING.match(tag):
+                found = local
+                raise HeaderDone
+
+    parser.StartElementHandler = start
+    # DTD の実体を展開しない。目的はファイルに書かれたタグの確認だけ。
+    parser.DefaultHandler = lambda _text: None
+    consumed = 0
+    chunk = first
+    try:
+        while chunk:
+            parser.Parse(chunk, False)
+            consumed += len(chunk)
+            chunk = fh.read(min(_HEADER_CHUNK, _HEADER_MAX_BYTES - consumed))
+        # 長いコメントなどで Expat が保留したトークンも、読み取り済みの範囲で処理する。
+        parser.Parse(b"", True)
+    except (HeaderDone, expat.ExpatError, LookupError, ValueError):
+        pass
+    return found
 
 
 def open_format_problem(path: Path) -> dict | None:

@@ -26,14 +26,15 @@
 
 Y はクラスの指示変数（2 クラスなら後のクラスを 1 とした 1 列、3 クラス以上は 1 クラス 1 列）。X は
 `scaling`（`autoscale`＝平均 0・SD 1 / `pareto`＝SD の平方根で割る）で尺度をそろえ、交差検証では
-**学習の個体だけ**で中心と尺度を決める。欠測は PCA と同じ規則（`impute_for_pca`）で、検定前に 1 回だけ補う
-（交差検証の外。`imputation` に件数）。全個体で値が変わらない特徴は外す（`n_features_dropped_constant`）。
+学習の個体だけで補完の最小値・KNN の近傍・使う特徴・中心と尺度を決める。全個体での当てはめは
+PCA と同じ補完（`imputation` に件数）を使い、定数の特徴を外す（`n_features_dropped_constant`）。
 QC は入れない（`PreparedMatrix.log2` は生体の個体だけ）。乱数（分割と並べ替え）は `seed` で決まる。
 
 MCP・セッションには依存しない。数字は丸めない（非有限は None）。
 """
 from __future__ import annotations
 
+import copy
 import math
 import warnings as _warnings
 
@@ -188,25 +189,50 @@ def _permuted(labels: np.ndarray, plan: dict, rng: np.random.Generator) -> np.nd
     return out
 
 
-def _cv_q2(x: np.ndarray, y: np.ndarray, fold: np.ndarray, k: int, n_components: int,
-           scaling: str) -> list[float]:
-    """交差検証の Q2（成分 1〜A）。分割ごとに学習の個体だけで中心と尺度を決めて当てはめる。"""
-    press = np.zeros(n_components)
-    for f in range(k):
+def _fold_inputs(raw, train, impute, scaling):
+    """学習試料に観測のある特徴で補完し、学習時の中心・尺度で予測用の行を変換する。"""
+    x = raw[:, np.isfinite(raw[train]).any(axis=0)]
+    if x.size and not np.isfinite(x).all():
+        if impute == "knn":
+            from metabolomix.analysis.recipe_matrix import knn_impute
+            x = knn_impute(x.T, k=10, rowmax=0.5, colmax=0.8, reference_columns=train).T
+        else:
+            # 各列に学習時の観測値があるので、全行からの埋め値へのフォールバックは起きない。
+            x, _ = impute_for_pca(x, method=impute, reference_rows=train)
+    fit = x[train]
+    usable = np.isfinite(fit).all(axis=0)
+    fit = fit[:, usable]
+    varying = fit.std(axis=0) > _SD_FLOOR * np.maximum(1.0, np.abs(fit.mean(axis=0)))
+    fit = fit[:, varying]
+    mean, scale = _scale_params(fit, scaling)
+    held = x[~train][:, usable][:, varying]
+    # KNN の近傍を評価試料で一つも観測できなければ、学習時の中心を使う。
+    held = np.where(np.isfinite(held), held, mean)
+    return (fit - mean) / scale, (held - mean) / scale
+
+
+def _cv_q2(raw, fold, n_components, scaling, impute, outcomes, n_outcomes):
+    """観測ラベルと並べ替えの Q²。同じ分割の補完・尺度を全ラベルで共有する。"""
+    press = np.zeros((n_outcomes, n_components))
+    tss = np.zeros(n_outcomes)
+    for fold_index, f in enumerate(np.unique(fold)):
         test = fold == f
-        if not test.any():
-            continue
-        train = ~test
-        mean, scale = _scale_params(x[train], scaling)
-        xs_train = (x[train] - mean) / scale
-        xs_test = (x[test] - mean) / scale
-        model = _fit(xs_train, y[train], n_components)
-        x_center = xs_train.mean(axis=0)
-        preds = _predict_by_components(model, xs_test - x_center, y[train].mean(axis=0), n_components)
-        for a, pred in enumerate(preds):
-            press[a] += float(((y[test] - pred) ** 2).sum())
-    tss = float(((y - y.mean(axis=0)) ** 2).sum())
-    return [1.0 - p / tss if tss > 0 else math.nan for p in press]
+        fit, held = _fold_inputs(raw, ~test, impute, scaling)
+        a = min(n_components, fit.shape[1])
+        if a:
+            held = held - fit.mean(axis=0)
+        for i, y in enumerate(outcomes()):
+            y_train = y[~test]
+            center = y_train.mean(axis=0)
+            if a:
+                preds = _predict_by_components(_fit(fit, y_train, a), held, center, a)
+            else:
+                preds = [center]   # この分割で学習できる特徴がない
+            errors = [float(((y[test] - pred) ** 2).sum()) for pred in preds]
+            press[i] += errors + [errors[-1]] * (n_components - len(errors))
+            if fold_index == 0:
+                tss[i] = ((y - y.mean(axis=0)) ** 2).sum()
+    return 1.0 - press / tss[:, None]
 
 
 def _vip(model) -> np.ndarray:
@@ -300,7 +326,8 @@ def plsda(prepared: PreparedMatrix, *, factors: list[str], classes: list[str] | 
                           "（1 つだけのクラスは学習と予測を分けられない）",
                           {"class_n": counts, "class_groups": class_groups, "group_by": group_by})
 
-    x = np.asarray(prepared.log2, dtype=float)[keep]
+    raw = np.asarray(prepared.log2, dtype=float)[keep]
+    x = raw
     n_missing = int((~np.isfinite(x)).sum())
     if n_missing:
         if impute == "none":
@@ -339,7 +366,17 @@ def plsda(prepared: PreparedMatrix, *, factors: list[str], classes: list[str] | 
                          "message": f"成分数を {n_components} から {a} にしました（交差検証の学習の個体数と"
                                     "特徴数から決まる上限）。", "requested": int(n_components),
                          "used": a})
-    q2_cum = _cv_q2(x, y, fold, k, a, scaling)
+    plan = _permutation_plan(labels, groups, order)
+
+    def outcomes():
+        # 同じ札の並びを各分割で再生する。全置換分のラベル行列を保持しない。
+        local_rng = copy.deepcopy(rng)
+        yield y
+        for _ in range(n_permutations):
+            yield _y(_permuted(labels, plan, local_rng), order)
+
+    scores = _cv_q2(raw, fold, a, scaling, impute, outcomes, n_permutations + 1)
+    q2_cum, null = scores[0], scores[1:, -1]
 
     mean_all, scale_all = _scale_params(x, scaling)
     xs = (x - mean_all) / scale_all
@@ -354,10 +391,6 @@ def plsda(prepared: PreparedMatrix, *, factors: list[str], classes: list[str] | 
     vip = _vip(model)
 
     q2 = q2_cum[-1]
-    plan = _permutation_plan(labels, groups, order)
-    null = np.empty(int(n_permutations))
-    for i in range(int(n_permutations)):
-        null[i] = _cv_q2(x, _y(_permuted(labels, plan, rng), order), fold, k, a, scaling)[-1]
     finite_null = null[np.isfinite(null)]
     exceed = (int((finite_null >= q2 - _Q2_TIE_RTOL * max(1.0, abs(q2))).sum()) if math.isfinite(q2)
               else len(finite_null))
@@ -398,7 +431,8 @@ def plsda(prepared: PreparedMatrix, *, factors: list[str], classes: list[str] | 
         "q2": _num(q2),
         "cv": {"method": "stratified_group_kfold", "group_by": group_by, "n_groups": int(n_groups),
                "class_groups": class_groups, "folds": int(k), "seed": int(seed),
-               "scaling_within_fold": True, "q2_definition": "1 - PRESS/TSS"},
+               "scaling_within_fold": True, "imputation_within_fold": True,
+               "q2_definition": "1 - PRESS/TSS"},
         "permutation": {"n": int(n_permutations), "n_finite": int(len(finite_null)),
                         "p": _num(perm_p), "statistic": "q2", "scheme": plan["scheme"],
                         "min_attainable_p": float(plan["min_attainable_p"]),

@@ -100,7 +100,7 @@ CONSOLE_RUN_SUBDIR = "console"
 #: （原本メソッド・LBM・実行体は通常その外にある）。中を指すときだけ相対化する対象。
 _RELATIVIZABLE_INPUT_PATHS = (("method", "source_path"), ("lbm", "path"), ("exe", "path"))
 
-_VANISHED = object()  # 索引entryはあるがpipeline_root/pipeline-run.jsonが読めない標識
+_SKIP_REUSE = object()  # 索引にあっても再利用できない run
 
 #: find_or_create_runがrequest_idを既存runへ書き足す際、他アクターによる状態競合
 #: (STATE_REVISION_CONFLICT)を有限回まで読み直して吸収する上限。
@@ -697,9 +697,8 @@ def _resolve_reusable(pipeline_root_str: str, *, explicit_request_id: bool):
     戻り値:
         Path             そのまま返してよい（活動中／completedで成果物検証OK／
                          失敗・取消・部分完了などそのままの状態で返してよい終端状態）。
-        _VANISHED        pipeline_root自体（pipeline-run.json）が読めない
-                         （索引はあるがrunが消失している）。呼び出し側はこの索引
-                         entryを無視して次の候補・新規作成へフォールバックしてよい。
+        _SKIP_REUSE      旧形式・消失した run、または受付と Console 実行時のシートが
+                         異なる run。次の候補・新規作成へ進む。
         _CorruptedReuse  明示request_id無しで見つかったcompletedだが成果物hashが
                          壊れているrun。呼び出し側は消失と同様フォールバックする
                          が、破損の事実を新runの警告として残さなければならない
@@ -714,11 +713,21 @@ def _resolve_reusable(pipeline_root_str: str, *, explicit_request_id: bool):
     try:
         record = load_run(pipeline_root)
     except DomainError:
-        return _VANISHED
+        return _SKIP_REUSE
     if is_legacy(record):
-        return _VANISHED  # 旧 v1 の run は新しい受付で再利用しない（指紋も別）
+        return _SKIP_REUSE  # 旧 v1 の run は新しい受付で再利用しない（指紋も別）
     status = record.get("status")
     if status == "completed":
+        for polarity, unit in record["units"].items():
+            plan = unit.get("inputs") or {}
+            used = (unit.get("upstream") or {}).get("console_input") or {}
+            checks_sheet = used.get("form") == "csv" or used.get("reason") in ("no_manifest", "manifest_unreadable")
+            if checks_sheet and "manifest_sha256" in plan and used.get("manifest_sha256") != plan["manifest_sha256"]:
+                if explicit_request_id:
+                    raise DomainError("IDEMPOTENCY_CONFLICT",
+                                      "この run の受付後に試料シートが変わっています。request_id を省いて再実行してください。",
+                                      {"pipeline_root": str(pipeline_root), "polarity": polarity})
+                return _SKIP_REUSE
         failures = _artifacts_verify(record, pipeline_root)
         if failures:
             if explicit_request_id:
@@ -756,7 +765,7 @@ def _lookup_request(index_dir: Path, *, request_id: str | None,
                     f"request_id={request_id!r}は既存の異なる内容の要求と衝突しています。",
                     {"request_id": request_id, "pipeline_root": entry.get("pipeline_root")})
             resolved = _resolve_reusable(entry["pipeline_root"], explicit_request_id=True)
-            if resolved is _VANISHED:
+            if resolved is _SKIP_REUSE:
                 break  # このrequest_idの記録は消失。素通りしてcontentフォールバックへ
             # explicit_request_id=Trueは_CorruptedReuseを返さない（例外で止まる）。
             return resolved
@@ -765,7 +774,7 @@ def _lookup_request(index_dir: Path, *, request_id: str | None,
         if entry.get("request_hash") != request_hash or entry.get("input_hash") != input_hash:
             continue
         resolved = _resolve_reusable(entry["pipeline_root"], explicit_request_id=False)
-        if resolved is _VANISHED:
+        if resolved is _SKIP_REUSE:
             continue
         if isinstance(resolved, _CorruptedReuse):
             corrupted.append(resolved)

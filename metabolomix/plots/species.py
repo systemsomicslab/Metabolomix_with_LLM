@@ -2,7 +2,7 @@
 
 value="share": 試料ごとに「スポットの高さ ÷ 分母（share_basis のスポットの高さの合計）× 100」。
   棒 = 群平均、ひげ = SD（n ≥ 2）、点 = 各試料。
-value="height": PeakHeight。log10 の平均 ± SD（群別強度と同じ規則）、0 は軸の下端。
+value="height": データセットの定量値。log10 の平均 ± SD（群別強度と同じ規則）、0 は軸の下端。
 縦軸はパネルごと（分子種ごとに桁が違い、群間の変動を見るのが目的のため）。検定はしない。
 spec: docs/superpowers/specs/2026-10-08-species-plot-and-pca-loadings-design.md §4。
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import statistics
 
+from metabolomix.core.serialization import round_significant
 from metabolomix.plots.group_intensity import GROUP_COLORS
 
 SPECIES_SCHEMA = "lipidmix.species_intensity.v1"
@@ -19,7 +20,7 @@ VALUES = ("share", "height")
 
 
 def build_species_payload(spots, groups, rows_by_spot, *, value, basis_spots=None, basis_items=None,
-                          low_reliability=frozenset(), excluded=None, caveats=None):
+                          low_reliability=frozenset(), excluded=None, caveats=None, unit="PeakHeight"):
     """スポット × 群 × 試料の値を組み立てる（描画しない）。"""
     if value not in VALUES:
         raise ValueError(f"value は {' / '.join(VALUES)} のどちらかを指定してください（受け取った値: {value!r}）。")
@@ -53,14 +54,18 @@ def build_species_payload(spots, groups, rows_by_spot, *, value, basis_spots=Non
                 h = height(sid, name)
                 share = None
                 if value == "share" and denominators.get(name, 0.0) > 0:
-                    share = round(h / denominators[name] * 100.0, 4)
-                entries.append({"sample": name, "height": round(h, 1), "share": share,
+                    share = h / denominators[name] * 100.0
+                entries.append({"sample": name, "height": h, "share": share,
                                 "gap_filled": bool(row.get("is_gap_filled")) if row else False,
                                 "low_reliability": name in low_reliability})
             if value == "share":
                 stats = [e["share"] for e in entries if e["share"] is not None and not e["low_reliability"]]
             else:
                 stats = [math.log10(e["height"]) for e in entries if e["height"] > 0 and not e["low_reliability"]]
+            for e in entries:   # 群統計は丸める前の値で計算した。戻り値には有効数字で丸めて載せる
+                e["height"] = round_significant(e["height"])
+                if e["share"] is not None:
+                    e["share"] = round_significant(e["share"])
             out_groups.append({
                 "label": group["label"], "samples": entries,
                 "mean": round(statistics.mean(stats), 4) if stats else None,
@@ -68,10 +73,12 @@ def build_species_payload(spots, groups, rows_by_spot, *, value, basis_spots=Non
                 "n_in_stats": len(stats),
             })
         out.append({**spot, "groups": out_groups})
+    stat_unit = "peak height" if unit == "PeakHeight" else unit
     return {
         "plot_schema": SPECIES_SCHEMA,
         "value": value,
-        "stat": "mean ± SD of share (%)" if value == "share" else "mean ± SD of log10(peak height)",
+        "unit": unit,
+        "stat": "mean ± SD of share (%)" if value == "share" else f"mean ± SD of log10({stat_unit})",
         "share_basis": ({"items": list(basis_items) if basis_items else None, "spot_ids": basis_ids}
                         if value == "share" else None),
         "groups": [{"label": g["label"], "samples": list(g["samples"])} for g in groups],
@@ -98,6 +105,8 @@ def render_species_plot(payload, *, title=None, ncols=None):
     nrows = math.ceil(len(spots) / ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(2.3 * ncols, 2.25 * nrows + 0.7), squeeze=False)
     for ax, spot in zip(axes.flat, spots):
+        positive = [s["height"] for g in spot["groups"] for s in g["samples"] if s["height"] > 0]
+        floor = min(0, math.floor(math.log10(min(positive)) - 0.1)) if positive else 0
         has_zero = False
         for i, group in enumerate(spot["groups"]):
             color = GROUP_COLORS[i % len(GROUP_COLORS)]
@@ -117,7 +126,7 @@ def render_species_plot(payload, *, title=None, ncols=None):
                     y = s["share"]
                 elif s["height"] <= 0:
                     has_zero = True
-                    ax.scatter(x, 0.0, marker="v", s=18, facecolor="white", edgecolor="#555555", zorder=4)
+                    ax.scatter(x, floor, marker="v", s=18, facecolor="white", edgecolor="#555555", zorder=4)
                     continue
                 else:
                     y = math.log10(s["height"])
@@ -132,8 +141,8 @@ def render_species_plot(payload, *, title=None, ncols=None):
         if share:
             ax.set_ylim(bottom=0)
         elif has_zero:
-            ax.set_ylim(bottom=-0.3)
-        ax.set_ylabel("% of basis" if share else "log10(peak height)", fontsize=6)
+            ax.set_ylim(bottom=floor - 0.3)
+        ax.set_ylabel("% of basis" if share else f"log10({payload.get('unit', 'peak height')})", fontsize=6)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
     for ax in list(axes.flat)[len(spots):]:
@@ -149,7 +158,7 @@ def render_species_plot(payload, *, title=None, ncols=None):
         legend.append(Line2D([], [], marker="v", ls="", mfc="white", mec="#555555", label="zero (axis floor)"))
     fig.legend(handles=legend, loc="lower center", ncol=min(len(legend), 6), fontsize=6.5, frameon=False)
     default = ("Share of each species (bar = mean, whisker = SD)" if share
-               else "Peak height of each species (line = mean of log10, whisker = SD)")
+               else f"{payload.get('unit', 'Peak height')} of each species (line = mean of log10, whisker = SD)")
     fig.suptitle(title or default, fontsize=10)
     fig.tight_layout(rect=(0, 0.6 / fig.get_figheight(), 1, 0.97))
     return fig

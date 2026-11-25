@@ -29,6 +29,7 @@ Console を 2 本並べない）。run を跨いでも、機械全体で Console
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 import time
@@ -110,7 +111,7 @@ def _resolve_exe_path() -> Path:
 def _plan_fingerprint(plan: dict) -> str:
     """単位の入力計画の内容hash（受付冪等性の根拠。spec §9.3）。
 
-    採用する形式・raw stat・メソッド/LBM/実行体のhash・極性だけを対象にする
+    採用する形式・raw stat・メソッド/LBM/実行体・Console の試料シートのhash・極性を対象にする
     ——`overrides`（絶対パスを含みうる）や`unverified`（判断の説明文）は
     「同一入力」の判定に無関係なので混ぜない。
     """
@@ -130,6 +131,8 @@ def _plan_fingerprint(plan: dict) -> str:
     user_overrides = (plan.get("method") or {}).get("user_overrides")
     if user_overrides:
         content["method_overrides"] = {key: entry["to"] for key, entry in user_overrides.items()}
+    if plan.get("manifest_sha256"):
+        content["manifest_sha256"] = plan["manifest_sha256"]
     return canonical_hash(content)
 
 
@@ -334,6 +337,7 @@ def _prepare_run(dataset_root: Path, request: dict | None,
                 f"2 つの単位が同じ極性（{polarity}）に解決されました。polarity を明示してください。",
                 {"polarity": polarity})
         resolved = request_mod.pin_polarity(resolved, index, polarity)
+        plan["manifest_sha256"] = inputs_mod.manifest_source_record(raw_root, unit_req)["sha256"]
         plans[polarity] = plan
         fingerprints[polarity] = _plan_fingerprint(plan)
         if manifest_error is None:
@@ -605,13 +609,13 @@ def _console_input(unit_request: dict, raw_root: str | None, dataset_root: Path,
     `{"form": "csv", "path", "sha256", "manifest_sha256", "n_files", "classes", "file_types",
     "acquisition_type", "analytical_order_source", "batch_order"?}` か `{"form": "folder", "reason", ...}`。
     """
-    source = (inputs_mod.manifest_source_record(Path(raw_root), unit_request) if raw_root
-              else {"path": None})
-    if not source.get("path"):
+    path = inputs_mod.resolve_manifest_path(Path(raw_root), unit_request) if raw_root else None
+    if path is None:
         return {"form": "folder", "reason": "no_manifest"}
     try:
-        rows = parse_manifest(Path(source["path"]), source_root=dataset_root,
-                              expected_sources=[p.name for p in raw_paths])
+        content = path.read_bytes()
+        rows = parse_manifest(path, source_root=dataset_root,
+                              expected_sources=[p.name for p in raw_paths], content=content)
     except (DomainError, OSError, ValueError) as exc:
         return {"form": "folder", "reason": "manifest_unreadable",
                 "error_code": getattr(exc, "code", type(exc).__name__)}
@@ -623,7 +627,7 @@ def _console_input(unit_request: dict, raw_root: str | None, dataset_root: Path,
     csv_path = dataset_root / console_input_csv.CSV_FILENAME
     digest = console_input_csv.write_csv(csv_path, csv_rows)
     return {"form": "csv", "path": str(csv_path), "sha256": digest,
-            "manifest_sha256": source.get("sha256"), **summary}
+            "manifest_sha256": hashlib.sha256(content).hexdigest(), **summary}
 
 
 def _run_console_unit(context: dict, *, cancel_path: Path, waited_s: float | None) -> dict:

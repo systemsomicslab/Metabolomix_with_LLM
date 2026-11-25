@@ -68,6 +68,51 @@ def test_cv_q2_matches_refits_on_the_same_folds():
     assert res["q2_cum"] == pytest.approx(list(expect), rel=1e-8, abs=1e-10)
 
 
+def test_half_min_q2_and_null_match_training_only_imputation():
+    from sklearn.cross_decomposition import PLSRegression
+
+    pr = _prepared(n_per=8, p=6, seed=19)
+    x = pr.log2
+    x[0, 0] = -10
+    x[[1, 2, 5, 10, 12, 15], 0] = np.nan
+    res = P.plsda(pr, factors=["group"], n_components=1, cv_folds=4, n_permutations=1, seed=4)
+    labels = np.array([u.group for u in pr.units])
+    groups = np.array(["u:" + u.unit_id for u in pr.units])
+    rng = np.random.default_rng(4)
+    fold = P._folds(labels, 4, rng, groups)
+    plan = P._permutation_plan(labels, groups, ["C", "T"])
+    for outcome, expected in ((labels, res["q2"]),
+                              (P._permuted(labels, plan, rng), res["permutation"]["q2_null_mean"])):
+        y = (outcome == "T").astype(float)
+        pred = np.empty_like(y)
+        for i in range(4):
+            train = fold != i
+            fill = np.nanmin(x[train], axis=0) - 1.0
+            filled = np.where(np.isfinite(x), x, fill)
+            model = PLSRegression(n_components=1).fit(filled[train], y[train])
+            pred[~train] = model.predict(filled[~train]).ravel()
+        assert expected == pytest.approx(1 - ((y - pred) ** 2).sum() / ((y - y.mean()) ** 2).sum())
+
+
+def test_knn_neighbours_are_learned_only_from_training_rows():
+    rng = np.random.default_rng(42)
+    raw = rng.normal(size=(12, 18))
+    train = np.arange(12) < 10
+    raw[2, 0] = raw[10, 0] = np.nan
+    expected, _ = P.impute_for_pca(raw[train], method="knn")
+    mu, sd = P._scale_params(expected, "autoscale")
+    fit, held = P._fold_inputs(raw, train, "knn", "autoscale")
+    np.testing.assert_allclose(fit, (expected - mu) / sd)
+    # 評価試料の欠測は学習時の近傍から、その試料自身が持つ値を選ぶ。
+    distances = np.nanmean((raw[train] - raw[train, 0, None]) ** 2, axis=0)
+    neighbours = np.argsort(distances[1:])[:10] + 1
+    assert held[0, 0] == pytest.approx((raw[10, neighbours].mean() - mu[0]) / sd[0])
+    raw[11] *= 1000
+    fit2, held2 = P._fold_inputs(raw, train, "knn", "autoscale")
+    np.testing.assert_allclose(fit, fit2)
+    np.testing.assert_allclose(held[0], held2[0])
+
+
 def test_vip_mean_square_is_one():
     res = P.plsda(_prepared(), factors=["group"], n_permutations=1)
     vip = np.array([v["vip"] for v in res["vip"]])
